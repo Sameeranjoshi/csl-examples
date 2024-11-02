@@ -1,0 +1,14 @@
+layout {
+
+  // Use just one 1 PE (columns=1, rows=1)
+  @set_rectangle(1, 1);
+
+  // The lone PE in this program should execute the code in "pe_program.csl"
+  // We pass memcpy parameters as a parameter to the program. Note that
+  // memcpy parameters are parameterized by the PE's column number.
+  @set_tile_code(0, 0, "hello_world.csl");
+  
+
+  // Export host-callable device function
+  @export_name("main", fn()void);
+}
