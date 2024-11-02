@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 
-set -e
+set -e  # Exit on first error
 
-# creates a .out elf file which can be examined using cs_readelf
-cslc --arch=wse2 ./layout.csl --fabric-dims=8,8 --fabric-offsets=4,1 --memcpy --channel=1 -o out
-# RUn the host->device interaction
+echo "Compiling layout.csl to create out ELF file..."
+cslc layout.csl --fabric-dims=100,100 --fabric-offsets=4,1 --memcpy --channels=1 -o out
+
+echo "Running the host-device interaction through run.py..."
 cs_python run.py --name out
-    
+
+echo "Execution complete."

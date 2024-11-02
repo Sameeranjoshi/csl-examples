@@ -2,29 +2,32 @@
 
 import argparse
 import numpy as np
+from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyDataType, MemcpyOrder  # pylint: disable=no-name-in-module
 
-from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyDataType, MemcpyOrder # pylint: disable=no-name-in-module
-
-# Read arguments
-parser = argparse.ArgumentParser()
-parser.add_argument('--name', help="the test compile output dir")
-parser.add_argument('--cmaddr', help="IP:port for CS system")
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description="Run a CSL program on Cerebras")
+parser.add_argument('--name', required=True, help="The directory containing the compiled output ELF file")
+parser.add_argument('--cmaddr', help="IP:port for the CS system (optional if using simulator)")
 args = parser.parse_args()
 
-# Construct a runner using SdkRuntime
-runner = SdkRuntime(args.name, cmaddr=args.cmaddr, supress_simfab_trace=True, msg_level="WARNING")
+try:
+    # Initialize the SdkRuntime runner
+    runner = SdkRuntime(args.name, cmaddr=args.cmaddr, supress_simfab_trace=False, msg_level="WARNING")
 
+    # Load and execute the program
+    print("Loading program...")
+    runner.load()
 
-# Load and run the program
-runner.load()
-runner.run()
+    print("Starting program...")
+    runner.run()
 
-# Launch the init_and_compute function on device
-runner.launch('main', nonblock=False)
+    # Launch the main function on the device
+    print("Launching main function...")
+    runner.launch('main', nonblock=False)
 
-# Stop the program
-runner.stop()
+    print("Program executed successfully!")
 
-# Ensure that the result matches our expectation
-
-print("SUCCESS!")
+finally:
+    # Ensure the runner stops cleanly
+    print("Stopping the program...")
+    runner.stop()
