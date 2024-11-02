@@ -1,3 +1,4 @@
+
 layout {
 
   // Use just one 1 PE (columns=1, rows=1)
@@ -11,4 +12,6 @@ layout {
 
   // Export host-callable device function
   @export_name("main", fn()void);
+  @export_name("A", [*]i32, true);
+  @export_name("y", [*]i32, false);
 }
