@@ -10,4 +10,8 @@ layout {
   // Last argument is mutability: host can read y, but not write to it
   @export_name("y_advertised", [*]f32, false);
   @export_name("init_and_compute_advertised", fn()void);
+  @export_name("A_advertised", [*]f32, true);   // true as we want to modify A
+  @export_name("x_advertised", [*]f32, true);
+  @export_name("b_advertised", [*]f32, true);
+
 }
