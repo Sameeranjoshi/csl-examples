@@ -1,0 +1,13 @@
+const memcpy = @import_module("<memcpy/get_params>", .{ .width = 1, .height = 1 });
+
+layout {
+
+  // Use just one 1 PE (columns=1, rows=1)
+  @set_rectangle(1, 1);
+  @set_tile_code(0, 0, "code.csl", .{ .memcpy_params = memcpy.get_params(0) });
+
+  // Export device symbol for array "y"
+  // Last argument is mutability: host can read y, but not write to it
+  @export_name("y_advertised", [*]f32, false);
+  @export_name("init_and_compute_advertised", fn()void);
+}

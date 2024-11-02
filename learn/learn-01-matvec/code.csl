@@ -1,0 +1,60 @@
+// Adding memcpy
+param memcpy_params: comptime_struct;
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+
+
+
+
+// Algorithm
+// 1. Define dimensions of the PE array
+const M:i16 = 4;
+const N:i16 = 6;
+
+// 2. Define arrays
+var A: [M*N] f32;
+var x: [N*1] f32;
+var b: [M*1] f32;
+var y: [M*1] f32;
+
+const y_ptr: [*]f32 = &y;
+// 3. INtialize the arrays
+
+fn initialize() void {
+    // A = 1.0, 2.0, 3.0 ... M*N
+    for (@range(i32, 0, M*N, 1)) |i| {
+        A[i] = @as(f32, i);   // A is 3, i is 16 so need a cast
+    }
+    for (@range(i16, 0, N*1, 1)) |i| {
+        x[i] = 1.0;
+    }
+
+    // while loop
+    var idx: i16 = 0;
+    while (idx < M*1) : (idx = idx + 1) {
+        b[idx] = 2.0;
+        y[idx] = 0.0;
+    }
+}
+
+fn compute_matvec() void{
+    for (@range(i16, 0, M, 1)) |i| {
+        var temp: f32 = 0.0;
+        for (@range(i16, 0, N, 1)) |j| {
+            temp = temp + A[i*N + j] * x[j];
+        }
+        y[i] = temp + b[i];
+    }
+}
+
+fn init_and_compute() void {
+    initialize();
+    compute_matvec();
+    sys_mod.unblock_cmd_stream();
+}
+// 4. Compute
+
+comptime {
+    @export_symbol(init_and_compute, "init_and_compute_advertised");
+    @export_symbol(y_ptr, "y_advertised");
+}
