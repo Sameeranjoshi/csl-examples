@@ -2,6 +2,7 @@
 
 import numpy as np
 import argparse
+import json
 
 from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyDataType, MemcpyOrder, Task
 
@@ -12,10 +13,20 @@ parser.add_argument('--name', required=True, help="The directory containing the 
 parser.add_argument('--cmaddr', help="IP:port for the CS system (optional if using simulator)")
 args = parser.parse_args()
 
-print(f"--name= {args.name}")
 
-M = 4
-N = 6
+# Params are stored in a file called out/out.json, read them dynamically from it.
+with open('out/out.json') as f:
+    params = json.load(f)
+
+params = params['params']
+
+# debug print
+print(f"--name= {args.name}")
+print(f"params: {params}")
+
+M = int(params['M'])
+N = int(params['N'])
+
 # host A, x, b, y
 host_A = np.arange(M*N, dtype=np.float32).reshape(M, N)
 host_x = np.full(shape=N, fill_value=2.0, dtype=np.float32)
