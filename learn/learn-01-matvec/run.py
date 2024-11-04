@@ -26,9 +26,10 @@ print(f"params: {params}")
 
 M = int(params['M'])
 N = int(params['N'])
+width = int(params['width'])
 
 # host A, x, b, y
-host_A = np.arange(M*N, dtype=np.float32).reshape(M, N)
+host_A = np.arange(M*N, dtype=np.float32)
 host_x = np.full(shape=N, fill_value=2.0, dtype=np.float32)
 host_b = np.full(shape=M, fill_value=2.0, dtype=np.float32)
 
@@ -46,21 +47,21 @@ device_data_b = runner.get_id('b_advertised')
 runner.load()
 runner.run()
 #copy from host to device for A
-runner.memcpy_h2d(device_data_A, host_A, 0, 0, 1, 1, M*N, streaming=False, order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
+runner.memcpy_h2d(device_data_A, np.tile(host_A, width), 0, 0, width, 1, M*N, streaming=False, order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
 #copy from host to device for x
-runner.memcpy_h2d(device_data_x, host_x, 0, 0, 1, 1, N, streaming=False, order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
+runner.memcpy_h2d(device_data_x, np.tile(host_x, width), 0, 0, width, 1, N, streaming=False, order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
 #copy from host to device for b
-runner.memcpy_h2d(device_data_b, host_b, 0, 0, 1, 1, M, streaming=False, order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
+runner.memcpy_h2d(device_data_b, np.tile(host_b, width), 0, 0, width, 1, M, streaming=False, order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
 
 runner.launch('init_and_compute_advertised', nonblock=False)
 
-y_returned = np.zeros([1*1*M], dtype=np.float32)
-runner.memcpy_d2h(y_returned, device_data_y, 0, 0, 1, 1, M, streaming=False, order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
+y_returned = np.zeros([M*width], dtype=np.float32)
+runner.memcpy_d2h(y_returned, device_data_y, 0, 0, width, 1, M, streaming=False, order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
 
 runner.stop()
 
-host_y_expected = np.dot(host_A, host_x) + host_b
+host_y_expected = host_A.reshape(M,N)@host_x + host_b
 print(f"host_y_expected: {host_y_expected}")
 print(f"y_returned: {y_returned}")
-np.testing.assert_allclose(host_y_expected, y_returned, rtol=0.01, atol=0)
+np.testing.assert_allclose(y_returned, np.tile(host_y_expected, width), atol=0.01, rtol=0)
 print("Success!")
