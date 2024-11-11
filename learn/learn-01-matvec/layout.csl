@@ -3,7 +3,7 @@ param N:i16;
 // number of PEs in program
 param width:i16;
 // param height:i16;
-
+const send_color: color = @get_color(0);  // What color is this ? blue maybe?
 const memcpy = @import_module("<memcpy/get_params>", .{ .width = width, .height = 1 });
 
 layout {
@@ -11,14 +11,30 @@ layout {
   // Use width times PE (columns=PEs along width, rows=1)
   @set_rectangle(width, 1); // 10x1 PEs
   for (@range(i16, 0, width, 1)) |pe_index| {
-    @set_tile_code(pe_index, 0, "code.csl", .{ .memcpy_params = memcpy.get_params(pe_index), .M = M, .N = N });
+    @set_tile_code(pe_index, 0, "code.csl", .{ 
+      .memcpy_params = memcpy.get_params(pe_index), 
+      .M = M, 
+      .N_per_PE = N/width, 
+      .pe_id = pe_index, 
+      .send_color = send_color });
+
+    if (pe_index == 0){
+      @set_color_config(pe_index, 0, send_color, .{
+        .routes = .{.rx = .{RAMP}, .tx = .{EAST}}
+        });
+    } 
+    else{
+      @set_color_config(pe_index, 0, send_color, .{
+        .routes = .{.rx = .{WEST}, .tx = .{RAMP}}
+        });
+    }
   }
   // Export device symbol for array "y"
-  // Last argument is mutability: host can read y, but not write to it
+  // 1Last argument is mutability: host can read y, but not write to it
   @export_name("y_advertised", [*]f32, false);
   @export_name("init_and_compute_advertised", fn()void);
   @export_name("A_advertised", [*]f32, true);   // true as we want to modify A
   @export_name("x_advertised", [*]f32, true);
-  @export_name("b_advertised", [*]f32, true);
+  // @export_name("b_advertised", [*]f32, true);
 
 }

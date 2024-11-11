@@ -1,7 +1,15 @@
 // Adding memcpy
 param memcpy_params: comptime_struct;
 param M:i16;
-param N:i16;
+param N_per_PE:i16;
+param pe_id: i16;
+param send_color: color;
+
+// Define queues
+const send_color_oq = @get_output_queue(2);
+const send_color_iq = @get_input_queue(2);
+
+const exit_task_id: local_task_id = @get_local_task_id(9);
 
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
@@ -14,38 +22,90 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 // const N:i16 = 6;
 
 // 2. Define arrays
-var A: [M*N] f32;
-var x: [N*1] f32;
-var b: [M*1] f32;
+var A: [M*N_per_PE] f32;
+var x: [N_per_PE*1] f32;
+// var b: [M*1] f32;
 var y: [M*1] f32;
 
 const y_ptr: [*]f32 = &y;
 var A_ptr: [*]f32 = &A;
 var x_ptr: [*]f32 = &x;
-var b_ptr: [*]f32 = &b;
+// var b_ptr: [*]f32 = &b;
+
+
+// DSDs for accessing A, b, y
+// A_dsd accesses column of A
+var A_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> A[i] });
+var y_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> y[i] });
 
 
 fn compute_matvec() void{
-    for (@range(i16, 0, M, 1)) |i| {
-        var temp: f32 = 0.0;
-        for (@range(i16, 0, N, 1)) |j| {
-            temp = temp + A[i*N + j] * x[j];
-        }
-        y[i] = temp + b[i];
+    // NON-VECTORIZED loop
+    // for (@range(i16, 0, M, 1)) |i| {
+    //     var temp: f32 = 0.0;
+    //     for (@range(i16, 0, N_per_PE, 1)) |j| {
+    //         temp = temp + A[i*N + j] * x[j];
+    //     }
+    //     y[i] = y[i] + temp ;    // we have b[] in y[] initially
+    // }
+
+
+    for (@range(i16, 0, N_per_PE, 1)) |j| {
+        @fmacs(y_dsd, y_dsd, A_dsd, x[j]);
+        A_dsd = @increment_dsd_offset(A_dsd, M, f32);
     }
+}
+
+fn send_right() void {  // wavelets
+    const out_dsd = @get_dsd(fabout_dsd, .{ // this is keyword in CSL, fabric 
+        . fabric_color = send_color,
+        . extent = M,
+        . output_queue = send_color_oq,
+    });
+
+    @fmovs(out_dsd, y_dsd, .{
+        .async = true,
+        .activate = exit_task_id
+    });
+}
+
+fn recv_left() void {
+    const in_dsd = @get_dsd(fabin_dsd, .{
+        . fabric_color = send_color,
+        . extent = M,
+        . input_queue = send_color_iq,
+    });
+
+    @fadds(y_dsd, y_dsd, in_dsd, .{
+        .async = true,
+        .activate = exit_task_id
+    });
 }
 
 fn init_and_compute() void {
     compute_matvec();
-    sys_mod.unblock_cmd_stream();
+    if (pe_id == 0) {
+        send_right();
+    }
+    else{
+        recv_left();
+    }
 }
+
+task exit_task() void {
+    sys_mod.unblock_cmd_stream();
+}   
+
+
 // 4. Compute
 
 comptime {
+    @bind_local_task(exit_task, exit_task_id);
+
     @export_symbol(init_and_compute, "init_and_compute_advertised");
     @export_symbol(y_ptr, "y_advertised");
     @export_symbol(A_ptr, "A_advertised");
     @export_symbol(x_ptr, "x_advertised");
-    @export_symbol(b_ptr, "b_advertised");
+    // @export_symbol(b_ptr, "b_advertised");
 
 }
