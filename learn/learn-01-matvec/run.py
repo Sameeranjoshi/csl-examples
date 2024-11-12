@@ -49,21 +49,30 @@ device_data_x = runner.get_id('x_advertised')
 runner.load()
 runner.run()
 #copy from host to device for A
+# print metadata: shape and strides of host_A
+print("copying A to device")
+print(f"host_A shape: {host_A.shape}, strides: {host_A.strides}")
 runner.memcpy_h2d(device_data_A, host_A.transpose().ravel(), 0, 0, width, 1, M*N_per_PE, streaming=False, order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
-#copy from host to device for x
+
+print("copying x to device")
+print(f"host_x shape: {host_x.shape}, strides: {host_x.strides}")
 runner.memcpy_h2d(device_data_x, host_x, 0, 0, width, 1, N_per_PE, streaming=False, order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
-#copy from host to device for b
-# explicitely on 1st PE
+
+print("copying b to device")
+print(f"host_b shape: {host_b.shape}, strides: {host_b.strides}")
 runner.memcpy_h2d(device_data_y, host_b, 0, 0, 1, 1, M, streaming=False, order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
 
+print("launching kernel")
 runner.launch('init_and_compute_advertised', nonblock=False)
 
+print("copying y back to host")
+print(f"y shape: {host_y_expected.shape}, strides: {host_y_expected.strides}")
 y_returned = np.zeros([M], dtype=np.float32)
 runner.memcpy_d2h(y_returned, device_data_y, 1, 0, 1, 1, M, streaming=False, order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
 
 runner.stop()
 
-print(f"host_y_expected: {host_y_expected}")
+print(f"host_y_expected shape: {host_y_expected.shape}, strides: {host_y_expected.strides}")
 print(f"y_returned: {y_returned}")
 np.testing.assert_allclose(y_returned, host_y_expected, atol=0.01, rtol=0)
 print("Success!")

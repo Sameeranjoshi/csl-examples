@@ -51,7 +51,9 @@ fn compute_matvec() void{
 
 
     for (@range(i16, 0, N_per_PE, 1)) |j| {
-        @fmacs(y_dsd, y_dsd, A_dsd, x[j]);
+        // multiplication is broadcasted across column(so 2 columns are multiplied)
+        // addition is horizontal(across rows meaning a single row is added) because y_dsd is vertical DSD.
+        @fmacs(y_dsd, y_dsd, A_dsd, x[j]);  
         A_dsd = @increment_dsd_offset(A_dsd, M, f32);
     }
 }
