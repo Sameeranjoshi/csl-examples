@@ -385,6 +385,7 @@ fn laplacian_z() void {
 }
 
 // If both SEND and RECV are done, perform
+
 // - compute laplacian on x-y
 // - update the DSD of pointer x and y
 // - activate COMM
@@ -409,6 +410,7 @@ fn compute_and_next_send_recv() void {
 // SEND_STATE_WEST -> send to west
 // SEND_STATE_NORTH --> send to north
 // SEND_STATE_SOUTH --> send to south
+
 task f_send() void {
     if (SEND_STATE_EAST == send_state){ // send to east
         // The last PE of x-dir has no east neighbor, so it does not send data to the east

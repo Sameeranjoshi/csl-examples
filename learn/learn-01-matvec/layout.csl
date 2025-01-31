@@ -2,31 +2,57 @@ param M:i16;
 param N:i16;
 // number of PEs in program
 param width:i16;
+param height:i16;
 // param height:i16;
-const send_color: color = @get_color(0);  // What color is this ? blue maybe?
-const memcpy = @import_module("<memcpy/get_params>", .{ .width = width, .height = 1 });
+const a_mul_x_color: color = @get_color(0);  // What color is this ? blue maybe?
+const x_color: color = @get_color(1);
+
+const memcpy = @import_module("<memcpy/get_params>", .{ .width = width, .height = height });
 
 layout {
 
   // Use width times PE (columns=PEs along width, rows=1)
-  @set_rectangle(width, 1); // 10x1 PEs
-  for (@range(i16, 0, width, 1)) |pe_index| {
-    @set_tile_code(pe_index, 0, "code.csl", .{ 
-      .memcpy_params = memcpy.get_params(pe_index), 
-      .M = M, 
-      .N_per_PE = N/width, 
-      .pe_id = pe_index, 
-      .send_color = send_color });
+  @set_rectangle(width, height); // 10x1 PEs
 
-    if (pe_index == 0){
-      @set_color_config(pe_index, 0, send_color, .{
-        .routes = .{.rx = .{RAMP}, .tx = .{EAST}}
+  // assign codes to each PE.
+  for (@range(i16, 0, height, 1)) |pe_x| {
+    for (@range(i16, 0, width, 1)) |pe_y| {
+      
+      @set_tile_code(pe_x, pe_y, "code.csl", .{ 
+        .memcpy_params = memcpy.get_params(pe_x), 
+        .M_per_PE = M/height, 
+        .N_per_PE = N/width, 
+        .pe_id_row = pe_x, 
+        .pe_id_col = pe_y,
+        .a_mul_x_color = a_mul_x_color,
+        .x_color = x_color
         });
-    } 
-    else{
-      @set_color_config(pe_index, 0, send_color, .{
-        .routes = .{.rx = .{WEST}, .tx = .{RAMP}}
-        });
+
+      if (pe_x == 0 and pe_y == 0) {
+        const COMPUTE_TO_EAST = .{.rx = .{RAMP}, .tx = .{EAST}};
+        const COMPUTE_TO_SOUTH = .{.rx = .{RAMP}, .tx = .{RAMP, SOUTH}};
+        @set_color_config(pe_x, pe_y, a_mul_x_color, .{.routes = COMPUTE_TO_EAST});
+        @set_color_config(pe_x, pe_y, x_color, .{.routes = COMPUTE_TO_SOUTH});
+      }
+      else if (pe_x == 1 and pe_y == 0) {
+        const WEST_TO_COMPUTE = .{.rx = .{WEST}, .tx = .{RAMP}};
+        const COMPUTE_TO_SOUTH = .{.rx = .{RAMP}, .tx = .{RAMP, SOUTH}};
+        @set_color_config(pe_x, pe_y, a_mul_x_color, .{.routes = WEST_TO_COMPUTE});
+        @set_color_config(pe_x, pe_y, x_color, .{.routes = COMPUTE_TO_SOUTH});
+      }      
+      else if(pe_x == 0 and pe_y == 1){
+        const COMPUTE_TO_EAST = .{.rx = .{RAMP}, .tx = .{EAST}};
+        const NORTH_TO_COMPUTE = .{.rx = .{NORTH}, .tx = .{RAMP}};
+        @set_color_config(pe_x, pe_y, a_mul_x_color, .{.routes = COMPUTE_TO_EAST});
+        @set_color_config(pe_x, pe_y, x_color, .{.routes = NORTH_TO_COMPUTE});
+      }
+      else if(pe_x == 1 and pe_y == 1){
+        const WEST_TO_COMPUTE = .{.rx = .{WEST}, .tx = .{RAMP}};
+        const NORTH_TO_COMPUTE = .{.rx = .{NORTH}, .tx = .{RAMP}};                                              
+        @set_color_config(pe_x, pe_y, a_mul_x_color, .{.routes = WEST_TO_COMPUTE});
+        @set_color_config(pe_x, pe_y, x_color, .{.routes = NORTH_TO_COMPUTE});
+      }
+
     }
   }
   // Export device symbol for array "y"

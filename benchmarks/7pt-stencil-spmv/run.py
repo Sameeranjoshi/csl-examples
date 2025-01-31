@@ -216,7 +216,7 @@ def main():
 
   y_ref = np.zeros((height, width, pe_length), dtype=np.float32)
 
-  laplacian(stencil_coeff, zDim, x, y_ref)
+  laplacian(stencil_coeff, zDim, x, y_ref)  # y_ref = summation(x * stencil_coeff)
 
   # fabric-offsets = 1,1
   fabric_offset_x = 1
