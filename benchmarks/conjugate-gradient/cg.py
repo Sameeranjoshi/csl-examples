@@ -45,6 +45,8 @@ def conjugateGradient(A_csr, x0, b, max_ite, tol):
   # rho = |r0|^2
   rho = np.dot(r,r)
   print(f"[CG] iter {k}: rho = {rho}")
+  # Uncomment this line to make the implementation consistent with scipy
+  # tol = tol * np.linalg.norm(b, ord=2)
   # if |r_k|_2 < tol, then exit
   while ( (rho > tol*tol) and (k < max_ite) ):
     k = k + 1

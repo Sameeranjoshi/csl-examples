@@ -134,6 +134,8 @@ from util import (
 )
 
 from cg import conjugateGradient
+from amg import *
+
 
 def make_u48(words):
   return words[0] + (words[1] << 16) + (words[2] << 32)
@@ -264,7 +266,7 @@ def main():
   cslc = "cslc"
   if args.driver is not None:
     cslc = args.driver
-
+  print("##################################################PARAMETERS")
   print(f"cslc = {cslc}")
 
   width_west_buf = args.width_west_buf
@@ -404,10 +406,26 @@ def main():
   print(f"max_ite = {max_ite}")
   print(f"eps = {eps}")
   print(f"tol = {tol}")
-
+  print("##################################################")
+  # Apply CG
   xf_1d, rho, k = conjugateGradient(A_csr, x_1d, b_1d, max_ite, tol)
   print(f"[host] after CG, rho = {rho}, k = {k}")
 
+  # Apply scipy-cg
+  xscipycg_1d, rho_scipycg, k_scipycg = scipy_CG(A_csr, x_1d, b_1d, max_ite, tol)
+  print(f"[host] after scipy-cg, rho_scipycg = {rho_scipycg}, k_scipycg = {k_scipycg}")
+
+  # Apply some checks for tolerance.
+  # 1. CG and AMG
+  z_scipycg = xf_1d.ravel() - xscipycg_1d.ravel()
+  nrm_z_scipycg_inf = np.linalg.norm(z_scipycg, np.inf)
+  print(f"CG and scipyCG max-norm (inf) = |x_cg - x_scipycg| = {nrm_z_scipycg_inf}")
+  # element wise check.
+  np.testing.assert_allclose(xf_1d.ravel(), xscipycg_1d.ravel(), 1.e-5)
+  # if want to check with overall values use norm check.
+  print("Verified scipyCG and CG using elementwise tolerance check.")
+  
+  print("##################################################")
   memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
   simulator = SdkRuntime(dirname, cmaddr=args.cmaddr)
 

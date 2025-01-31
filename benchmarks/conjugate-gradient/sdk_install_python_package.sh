@@ -4,6 +4,7 @@
 # Running from your application workdir:
 # local_py_path=`which python`
 # bash /path/to/sdk_install_python_package.sh ./$local_py_path my_pip_package_name
+# bash sdk_install_python_package.sh ~/csl/sparse_csl/venv_new/bin/ pyamg
 
 py_path=$(realpath $1)
 package_name=$2
