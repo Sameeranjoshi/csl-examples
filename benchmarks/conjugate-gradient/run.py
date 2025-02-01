@@ -134,7 +134,7 @@ from util import (
 )
 
 from cg import conjugateGradient
-from amg import *
+import amg as amg
 
 
 def make_u48(words):
@@ -401,30 +401,40 @@ def main():
 
   nrm_b = np.linalg.norm(b_1d.ravel(), 2)
   eps = 1.e-3
-  tol = eps * nrm_b
+  tol = eps * nrm_b # This is absolute tolerance, Note:be careful about checks later.
+  absolute_tol = tol  # This is absolute tolerance and not relative tolerance.
+  # abs_tol = ||r||_2 < atol
+  # rela_tol = ||r||_2 < rtol * ||b||_2
   print(f"|b| = {nrm_b}")
   print(f"max_ite = {max_ite}")
   print(f"eps = {eps}")
-  print(f"tol = {tol}")
+  print(f"absolute tol = {tol}")
   print("##################################################")
   # Apply CG
-  xf_1d, rho, k = conjugateGradient(A_csr, x_1d, b_1d, max_ite, tol)
-  print(f"[host] after CG, rho = {rho}, k = {k}")
-
-  # Apply scipy-cg
-  xscipycg_1d, rho_scipycg, k_scipycg = scipy_CG(A_csr, x_1d, b_1d, max_ite, tol)
-  print(f"[host] after scipy-cg, rho_scipycg = {rho_scipycg}, k_scipycg = {k_scipycg}")
-
-  # Apply some checks for tolerance.
-  # 1. CG and AMG
-  z_scipycg = xf_1d.ravel() - xscipycg_1d.ravel()
-  nrm_z_scipycg_inf = np.linalg.norm(z_scipycg, np.inf)
-  print(f"CG and scipyCG max-norm (inf) = |x_cg - x_scipycg| = {nrm_z_scipycg_inf}")
-  # element wise check.
-  np.testing.assert_allclose(xf_1d.ravel(), xscipycg_1d.ravel(), 1.e-5)
-  # if want to check with overall values use norm check.
-  print("Verified scipyCG and CG using elementwise tolerance check.")
+  xf_1d, rho, k = conjugateGradient(A_csr, x_1d, b_1d, max_ite, absolute_tol)
+  # Other solvers
+  x_spsolve, rho_spsolve = amg.scipy_direct_solver(A_csr, b_1d)
+  x_cg, rho_cg = amg.scipy_iterative_solver(A_csr, x_1d, b_1d, absolute_tol, 1000)
+  relative_tol = (absolute_tol/nrm_b)
+  x_pyamg, rho_pyamg = amg.pyamg(A_csr, x_1d, b_1d, relative_tol, 1000, cycle_type='V', accel_type='cg')
   
+  # # amg_solver = AMGVCycle(A_csr, levels=100, iterations=max_ite, tol=tol)
+  # # x_amg = amg_solver.solve(x=x_1d, b=b_1d)
+  # # x_amg, rho_amg, itermax = doAMG_V_cycle(A_csr, x_1d, b_1d, max_ite, tol)
+  # amg_solver = TwoGridMultigrid(A_csr, p1=30, p2=30, omega=2/3)
+  # x_amg = amg_solver.solve(x=x_1d, b=b_1d)
+  print("Lower the better(0 = exact solution), below data which solution is better")
+  print(f"[host] after CG, rho = {rho}, k = {k}")
+  print(f"[host] after spsolve, rho = {rho_spsolve}")
+  print(f"[host] after cg, rho = {rho_cg}")
+  print(f"[host] after pyamg, rho = {rho_pyamg}")
+  
+  # Testing
+  check_tolerance = absolute_tol
+  np.testing.assert_allclose(xf_1d.ravel(), x_spsolve.ravel(), atol=check_tolerance, err_msg="xf != x_spsolve")
+  np.testing.assert_allclose(xf_1d.ravel(), x_cg.ravel(), atol=check_tolerance, err_msg="xf != x_cg")
+  np.testing.assert_allclose(xf_1d.ravel(), x_pyamg.ravel(), atol=check_tolerance, err_msg="xf != x_pyamg")
+
   print("##################################################")
   memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
   simulator = SdkRuntime(dirname, cmaddr=args.cmaddr)
