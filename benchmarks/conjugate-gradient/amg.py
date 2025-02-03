@@ -3,6 +3,7 @@ from numpy import linalg as LA
 from scipy import sparse as sp
 import scipy.sparse.linalg as spla
 import pyamg    # Maybe we need this, try if it's modular?
+import pyamg.relaxation.relaxation as pyamg_smoother
 ## Textbook implementation
 
 
@@ -44,146 +45,323 @@ def scipy_iterative_solver(A, x, b, atol, max_ite):
     return x, rho
 
 #########Visit later
-def doAMG_V_cycle(A_csr, x0, b, max_ite, tol):
-    from pyamg import smoothed_aggregation_solver, ruge_stuben_solver
-    from scipy.sparse.linalg import cg
-    
-    print("AMG solver")
-    print(f"tolerance: {tol}")  
-    ml = ruge_stuben_solver(A_csr, max_coarse=20, max_levels=20, coarse_solver='gmres')
-    residuals = []
-    x = ml.solve(b=b, x0=x0, tol=tol, residuals=residuals, cycle='V', maxiter=max_ite)
-    
-    # compute the residual
-    rho = [np.dot(r, r) for r in residuals]
-    # print each rho
-    for i, r in enumerate(rho):
-        print(f"[AMG] levels {i}: rho = {r}")
-    return x, rho[-1], max_ite    # last redisual
-
-class AMGVCycle:
-    def __init__(self, A, levels=3, iterations=3, tol=1.e-5):
+class smoother:
+    def __init__(self, A, b):
         self.A = A
-        self.levels = levels
-        self.iterations = iterations
-        self.tol = tol
-    
-    def jacobi_smooth(self, x, b, iterations=3):
-        """Simple Jacobi smoother."""
-        D = self.A.diagonal()
-        for _ in range(iterations):
-            x = (b - (self.A @ x - D*x)) / D
-        return x
+        self.b = b
+    def are_sparse_matrices_equal(self, A, B):
+        # Check if the shapes and the number of non-zero elements are the same
+        if A.shape != B.shape or A.nnz != B.nnz:
+            raise ValueError("Sparse matrices are not equal: shape or nnz mismatch")
+        
+        # Check if the data, indices, and indptr are the same
+        if not (A.data == B.data).all() or not (A.indices == B.indices).all() or not (A.indptr == B.indptr).all():
+            raise ValueError("Sparse matrices are not equal: data, indices, or indptr mismatch")
 
-    def coarsen(self):
-        """Simple C/F splitting based on the diagonal dominance."""
+    def pyamg_jacobi(self, x, max_iter=100, weight=1.0):
+        # """PyAMG Jacobi smoother."""
+        x_copy = x.copy()
+        pyamg_smoother.jacobi(self.A, x_copy, self.b, max_iter, omega=weight)
+        
+        return x_copy
+    def pyamg_gauss_seidel(self, x, max_iter=100):
+        """PyAMG Gauss-Seidel smoother."""
+        x, _ = pyamg_smoother.gauss_seidel(self.A, x, self.b, max_iter)
+        return x
+    def pyamg_sor(self, x, max_iter=100, weight=1.0):
+        """PyAMG SOR smoother."""
+        x, _ = pyamg_smoother.sor(self.A, x, self.b, max_iter, omega=weight)
+        return x
+    def simple_jacobi(self, x0, max_iter=100):
+        # https://en.wikipedia.org/wiki/Jacobi_method
+        D = np.diag(self.A)  # Extract diagonal elements
+        # Compared to gauss seidel the diagonal is seperate.
+        L_plus_U = self.A - np.diagflat(D)  # Remainder of A (off-diagonal)
+
+        x = x0.copy()
+        for _ in range(max_iter):
+            x_new = (self.b - np.dot(L_plus_U, x)) / D  # x_new = D^(-1) * (b - (L + U) * x_old)
+            x = x_new
+            # Can add breaking conditions later.
+        return x
+    def gauss_seidel(self, x0, max_iter=100):
+        # https://en.wikipedia.org/wiki/Gauss%E2%80%93Seidel_method - element based formula
+        # Two ways:
+        # 1. x_new = L_inv * (b - U.x)
+        # 2. x_new = (b - L*x_new - U*x_old)/A_ii
+        """Gauss-Seidel smoother."""
         n = self.A.shape[0]
+        x = np.zeros_like(self.b) if x0 is None else x0.copy()
+
+        for k in range(max_iter):
+            x_new = np.copy(x)
+            
+            for i in range(n):
+                LX_new = np.dot(self.A[i, :i], x_new[:i])  # Lower triangular
+                UX = np.dot(self.A[i, i+1:], x[i+1:])  # Upper triangular
+                x_new[i] = (self.b[i] - LX_new - UX) / self.A[i, i]
+
+            x = x_new
+
+        return x
+    def new_smooth(self, x0, max_iter=100, weight=1.0):
+        """Jacobi smoother using PyAMG."""
+        # print dimentions for debugging
+        self.check_array_type(x0)    
+        # print("diag", np.diag(self.A).shape)
+        # check if A is sparse
+        if sp.issparse(self.A):
+            print("A is sparse")
+        
+        x = x0.copy()  # Avoid modifying input directly
+        # for _ in range(max_iter):
+        #     x_new = x + weight * (self.b - self.A @ x) / np.diag(self.A)
+        #     x = x_new
+        return x  # Ensure it returns something!
+    
+class AMGSolver:
+    class eachlevel:
+        def __init__(self): 
+            # protected variables
+            self._level_A = None
+            self._level_R = None
+            self._level_P = None
+            ##
+        @property
+        def level_A(self):
+            return self._level_A
+
+        @level_A.setter
+        def level_A(self, A):
+            self._level_A = A
+            
+        @property
+        def level_R(self):
+            return self._level_R
+        
+        @level_R.setter
+        def level_R(self, R):
+            self._level_R = R
+        
+        @property
+        def level_P(self):
+            return self._level_P
+        
+        @level_P.setter
+        def level_P(self, P):
+            self._level_P = P
+    
+    # coarse_solver = 'cg' or 'direct' or 'pyamg'
+    def __init__(self, A_initial, x_initial, b_initial, 
+                 maxlevels = 20, 
+                 maxiter_smoothing=100, 
+                 coarse_solver='cg'):
+
+        # protected variables
+        self._levels = []    # is a list of eachlevel objects.
+        self._init_x = x_initial
+        self._init_b = b_initial
+        self._init_A = A_initial
+        # other parameters
+        self._maxiter_smoothing = maxiter_smoothing
+        self._coarse_solver = coarse_solver
+        self._maxlevels = maxlevels
+
+        # setup 
+        self.build_levels()
+    
+    def __repr__(self):
+        repr_str = ""
+        for i in range(len(self._levels)):
+            repr_str += f"Level {i+1}:\n"
+            repr_str += f"A: {self._levels[i].level_A.shape}\n"
+            if i < len(self._levels) - 1:
+                repr_str += f"R: {self._levels[i].level_R.shape}, P: {self._levels[i].level_P.shape}\n"
+        return repr_str
+
+    def coarsen(self, current_level):
+        """Simple C/F splitting based on the diagonal dominance."""
+        n = current_level.level_A.shape[0]
         coarse_idx = np.arange(0, n, 2)  # Select every second row as coarse
         fine_idx = np.setdiff1d(np.arange(n), coarse_idx)
         return coarse_idx, fine_idx
 
-    def restrict(self, fine_idx, coarse_idx):
+    def restriction(self, fine_idx, coarse_idx):
         """Simple direct injection restriction."""
         n, nc = len(fine_idx), len(coarse_idx)
         R = sp.lil_matrix((nc, n + nc))
         for i, ci in enumerate(coarse_idx):
             R[i, ci] = 1  # Direct injection
         return R.tocsr()
-
-    def interpolate(self, R):
+    
+    def restrict(self, R, r):
+        # Restrict the residual
+        r_coarse = R @ r
+        return r_coarse
+    
+    def calculate_residual(self, A, b, smooth_x):
+        # compute fine grid residual calculation
+        r = b - A @ smooth_x
+        return r
+    
+    def interpolation(self, R):
         """Piecewise constant interpolation (transpose of restriction)."""
         return R.T
+    
+    # setup phase
+    def build_levels(self):
+        # build levels
+        for i in range(self._maxlevels):# allocate all level objects first.
+            level = AMGSolver.eachlevel()
+            # if it's the first level initialize it.
+            if i == 0:
+                level.level_A = self._init_A
+            self._levels.append(level)
+        
+        # find each level operators
+        for i in range(self._maxlevels-1):  # overflow check
+            level = self._levels[i]
+            next_level = self._levels[i+1]
+            
+            # setup steps:
+            # 1. m-by-n restrict matrix.(R)
+            # 2. n-by-m prolongation matrix.(P)
+            # 3. m-by-m coarse matrix.(Galerkin product). Triple sparse matrix            
+            coarse_idx, fine_idx = self.coarsen(level)
+            level.level_R = self.restriction(fine_idx, coarse_idx)
+            level.level_P = self.interpolation(level.level_R)
+            next_level.level_A = level.level_R @ level.level_A @ level.level_P
+                    
+    def solve_V_down(self):
+        b_new = np.copy(self._init_b)
+        x_local = np.copy(self._init_x)
+        
+        for i in range(len(self._levels)-1):
+            level = self._levels[i]
+            next_level = self._levels[i+1]
+            
+            # Pre-smoothing            
+            presmoother = smoother(level.level_A, b_new)
+            smoothed_x = presmoother.pyamg_jacobi(x_local, max_iter=self._maxiter_smoothing)
+            # # compute fine grid residual calculation
+            r = self.calculate_residual(level.level_A, b_new, smoothed_x)
+            # # Restrict the residual
+            b_coarser = self.restrict(level.level_R, r)
+            # set for next level
+            x_local = np.zeros(next_level.level_A.shape[0],)
+            # x_coarse = np.zeros(len(coarse_idx))
+            b_new = np.copy(b_coarser)
+            
+        A_coarsest = self._levels[-1].level_A
+        return b_new, A_coarsest
+    
+    # def solve_V_up(self):
+    #     # recursive call to keep coarsening steps as follows:
+    #     # 1. prolongation
+    #     # 2. Post-smoothing
+    #     # In recursive call end when maxlevels reached.
+    #     for i in range(len(self._levels)-1, 0, -1):
+    #         level = self._levels[i]
+    #         A = level.level_A
+    #         b = level.level_b
+    #         x = level.level_x
+    #         x = self.prolongate(A, x, b)
+    #         level.level_x = x
+    #         x = self.update(A, x, b)
+    #         level.level_x = x
+    #         # post-smoothing
+    #         x = self.smooth(A, x, b)
+    #         level.level_x = x
+    
+    # def solve_coarse_solver(self):
+    #     # Solve the coarsest level using a direct solver
+    #     level = self._levels[-1] # last level
+    #     A = level.level_A
+    #     b = level.level_b
+    #     x = level.level_x
+    #     # Check what solver to use
+    #     if self._coarse_solver == 'cg':
+    #         print("Solving using cg")
+    #         x, _ = scipy_iterative_solver(A, x, b, atol=1.e-5, max_ite=100)
+    #     elif self._coarse_solver == 'direct':
+    #         print("Solving using direct solver")
+    #         x, _ = scipy_direct_solver(A, b)
+    #     else:
+    #         raise ValueError("coarse solver not implemented")
+        
+    #     level.level_x = x
+    
+# class AMGVCycle:
+#     def __init__(self, A, levels=3, iterations=3, tol=1.e-5):
+#         self.A = A
+#         self.levels = levels
+#         self.iterations = iterations
+#         self.tol = tol
 
-    def solve(self, x, b, levels=None):
-        """AMG V-cycle solver."""
-        if levels is None:
-            levels = self.levels
+#     def solve(self, x, b, levels=None):
+#         """AMG V-cycle solver."""
+#         if levels is None:
+#             levels = self.levels
         
-        if levels == 0 or self.A.shape[0] < 2:
-            x, info = spla.cg(self.A, b, x0=x, tol=self.tol, maxiter=self.iterations)
-            return x
+#         if levels == 0 or self.A.shape[0] < 2:
+#             x, info = spla.cg(self.A, b, x0=x, tol=self.tol, maxiter=self.iterations)
+#             return x
         
-        # Pre-smoothing
-        x = self.jacobi_smooth(x, b, iterations=self.iterations)
+#         # Pre-smoothing
+#         x = self.jacobi_smooth(x, b, iterations=self.iterations)
         
-        # Coarsening
-        coarse_idx, fine_idx = self.coarsen()
-        R = self.restrict(fine_idx, coarse_idx)
-        P = self.interpolate(R)
-        A_coarse = R @ self.A @ P
-        b_coarse = R @ (b - self.A @ x)
+#         # Coarsening
+#         coarse_idx, fine_idx = self.coarsen()
+#         R = self.restrict(fine_idx, coarse_idx)
+#         P = self.interpolate(R)
+#         A_coarse = R @ self.A @ P
+#         b_coarse = R @ (b - self.A @ x)
         
-        # Recursive call to solve on coarse grid
-        x_coarse = np.zeros(len(coarse_idx))
-        x_coarse = AMGVCycle(A_coarse, levels - 1).solve(x_coarse, b_coarse)
+#         # Recursive call to solve on coarse grid
+#         x_coarse = np.zeros(len(coarse_idx))
+#         x_coarse = AMGVCycle(A_coarse, levels - 1).solve(x_coarse, b_coarse)
         
-        # Coarse-grid correction
-        x += P @ x_coarse
+#         # Coarse-grid correction
+#         x += P @ x_coarse
         
-        # Post-smoothing
-        x = self.jacobi_smooth(x, b, iterations=self.iterations)
+#         # Post-smoothing
+#         x = self.jacobi_smooth(x, b, iterations=self.iterations)
         
-        return x
+#         return x
 
-class TwoGridMultigrid:
-    def __init__(self, A, p1=3, p2=3, omega=2/3):
-        self.A = A
-        self.p1 = p1  # Pre-smoothing steps
-        self.p2 = p2  # Post-smoothing steps
-        self.omega = omega
+# class TwoGridMultigrid:
+#     def __init__(self, A, p1=3, p2=3, omega=2/3):
+#         self.A = A
+#         self.p1 = p1  # Pre-smoothing steps
+#         self.p2 = p2  # Post-smoothing steps
+#         self.omega = omega
     
-    def weighted_jacobi(self, x, b, iterations):
-        """Weighted Jacobi smoothing."""
-        D = self.A.diagonal()
-        for _ in range(iterations):
-            x += self.omega * (b - self.A @ x) / D
-        return x
-    
-    def coarsen(self):
-        """Simple coarsening strategy using direct injection."""
-        n = self.A.shape[0]
-        coarse_idx = np.arange(0, n, 2)
-        fine_idx = np.setdiff1d(np.arange(n), coarse_idx)
-        return coarse_idx, fine_idx
-    
-    def restrict(self, fine_idx, coarse_idx):
-        """Restriction operator using direct injection."""
-        n, nc = len(fine_idx), len(coarse_idx)
-        R = sp.lil_matrix((nc, n + nc))
-        for i, ci in enumerate(coarse_idx):
-            R[i, ci] = 1
-        return R.tocsr()
-    
-    def prolongate(self, R):
-        """Prolongation operator is the transpose of restriction."""
-        return R.T
-    
-    def solve(self, x, b):
-        """Two-grid V-cycle multigrid solver."""
-        # Pre-smoothing
-        x = self.weighted_jacobi(x, b, self.p1)
+#     def solve(self, x, b):
+#         """Two-grid V-cycle multigrid solver."""
+#         # Pre-smoothing
+#         x = self.weighted_jacobi(x, b, self.p1)
         
-        # Compute residual
-        r = b - self.A @ x
+#         # Compute residual
+#         r = b - self.A @ x
         
-        # Restriction to coarse grid
-        coarse_idx, fine_idx = self.coarsen()
-        R = self.restrict(fine_idx, coarse_idx)
-        P = self.prolongate(R)
-        A_coarse = R @ self.A @ P
-        r_coarse = R @ r
+#         # Restriction to coarse grid
+#         coarse_idx, fine_idx = self.coarsen()
+#         R = self.restrict(fine_idx, coarse_idx)
+#         P = self.prolongate(R)
+#         A_coarse = R @ self.A @ P
+#         r_coarse = R @ r
         
-        # Solve on coarse grid
-        x_coarse = np.zeros(len(coarse_idx))
-        x_coarse = spla.spsolve(A_coarse, r_coarse)
+#         # Solve on coarse grid
+#         x_coarse = np.zeros(len(coarse_idx))
+#         x_coarse = spla.spsolve(A_coarse, r_coarse)
         
-        # Prolongation to fine grid
-        z = P @ x_coarse
+#         # Prolongation to fine grid
+#         z = P @ x_coarse
         
-        # Update solution
-        x += z
+#         # Update solution
+#         x += z
         
-        # Post-smoothing
-        x = self.weighted_jacobi(x, b, self.p2)
+#         # Post-smoothing
+#         x = self.weighted_jacobi(x, b, self.p2)
         
-        return x
+#         return x
