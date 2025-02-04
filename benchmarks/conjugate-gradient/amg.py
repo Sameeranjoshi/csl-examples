@@ -62,17 +62,19 @@ class smoother:
             raise ValueError("Sparse matrices are not equal: data, indices, or indptr mismatch")
     def pyamg_jacobi(self, max_iter=100, weight=1.0):
         # """PyAMG Jacobi smoother."""
-        x_smooth = self.x
+        x_smooth = self.x.copy()    # trickier
         pyamg_smoother.jacobi(self.A, x_smooth, self.b, max_iter, omega=weight)
         return x_smooth
-    def pyamg_gauss_seidel(self, x, max_iter=100):
+    def pyamg_gauss_seidel(self, max_iter=100):
         """PyAMG Gauss-Seidel smoother."""
-        x, _ = pyamg_smoother.gauss_seidel(self.A, x, self.b, max_iter)
-        return x
-    def pyamg_sor(self, x, max_iter=100, weight=1.0):
+        x_smooth = self.x.copy()
+        pyamg_smoother.gauss_seidel(self.A, x_smooth, self.b, max_iter)
+        return x_smooth
+    def pyamg_sor(self, max_iter=100, weight=1.0):
         """PyAMG SOR smoother."""
-        x, _ = pyamg_smoother.sor(self.A, x, self.b, max_iter, omega=weight)
-        return x
+        x_smooth = self.x.copy()
+        pyamg_smoother.sor(self.A, x_smooth, self.b, max_iter, omega=weight)
+        return x_smooth
     def simple_jacobi(self, x0, max_iter=100):
         # https://en.wikipedia.org/wiki/Jacobi_method
         D = np.diag(self.A)  # Extract diagonal elements
@@ -275,15 +277,14 @@ class AMGSolver:
         self.print_tabulate_eachlevel("After build_levels(SETUP)")
         
     def solve_V_down(self):
-        # b_new = np.copy(self._init_b)
-        # x_local = np.copy(self._init_x)
-        # save_smoothed_x_lastlevel = None
-        
+
         for i in range(len(self._levels)-1):
             level = self._levels[i]
             next_level = self._levels[i+1]
             
-            # Pre-smoothing            
+            # Pre-smoothing
+            # residual
+            # restrict       
             presmoother = smoother(level)
             level.level_x_smooth = presmoother.pyamg_jacobi(max_iter=self._maxiter_smoothing)
             level.level_residual = self.calculate_residual(level.level_A, level.level_b, level.level_x_smooth)
@@ -295,10 +296,9 @@ class AMGSolver:
         return coarsest_level.level_b, coarsest_level.level_A
   
     def solve_coarse_solver(self, a_coarse, x_coarse, b_coarse):
-        print(a_coarse[0])
         from tabulate import tabulate
         table = [
-            ["A_coarse", a_coarse.shape, a_coarse.nnz, a_coarse],
+            ["A_coarse", a_coarse.shape, a_coarse],
             ["x_coarse", x_coarse.shape, "-", x_coarse],
             ["b_coarse", b_coarse.shape, "-", b_coarse]
         ]
@@ -307,7 +307,7 @@ class AMGSolver:
         # Check what solver to use
         if self._coarse_solver == 'cg':
             print("Soler = cg")
-            x, _ = scipy_iterative_solver(a_coarse, x_coarse, b_coarse, atol=1.e-5, max_ite=100)
+            x, _ = scipy_iterative_solver(a_coarse, x_coarse, b_coarse, atol=1.e-12, max_ite=100)
         elif self._coarse_solver == 'direct':
             print("Solver = 'direct'")
             x, _ = scipy_direct_solver(a_coarse, b_coarse)
@@ -330,6 +330,16 @@ class AMGSolver:
                 level.level_x_smooth.shape if level.level_x_smooth is not None else "-", 
                 level.level_b.shape if level.level_b is not None else "-"
             ])
+            table = [
+                ["Level", i],
+                ["A", level.level_A.toarray() if level.level_A is not None else '-'],
+                ["b", level.level_b if level.level_b is not None else '-'],
+                ["x", level.level_x if level.level_x is not None else '-'],
+                ["x_smooth", level.level_x_smooth if level.level_x_smooth is not None else '-'],
+                ["R", level.level_R.toarray() if level.level_R is not None else '-'],
+                ["P", level.level_P.toarray() if level.level_P is not None else '-']
+            ]
+            print(tabulate(table, headers=["Variable", "Values"], tablefmt="simple"))
         print(tabulate(level_info, headers=["LevelID", "Shape of A", "NNZ in A", "Shape of R", "Shape of P", "Shape of x", "Shape of x_smooth", "Shape of b"], tablefmt="simple"))
 
     # def solve_V_up(self):

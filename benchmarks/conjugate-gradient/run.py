@@ -419,16 +419,16 @@ def main():
   x_pyamg, rho_pyamg = amg.pyamg(A_csr, x_1d, b_1d, relative_tol, 1000, cycle_type='V', accel_type='cg')
   
   print("##################################################")
-  amg_solver = amg.AMGSolver(A_csr, x_1d, b_1d, maxlevels=4, maxiter_smoothing=2, coarse_solver='direct')
-  # print(amg_solver)
+  print ("X before AMG solver as input, ", x_1d)
+  amg_solver = amg.AMGSolver(A_csr, x_1d, b_1d, maxlevels=5, maxiter_smoothing=3, coarse_solver='cg')
   b_coarse, A_coarse = amg_solver.solve_V_down()
-  dummy_x = np.zeros(shape = (A_coarse.shape[0], ))
-  print("dummy_x = ", dummy_x)
-  x_soln_coarse = amg_solver.solve_coarse_solver(A_coarse, dummy_x, b_coarse)
-  # # Test if dummy_x and x_soln_coarse are different or same using np testing.
-  # print("After")
-  print("X after = ", x_soln_coarse)
-  np.testing.assert_allclose(dummy_x, x_soln_coarse, atol=1.e-5, err_msg="dummy_x != x_soln_coarse")
+  # dummy_x = np.zeros(shape = (A_coarse.shape[0], ))
+  # print("dummy_x = ", dummy_x)
+  # x_soln_coarse = amg_solver.solve_coarse_solver(A_coarse, dummy_x, b_coarse)
+  # # # Test if dummy_x and x_soln_coarse are different or same using np testing.
+  # # print("After")
+  # print("X after = ", x_soln_coarse)
+  # np.testing.assert_allclose(dummy_x, x_soln_coarse, atol=1.e-5, err_msg="dummy_x != x_soln_coarse")
   
   print("##################################################")
   print("Lower the better(0 = exact solution), below data which solution is better")
