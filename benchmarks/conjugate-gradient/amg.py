@@ -47,10 +47,10 @@ def scipy_iterative_solver(A, x, b, atol, max_ite):
 
 #########Visit later
 class smoother:
-    def __init__(self, level):
+    def __init__(self, level, x_input=None):
         self.A = level.level_A
         self.b = level.level_b
-        self.x = level.level_x
+        self.x = x_input
         
     def are_sparse_matrices_equal(self, A, B):
         # Check if the shapes and the number of non-zero elements are the same
@@ -107,21 +107,7 @@ class smoother:
             x = x_new
 
         return x
-    def new_smooth(self, x0, max_iter=100, weight=1.0):
-        """Jacobi smoother using PyAMG."""
-        # print dimentions for debugging
-        self.check_array_type(x0)    
-        # print("diag", np.diag(self.A).shape)
-        # check if A is sparse
-        if sp.issparse(self.A):
-            print("A is sparse")
-        
-        x = x0.copy()  # Avoid modifying input directly
-        # for _ in range(max_iter):
-        #     x_new = x + weight * (self.b - self.A @ x) / np.diag(self.A)
-        #     x = x_new
-        return x  # Ensure it returns something!
-    
+
 class AMGSolver:
     class eachlevel:
         def __init__(self): 
@@ -200,7 +186,7 @@ class AMGSolver:
         self._levels = []    # is a list of eachlevel objects.
         self._init_x = x_initial.copy()
         self._init_b = b_initial.copy()
-        self._init_A = A_initial.copy()
+        self._init_A = A_initial.copy()    
         # other parameters
         self._maxiter_smoothing = maxiter_smoothing
         self._coarse_solver = coarse_solver
@@ -252,8 +238,6 @@ class AMGSolver:
                 
             self._levels.append(level)
             
-            
-        
         # R, P, A_next
         for i in range(self._maxlevels-1):  # overflow check
             level = self._levels[i]
@@ -285,7 +269,7 @@ class AMGSolver:
             # Pre-smoothing
             # residual
             # restrict       
-            presmoother = smoother(level)
+            presmoother = smoother(level, level.level_x)
             level.level_x_smooth = presmoother.pyamg_jacobi(max_iter=self._maxiter_smoothing)
             level.level_residual = self.calculate_residual(level.level_A, level.level_b, level.level_x_smooth)
             # next level
@@ -296,13 +280,14 @@ class AMGSolver:
         return coarsest_level.level_b, coarsest_level.level_A
   
     def solve_coarse_solver(self, a_coarse, x_coarse, b_coarse):
+        print("Coarse solver details")
         from tabulate import tabulate
         table = [
             ["A_coarse", a_coarse.shape, a_coarse],
             ["x_coarse", x_coarse.shape, "-", x_coarse],
             ["b_coarse", b_coarse.shape, "-", b_coarse]
         ]
-        # print(tabulate(table, headers=["Variable", "Shape", "NNZ", "values"], tablefmt="simple"))
+        print(tabulate(table, headers=["Variable", "Shape", "NNZ", "values"], tablefmt="simple"))
         
         # Check what solver to use
         if self._coarse_solver == 'cg':
@@ -318,10 +303,19 @@ class AMGSolver:
         self._levels[-1].level_x = x    # coarse level
         return x
     
-    def print_tabulate_eachlevel(self, print_str=""):
+    def print_tabulate_eachlevel(self, print_str="", up = False):
         print(print_str)
         level_info = []
-        for i in range(len(self._levels)):
+        if up:
+            start = len(self._levels)-1
+            end = -1
+            step = -1
+        else:
+            start = 0
+            end = len(self._levels)
+            step = 1
+            
+        for i in range(start, end, step):
             level = self._levels[i]
             level_info.append([
                 i, 
@@ -335,53 +329,36 @@ class AMGSolver:
             ])
             table = [
                 ["Level", i],
-                ["A", level.level_A.toarray() if level.level_A is not None else '-'],
-                ["b", level.level_b if level.level_b is not None else '-'],
-                ["x", level.level_x if level.level_x is not None else '-'],
-                ["x_smooth", level.level_x_smooth if level.level_x_smooth is not None else '-'],
-                ["R", level.level_R.toarray() if level.level_R is not None else '-'],
-                ["P", level.level_P.toarray() if level.level_P is not None else '-']
+                ["A", f"{level.level_A.toarray()} ({level.level_A.dtype})" if level.level_A is not None else '-'],
+                ["b", f"{level.level_b} ({level.level_b.dtype})" if level.level_b is not None else '-'],
+                ["x", f"{level.level_x} ({level.level_x.dtype})" if level.level_x is not None else '-'],
+                ["x_smooth", f"{level.level_x_smooth} ({level.level_x_smooth.dtype})" if level.level_x_smooth is not None else '-'],
+                ["R", f"{level.level_R.toarray()} ({level.level_R.dtype})" if level.level_R is not None else '-'],
+                ["P", f"{level.level_P.toarray()} ({level.level_P.dtype})" if level.level_P is not None else '-']
             ]
             print(tabulate(table, headers=["Variable", "Values"], tablefmt="simple"))
         print(tabulate(level_info, headers=["LevelID", "Shape of A", "NNZ in A", "Shape of R", "Shape of P", "Shape of x", "Shape of x_smooth", "Shape of b"], tablefmt="simple"))
 
-    # def solve_V_up(self, A_coarse, x_coarse, b_coarse):
-    #     # set some values first
+    def solve_V_up(self, A_coarse, x_coarse, b_coarse):        
+        # print the types of the variables
+
+        # 1. prolongation
+        # 2. update
+        # 3. Post-smoothing
+        for i in range(len(self._levels)-2, -1, -1):
+            level = self._levels[i]
+            prev_level = self._levels[i+1] # may overflow, check later.
+            # prolongate and update
+            level.level_x_smooth = level.level_x_smooth + level.level_P @ prev_level.level_x
+            # post-smoothing
+            postsmoother = smoother(level, level.level_x_smooth)
+            level.level_x = postsmoother.pyamg_jacobi(max_iter=self._maxiter_smoothing)
         
-        
-    #     # 1. prolongation
-    #     # 2. update
-    #     # 3. Post-smoothing
-    #     for i in range(len(self._levels)-1, -1, -1):
-    #         level = self._levels[i]
-    #         prev_level = self._levels[i+1] # may overflow, check later.
-
-    #         # prolongate and update
-    #         level.level_x_smooth += level.level_P @ prev_level.level_x
-    #         # post-smoothing
-    #         postsmoother = smoother(level)
-    #         level.level_x = postsmoother.pyamg_jacobi(max_iter=self._maxiter_smoothing)
-    #     self.print_tabulate_eachlevel("After solve_V_up")
-
-# def solve_V_up(self):
-#     for i in range(len(self._levels) - 2, -1, -1):  # Go from coarse to fine
-#         level = self._levels[i]
-#         next_level = self._levels[i + 1]
-
-#         # Prolongate the correction
-#         P = self.interpolation(next_level.level_R)  # Interpolation (transpose of restriction)
-#         correction = P @ next_level.level_x_smooth  # Interpolate coarse solution
-
-#         # Correct the fine-level solution
-#         level.level_x_smooth += correction  
-
-#         # Post-smoothing
-#         postsmoother = smoother(level)
-#         level.level_x_smooth = postsmoother.pyamg_jacobi(max_iter=self._maxiter_smoothing)
-
-#     self.print_tabulate_eachlevel("After solve_V_up")
-#     return self._levels[0].level_x_smooth  # Return the finest-level solution
-
+        self.print_tabulate_eachlevel("After solve_V_up", up=True)
+        # calculate rho
+        r = self._levels[0].level_b - self._levels[0].level_A.dot(self._levels[0].level_x)
+        rho = np.dot(r, r)
+        return self._levels[0].level_x, rho   # Return the finest-level solution
                 
 # # class AMGVCycle:
 #     def __init__(self, A, levels=3, iterations=3, tol=1.e-5):

@@ -419,16 +419,22 @@ def main():
   x_pyamg, rho_pyamg = amg.pyamg(A_csr, x_1d, b_1d, relative_tol, 1000, cycle_type='V', accel_type='cg')
   
   print("##################################################")
-  print ("X before AMG solver as input, ", x_1d)
-  amg_solver = amg.AMGSolver(A_csr, x_1d, b_1d, maxlevels=5, maxiter_smoothing=3, coarse_solver='cg')
+  # Convert to float64 before passing to solver
+  A_coarse_64 = A_csr.astype(np.float64)
+  x_coarse_64 = x_1d.astype(np.float64)
+  b_coarse_64 = b_1d.astype(np.float64)
+  
+  # solver performs all 64bit operations
+  amg_solver = amg.AMGSolver(A_coarse_64, x_coarse_64, b_coarse_64, maxlevels=2, maxiter_smoothing=3, coarse_solver='cg')
   b_coarse, A_coarse = amg_solver.solve_V_down()
-  # dummy_x = np.zeros(shape = (A_coarse.shape[0], ))
-  # print("dummy_x = ", dummy_x)
-  # x_soln_coarse = amg_solver.solve_coarse_solver(A_coarse, dummy_x, b_coarse)
-  # # # Test if dummy_x and x_soln_coarse are different or same using np testing.
-  # # print("After")
-  # print("X after = ", x_soln_coarse)
-  # np.testing.assert_allclose(dummy_x, x_soln_coarse, atol=1.e-5, err_msg="dummy_x != x_soln_coarse")
+  dummy_x = np.zeros(A_coarse.shape[0], dtype=type(b_coarse))
+  dummy_x = np.zeros(A_coarse.shape[0], dtype=b_coarse.dtype)
+  x_soln_coarse = amg_solver.solve_coarse_solver(A_coarse, dummy_x, b_coarse)
+  x_soln_final_64, rho_amg_64 = amg_solver.solve_V_up(A_coarse, x_soln_coarse, b_coarse)
+  
+  # convert back to float32
+  x_soln_final_32 = x_soln_final_64.astype(np.float32)
+  rho_amg_32 = rho_amg_64.astype(np.float32)
   
   print("##################################################")
   print("Lower the better(0 = exact solution), below data which solution is better")
@@ -436,12 +442,15 @@ def main():
   print(f"[host] after spsolve, rho = {rho_spsolve}")
   print(f"[host] after cg, rho = {rho_cg}")
   print(f"[host] after pyamg, rho = {rho_pyamg}")
+  print(f"[host] after amg, rho = {rho_amg_32}")
+  
   
   # Testing
   check_tolerance = absolute_tol
   np.testing.assert_allclose(xf_1d.ravel(), x_spsolve.ravel(), atol=check_tolerance, err_msg="xf != x_spsolve")
   np.testing.assert_allclose(xf_1d.ravel(), x_cg.ravel(), atol=check_tolerance, err_msg="xf != x_cg")
   np.testing.assert_allclose(xf_1d.ravel(), x_pyamg.ravel(), atol=check_tolerance, err_msg="xf != x_pyamg")
+  np.testing.assert_allclose(xf_1d.ravel(), x_soln_final_32.ravel(), atol=check_tolerance, err_msg="xf != x_amg")
 
   print("##################################################")
   memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
