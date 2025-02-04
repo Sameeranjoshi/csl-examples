@@ -313,6 +313,9 @@ class AMGSolver:
             x, _ = scipy_direct_solver(a_coarse, b_coarse)
         else:
             raise ValueError("coarse solver not implemented")
+        
+        # update last coarse level.
+        self._levels[-1].level_x = x    # coarse level
         return x
     
     def print_tabulate_eachlevel(self, print_str=""):
@@ -342,26 +345,45 @@ class AMGSolver:
             print(tabulate(table, headers=["Variable", "Values"], tablefmt="simple"))
         print(tabulate(level_info, headers=["LevelID", "Shape of A", "NNZ in A", "Shape of R", "Shape of P", "Shape of x", "Shape of x_smooth", "Shape of b"], tablefmt="simple"))
 
-    # def solve_V_up(self):
-    #     # recursive call to keep coarsening steps as follows:
+    # def solve_V_up(self, A_coarse, x_coarse, b_coarse):
+    #     # set some values first
+        
+        
     #     # 1. prolongation
-    #     # 2. Post-smoothing
-    #     # In recursive call end when maxlevels reached.
-    #     for i in range(len(self._levels)-1, 0, -1):
+    #     # 2. update
+    #     # 3. Post-smoothing
+    #     for i in range(len(self._levels)-1, -1, -1):
     #         level = self._levels[i]
-    #         A = level.level_A
-    #         b = level.level_b
-    #         x = level.level_x
-    #         x = self.prolongate(A, x, b)
-    #         level.level_x = x
-    #         x = self.update(A, x, b)
-    #         level.level_x = x
+    #         prev_level = self._levels[i+1] # may overflow, check later.
+
+    #         # prolongate and update
+    #         level.level_x_smooth += level.level_P @ prev_level.level_x
     #         # post-smoothing
-    #         x = self.smooth(A, x, b)
-    #         level.level_x = x
-            
+    #         postsmoother = smoother(level)
+    #         level.level_x = postsmoother.pyamg_jacobi(max_iter=self._maxiter_smoothing)
+    #     self.print_tabulate_eachlevel("After solve_V_up")
+
+# def solve_V_up(self):
+#     for i in range(len(self._levels) - 2, -1, -1):  # Go from coarse to fine
+#         level = self._levels[i]
+#         next_level = self._levels[i + 1]
+
+#         # Prolongate the correction
+#         P = self.interpolation(next_level.level_R)  # Interpolation (transpose of restriction)
+#         correction = P @ next_level.level_x_smooth  # Interpolate coarse solution
+
+#         # Correct the fine-level solution
+#         level.level_x_smooth += correction  
+
+#         # Post-smoothing
+#         postsmoother = smoother(level)
+#         level.level_x_smooth = postsmoother.pyamg_jacobi(max_iter=self._maxiter_smoothing)
+
+#     self.print_tabulate_eachlevel("After solve_V_up")
+#     return self._levels[0].level_x_smooth  # Return the finest-level solution
+
                 
-# class AMGVCycle:
+# # class AMGVCycle:
 #     def __init__(self, A, levels=3, iterations=3, tol=1.e-5):
 #         self.A = A
 #         self.levels = levels
