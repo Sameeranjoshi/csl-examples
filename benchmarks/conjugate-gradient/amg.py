@@ -4,6 +4,7 @@ from scipy import sparse as sp
 import scipy.sparse.linalg as spla
 import pyamg    # Maybe we need this, try if it's modular?
 import pyamg.relaxation.relaxation as pyamg_smoother
+from tabulate import tabulate
 ## Textbook implementation
 
 
@@ -46,9 +47,11 @@ def scipy_iterative_solver(A, x, b, atol, max_ite):
 
 #########Visit later
 class smoother:
-    def __init__(self, A, b):
-        self.A = A
-        self.b = b
+    def __init__(self, level):
+        self.A = level.level_A
+        self.b = level.level_b
+        self.x = level.level_x
+        
     def are_sparse_matrices_equal(self, A, B):
         # Check if the shapes and the number of non-zero elements are the same
         if A.shape != B.shape or A.nnz != B.nnz:
@@ -57,13 +60,11 @@ class smoother:
         # Check if the data, indices, and indptr are the same
         if not (A.data == B.data).all() or not (A.indices == B.indices).all() or not (A.indptr == B.indptr).all():
             raise ValueError("Sparse matrices are not equal: data, indices, or indptr mismatch")
-
-    def pyamg_jacobi(self, x, max_iter=100, weight=1.0):
+    def pyamg_jacobi(self, max_iter=100, weight=1.0):
         # """PyAMG Jacobi smoother."""
-        x_copy = x.copy()
-        pyamg_smoother.jacobi(self.A, x_copy, self.b, max_iter, omega=weight)
-        
-        return x_copy
+        x_smooth = self.x
+        pyamg_smoother.jacobi(self.A, x_smooth, self.b, max_iter, omega=weight)
+        return x_smooth
     def pyamg_gauss_seidel(self, x, max_iter=100):
         """PyAMG Gauss-Seidel smoother."""
         x, _ = pyamg_smoother.gauss_seidel(self.A, x, self.b, max_iter)
@@ -126,6 +127,10 @@ class AMGSolver:
             self._level_A = None
             self._level_R = None
             self._level_P = None
+            self._level_x = None
+            self._level_x_smooth = None
+            self._level_b = None
+            self._level_residual = None
             ##
         @property
         def level_A(self):
@@ -150,6 +155,38 @@ class AMGSolver:
         @level_P.setter
         def level_P(self, P):
             self._level_P = P
+        
+        @property
+        def level_x(self):
+            return self._level_x
+        
+        @level_x.setter
+        def level_x(self, x):
+            self._level_x = x
+            
+        @property
+        def level_x_smooth(self):
+            return self._level_x_smooth
+        
+        @level_x_smooth.setter
+        def level_x_smooth(self, x_smooth):
+            self._level_x_smooth = x_smooth
+            
+        @property
+        def level_b(self):
+            return self._level_b
+        
+        @level_b.setter
+        def level_b(self, b):
+            self._level_b = b
+        
+        @property
+        def level_residual(self):
+            return self._level_residual
+        
+        @level_residual.setter
+        def level_residual(self, r):
+            self._level_residual = r
     
     # coarse_solver = 'cg' or 'direct' or 'pyamg'
     def __init__(self, A_initial, x_initial, b_initial, 
@@ -159,9 +196,9 @@ class AMGSolver:
 
         # protected variables
         self._levels = []    # is a list of eachlevel objects.
-        self._init_x = x_initial
-        self._init_b = b_initial
-        self._init_A = A_initial
+        self._init_x = x_initial.copy()
+        self._init_b = b_initial.copy()
+        self._init_A = A_initial.copy()
         # other parameters
         self._maxiter_smoothing = maxiter_smoothing
         self._coarse_solver = coarse_solver
@@ -169,15 +206,6 @@ class AMGSolver:
 
         # setup 
         self.build_levels()
-    
-    def __repr__(self):
-        repr_str = ""
-        for i in range(len(self._levels)):
-            repr_str += f"Level {i+1}:\n"
-            repr_str += f"A: {self._levels[i].level_A.shape}\n"
-            if i < len(self._levels) - 1:
-                repr_str += f"R: {self._levels[i].level_R.shape}, P: {self._levels[i].level_P.shape}\n"
-        return repr_str
 
     def coarsen(self, current_level):
         """Simple C/F splitting based on the diagonal dominance."""
@@ -208,17 +236,23 @@ class AMGSolver:
         """Piecewise constant interpolation (transpose of restriction)."""
         return R.T
     
-    # setup phase
+    # setup phase( R, P, A, x)
     def build_levels(self):
         # build levels
+        # level 0 initials
         for i in range(self._maxlevels):# allocate all level objects first.
             level = AMGSolver.eachlevel()
             # if it's the first level initialize it.
             if i == 0:
                 level.level_A = self._init_A
+                level.level_x = self._init_x
+                level.level_b = self._init_b
+                
             self._levels.append(level)
+            
+            
         
-        # find each level operators
+        # R, P, A_next
         for i in range(self._maxlevels-1):  # overflow check
             level = self._levels[i]
             next_level = self._levels[i+1]
@@ -231,30 +265,73 @@ class AMGSolver:
             level.level_R = self.restriction(fine_idx, coarse_idx)
             level.level_P = self.interpolation(level.level_R)
             next_level.level_A = level.level_R @ level.level_A @ level.level_P
+        
+        # x
+        for i in range(self._maxlevels):
+            if i == 0:
+                continue    # As first level values are always input values.
+            self._levels[i].level_x = np.zeros(self._levels[i].level_A.shape[0],)
                     
+        self.print_tabulate_eachlevel("After build_levels(SETUP)")
+        
     def solve_V_down(self):
-        b_new = np.copy(self._init_b)
-        x_local = np.copy(self._init_x)
+        # b_new = np.copy(self._init_b)
+        # x_local = np.copy(self._init_x)
+        # save_smoothed_x_lastlevel = None
         
         for i in range(len(self._levels)-1):
             level = self._levels[i]
             next_level = self._levels[i+1]
             
             # Pre-smoothing            
-            presmoother = smoother(level.level_A, b_new)
-            smoothed_x = presmoother.pyamg_jacobi(x_local, max_iter=self._maxiter_smoothing)
-            # # compute fine grid residual calculation
-            r = self.calculate_residual(level.level_A, b_new, smoothed_x)
-            # # Restrict the residual
-            b_coarser = self.restrict(level.level_R, r)
-            # set for next level
-            x_local = np.zeros(next_level.level_A.shape[0],)
-            # x_coarse = np.zeros(len(coarse_idx))
-            b_new = np.copy(b_coarser)
+            presmoother = smoother(level)
+            level.level_x_smooth = presmoother.pyamg_jacobi(max_iter=self._maxiter_smoothing)
+            level.level_residual = self.calculate_residual(level.level_A, level.level_b, level.level_x_smooth)
+            # next level
+            next_level.level_b = self.restrict(level.level_R, level.level_residual)
             
-        A_coarsest = self._levels[-1].level_A
-        return b_new, A_coarsest
+        coarsest_level = self._levels[-1]
+        self.print_tabulate_eachlevel("After solve_V_down")
+        return coarsest_level.level_b, coarsest_level.level_A
+  
+    def solve_coarse_solver(self, a_coarse, x_coarse, b_coarse):
+        print(a_coarse[0])
+        from tabulate import tabulate
+        table = [
+            ["A_coarse", a_coarse.shape, a_coarse.nnz, a_coarse],
+            ["x_coarse", x_coarse.shape, "-", x_coarse],
+            ["b_coarse", b_coarse.shape, "-", b_coarse]
+        ]
+        # print(tabulate(table, headers=["Variable", "Shape", "NNZ", "values"], tablefmt="simple"))
+        
+        # Check what solver to use
+        if self._coarse_solver == 'cg':
+            print("Soler = cg")
+            x, _ = scipy_iterative_solver(a_coarse, x_coarse, b_coarse, atol=1.e-5, max_ite=100)
+        elif self._coarse_solver == 'direct':
+            print("Solver = 'direct'")
+            x, _ = scipy_direct_solver(a_coarse, b_coarse)
+        else:
+            raise ValueError("coarse solver not implemented")
+        return x
     
+    def print_tabulate_eachlevel(self, print_str=""):
+        print(print_str)
+        level_info = []
+        for i in range(len(self._levels)):
+            level = self._levels[i]
+            level_info.append([
+                i, 
+                level.level_A.shape, 
+                level.level_A.nnz, 
+                level.level_R.shape if level.level_R is not None else "-", 
+                level.level_P.shape if level.level_P is not None else "-", 
+                level.level_x.shape if level.level_x is not None else "-", 
+                level.level_x_smooth.shape if level.level_x_smooth is not None else "-", 
+                level.level_b.shape if level.level_b is not None else "-"
+            ])
+        print(tabulate(level_info, headers=["LevelID", "Shape of A", "NNZ in A", "Shape of R", "Shape of P", "Shape of x", "Shape of x_smooth", "Shape of b"], tablefmt="simple"))
+
     # def solve_V_up(self):
     #     # recursive call to keep coarsening steps as follows:
     #     # 1. prolongation
@@ -272,25 +349,8 @@ class AMGSolver:
     #         # post-smoothing
     #         x = self.smooth(A, x, b)
     #         level.level_x = x
-    
-    # def solve_coarse_solver(self):
-    #     # Solve the coarsest level using a direct solver
-    #     level = self._levels[-1] # last level
-    #     A = level.level_A
-    #     b = level.level_b
-    #     x = level.level_x
-    #     # Check what solver to use
-    #     if self._coarse_solver == 'cg':
-    #         print("Solving using cg")
-    #         x, _ = scipy_iterative_solver(A, x, b, atol=1.e-5, max_ite=100)
-    #     elif self._coarse_solver == 'direct':
-    #         print("Solving using direct solver")
-    #         x, _ = scipy_direct_solver(A, b)
-    #     else:
-    #         raise ValueError("coarse solver not implemented")
-        
-    #     level.level_x = x
-    
+            
+                
 # class AMGVCycle:
 #     def __init__(self, A, levels=3, iterations=3, tol=1.e-5):
 #         self.A = A
