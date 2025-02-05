@@ -180,16 +180,19 @@ class AMGSolver:
     def __init__(self, A_initial, x_initial, b_initial, 
                  maxlevels = 20, 
                  maxiter_smoothing=100, 
-                 coarse_solver='cg'):
+                 coarse_solver='cg', data_type=np.float32):
         # protected variables
         self._levels = []    # is a list of eachlevel objects.
+        if x_initial.dtype != data_type or b_initial.dtype != data_type or A_initial.dtype != data_type:
+            raise TypeError(f"x_initial dtype {x_initial.dtype} is not the same as data_type {data_type}.")
         self._init_x = x_initial.copy()
         self._init_b = b_initial.copy()
-        self._init_A = A_initial.copy()    
+        self._init_A = A_initial.copy()
         # other parameters
         self._maxiter_smoothing = maxiter_smoothing
         self._coarse_solver = coarse_solver
         self._maxlevels = maxlevels
+        self._dtype = data_type
         
         # setup 
         self.build_levels()
@@ -204,7 +207,7 @@ class AMGSolver:
     def restriction(self, fine_idx, coarse_idx):
         """Simple direct injection restriction."""
         n, nc = len(fine_idx), len(coarse_idx)
-        R = sp.lil_matrix((nc, n + nc), dtype=np.float32)
+        R = sp.lil_matrix((nc, n + nc), dtype=self._dtype)
         for i, ci in enumerate(coarse_idx):
             R[i, ci] = 1  # Direct injection
         return R.tocsr()
@@ -255,7 +258,7 @@ class AMGSolver:
         for i in range(self._maxlevels):
             if i == 0:
                 continue    # As first level values are always input values.
-            self._levels[i].level_x = np.zeros(self._levels[i].level_A.shape[0], dtype=np.float32)
+            self._levels[i].level_x = np.zeros(self._levels[i].level_A.shape[0], dtype=self._dtype)
                 
         self.print_tabulate_eachlevel("After build_levels(SETUP)")
         

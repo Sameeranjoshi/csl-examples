@@ -420,7 +420,7 @@ def main():
   
   print("##################################################")
 
-  amg_solver = amg.AMGSolver(A_csr, x_1d, b_1d, maxlevels=2, maxiter_smoothing=3, coarse_solver='cg')
+  amg_solver = amg.AMGSolver(A_csr, x_1d, b_1d, maxlevels=2, maxiter_smoothing=3, coarse_solver='cg', data_type=np.float32)
   b_coarse, A_coarse = amg_solver.solve_V_down()
   dummy_x = np.zeros(A_coarse.shape[0], dtype=b_coarse.dtype)
   x_soln_coarse = amg_solver.solve_coarse_solver(A_coarse, dummy_x, b_coarse)
