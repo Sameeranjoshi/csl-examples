@@ -15,7 +15,6 @@ from tabulate import tabulate
 def pyamg(A, x, b, relative_tol, max_ite, cycle_type='V', accel_type='cg'):
     import pyamg
     from scipy.sparse import random
-
     # Use PyAMG for solving the system
     ml = pyamg.ruge_stuben_solver(A)  # Multi-level solver
 
@@ -93,6 +92,7 @@ class smoother:
         # 1. x_new = L_inv * (b - U.x)
         # 2. x_new = (b - L*x_new - U*x_old)/A_ii
         """Gauss-Seidel smoother."""
+        UserWarning("This implementation is still 64 bits, need to change to 32 bits.")
         n = self.A.shape[0]
         x = np.zeros_like(self.b) if x0 is None else x0.copy()
 
@@ -181,7 +181,6 @@ class AMGSolver:
                  maxlevels = 20, 
                  maxiter_smoothing=100, 
                  coarse_solver='cg'):
-
         # protected variables
         self._levels = []    # is a list of eachlevel objects.
         self._init_x = x_initial.copy()
@@ -191,7 +190,7 @@ class AMGSolver:
         self._maxiter_smoothing = maxiter_smoothing
         self._coarse_solver = coarse_solver
         self._maxlevels = maxlevels
-
+        
         # setup 
         self.build_levels()
 
@@ -205,7 +204,7 @@ class AMGSolver:
     def restriction(self, fine_idx, coarse_idx):
         """Simple direct injection restriction."""
         n, nc = len(fine_idx), len(coarse_idx)
-        R = sp.lil_matrix((nc, n + nc))
+        R = sp.lil_matrix((nc, n + nc), dtype=np.float32)
         for i, ci in enumerate(coarse_idx):
             R[i, ci] = 1  # Direct injection
         return R.tocsr()
@@ -235,7 +234,7 @@ class AMGSolver:
                 level.level_A = self._init_A
                 level.level_x = self._init_x
                 level.level_b = self._init_b
-                
+            
             self._levels.append(level)
             
         # R, P, A_next
@@ -251,13 +250,13 @@ class AMGSolver:
             level.level_R = self.restriction(fine_idx, coarse_idx)
             level.level_P = self.interpolation(level.level_R)
             next_level.level_A = level.level_R @ level.level_A @ level.level_P
-        
+
         # x
         for i in range(self._maxlevels):
             if i == 0:
                 continue    # As first level values are always input values.
-            self._levels[i].level_x = np.zeros(self._levels[i].level_A.shape[0],)
-                    
+            self._levels[i].level_x = np.zeros(self._levels[i].level_A.shape[0], dtype=np.float32)
+                
         self.print_tabulate_eachlevel("After build_levels(SETUP)")
         
     def solve_V_down(self):
@@ -319,13 +318,13 @@ class AMGSolver:
             level = self._levels[i]
             level_info.append([
                 i, 
-                level.level_A.shape, 
+                f"{level.level_A.shape} ({level.level_A.dtype})", 
                 level.level_A.nnz, 
-                level.level_R.shape if level.level_R is not None else "-", 
-                level.level_P.shape if level.level_P is not None else "-", 
-                level.level_x.shape if level.level_x is not None else "-", 
-                level.level_x_smooth.shape if level.level_x_smooth is not None else "-", 
-                level.level_b.shape if level.level_b is not None else "-"
+                f"{level.level_R.shape} ({level.level_R.dtype})" if level.level_R is not None else "-", 
+                f"{level.level_P.shape} ({level.level_P.dtype})" if level.level_P is not None else "-", 
+                f"{level.level_x.shape} ({level.level_x.dtype})" if level.level_x is not None else "-", 
+                f"{level.level_x_smooth.shape} ({level.level_x_smooth.dtype})" if level.level_x_smooth is not None else "-", 
+                f"{level.level_b.shape} ({level.level_b.dtype})" if level.level_b is not None else "-"
             ])
             table = [
                 ["Level", i],
