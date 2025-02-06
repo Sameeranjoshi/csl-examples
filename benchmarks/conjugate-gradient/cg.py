@@ -36,8 +36,9 @@ from numpy import linalg as LA
 #  rho       |b - A*x|^2
 #  k         the number of iterations
 # 
-def conjugateGradient(A_csr, x0, b, max_ite, tol):
+def conjugateGradient(A_csr, b, max_ite, tol):
   k = 0
+  x0 = np.zeros(b.shape, dtype=np.float32)
   x = np.copy(x0)
   # r0 = b - A*x0
   y = A_csr.dot(x)
@@ -67,4 +68,4 @@ def conjugateGradient(A_csr, x0, b, max_ite, tol):
     rho_old = rho
     rho = np.dot(r,r)
     print(f"[CG] iter {k}: rho = {rho}")
-  return x, rho, k
+  return x

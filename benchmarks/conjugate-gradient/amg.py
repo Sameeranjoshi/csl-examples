@@ -1,12 +1,28 @@
+# others
+import warnings
+from tabulate import tabulate
+# numpy
 import numpy as np
 from numpy import linalg as LA
+from numpy.testing import TestCase, assert_equal, assert_almost_equal, \
+    assert_array_almost_equal
+# scipy
 from scipy import sparse as sp
 import scipy.sparse.linalg as spla
+import scipy.sparse.linalg as spla
+from scipy.sparse import csr_matrix, coo_matrix, SparseEfficiencyWarning
+# pyamg
 import pyamg    # Maybe we need this, try if it's modular?
 import pyamg.relaxation.relaxation as pyamg_smoother
-from tabulate import tabulate
-## Textbook implementation
+from pyamg.gallery import poisson, load_example
+from pyamg.strength import classical_strength_of_connection
+from pyamg.classical import split
+from pyamg.classical.classical import ruge_stuben_solver
+from pyamg.classical.interpolate import direct_interpolation, \
+    classical_interpolation
 
+#others
+from cg import conjugateGradient
 
 # solve a linear system A * x = b
 # where A is a symmetric positive definite matrix
@@ -44,6 +60,48 @@ def scipy_iterative_solver(A, x, b, atol, max_ite):
     rho = np.dot(r, r)
     return x, rho
 
+def test_rs_baseline(A, x, b, max_ite, absolute_tol):
+
+    #   coarse_solver_callable = 'cg'
+    #   coarse_solver_callable = test_direct_solver_scipy   # foo(A,b) -> x
+    #   coarse_solver_callable = (test_direct_solver_scipy, {"x": x})
+    
+      coarse_solver_callable = (conjugateGradient, { "max_ite": max_ite, "tol": absolute_tol})
+
+      # 2. config
+      ruge_stuben_config = {
+            'strength': ('classical', {'theta': 0.5}),  # Method to determine connection strength
+            'CF': ('RS', {'second_pass': False}),  # Coarse grid selection method
+            'interpolation': 'classical',  # Interpolation method
+            'presmoother': ('gauss_seidel', {'sweep': 'symmetric'}),  # Presmoother method
+            'postsmoother': ('gauss_seidel', {'sweep': 'symmetric'}),  # Postsmoother method
+            'max_levels': 30,  # Maximum levels
+            'max_coarse': 10,  # Maximum number of variables on coarse grid
+            'keep': False,  # Flag to keep strength in hierarchy for diagnostics
+            'coarse_solver': coarse_solver_callable  # Coarse solver method (default)
+      }
+
+      # 3. solver
+      ml = ruge_stuben_solver(A, **ruge_stuben_config)
+      print(ml)
+      # 4. solve
+      residual = []
+      solve_config = {
+            'maxiter': 20,
+            'cycle': 'V',
+            'residuals': residual,
+            'tol': 1e-12,
+            'accel': None,
+            'callback': None,
+            'cycles_per_level': 1,
+            'return_info': False,
+      }
+      x_sol = ml.solve(b, x0=x, **solve_config)
+      # 5. assert
+      r = b - A*x_sol
+      rho = np.dot(r, r)
+      return x_sol, rho
+  
 #########Visit later
 class smoother:
     def __init__(self, level, x_input=None):

@@ -411,7 +411,12 @@ def main():
   print(f"absolute tol = {tol}")
   print("##################################################")
   # Apply CG
-  xf_1d, rho, k = conjugateGradient(A_csr, x_1d, b_1d, max_ite, absolute_tol)
+  # TODO: Removed the x0 initial guess and doesn't return rho and k. For compatibility with the pyamg.
+  xf_1d = conjugateGradient(A_csr, b_1d, max_ite, absolute_tol) 
+  y = A_csr.dot(xf_1d)
+  r = b_1d - y
+  rho = np.dot(r, r)
+  k=-49585
   # Other solvers
   x_spsolve, rho_spsolve = amg.scipy_direct_solver(A_csr, b_1d)
   x_cg, rho_cg = amg.scipy_iterative_solver(A_csr, x_1d, b_1d, absolute_tol, 1000)
@@ -420,19 +425,21 @@ def main():
   
   print("##################################################")
 
-  amg_solver = amg.AMGSolver(A_csr, x_1d, b_1d, maxlevels=2, maxiter_smoothing=3, coarse_solver='cg', data_type=np.float32)
-  b_coarse, A_coarse = amg_solver.solve_V_down()
-  dummy_x = np.zeros(A_coarse.shape[0], dtype=b_coarse.dtype)
-  x_soln_coarse = amg_solver.solve_coarse_solver(A_coarse, dummy_x, b_coarse)
-  x_soln_final, rho_amg = amg_solver.solve_V_up(A_coarse, x_soln_coarse, b_coarse)
+  x2, rho2 = amg.test_rs_baseline(A_csr, x_1d, b_1d, max_ite, absolute_tol)      # split into 3 phases
+  # amg_solver = amg.AMGSolver(A_csr, x_1d, b_1d, maxlevels=2, maxiter_smoothing=3, coarse_solver='cg', data_type=np.float32)
+  # b_coarse, A_coarse = amg_solver.solve_V_down()
+  # dummy_x = np.zeros(A_coarse.shape[0], dtype=b_coarse.dtype)
+  # x_soln_coarse = amg_solver.solve_coarse_solver(A_coarse, dummy_x, b_coarse)
+  # x_soln_final, rho_amg = amg_solver.solve_V_up(A_coarse, x_soln_coarse, b_coarse)
   
   print("##################################################")
-  print("Lower the better(0 = exact solution), below data which solution is better")
+  print("Lower the better(0 = exact solution satifies Ax=b well), below data which solution is better")
   print(f"[host] after CG, rho = {rho}, k = {k}")
   print(f"[host] after spsolve, rho = {rho_spsolve}")
   print(f"[host] after cg, rho = {rho_cg}")
   print(f"[host] after pyamg, rho = {rho_pyamg}")
-  print(f"[host] after amg, rho = {rho_amg}")
+  print(f"[host] after rs_baseline(CG from cerebras), rho = {rho2}")
+  # print(f"[host] after amg, rho = {rho_amg}")
   
   
   # Testing
@@ -440,7 +447,8 @@ def main():
   np.testing.assert_allclose(xf_1d.ravel(), x_spsolve.ravel(), atol=check_tolerance, err_msg="xf != x_spsolve")
   np.testing.assert_allclose(xf_1d.ravel(), x_cg.ravel(), atol=check_tolerance, err_msg="xf != x_cg")
   np.testing.assert_allclose(xf_1d.ravel(), x_pyamg.ravel(), atol=check_tolerance, err_msg="xf != x_pyamg")
-  np.testing.assert_allclose(xf_1d.ravel(), x_soln_final.ravel(), atol=check_tolerance, err_msg="xf != x_amg")
+  # np.testing.assert_allclose(xf_1d.ravel(), x_soln_final.ravel(), atol=check_tolerance, err_msg="xf != x_amg")
+  np.testing.assert_allclose(xf_1d.ravel(), x2.ravel(), atol=check_tolerance, err_msg="xf != x_rs_baseline")
 
   print("##################################################")
   memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
