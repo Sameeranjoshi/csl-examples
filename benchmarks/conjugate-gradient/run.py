@@ -425,12 +425,12 @@ def main():
   
   print("##################################################")
 
-  x2, rho2 = amg.test_rs_baseline(A_csr, x_1d, b_1d, max_ite, absolute_tol)      # split into 3 phases
-  # amg_solver = amg.AMGSolver(A_csr, x_1d, b_1d, maxlevels=2, maxiter_smoothing=3, coarse_solver='cg', data_type=np.float32)
-  # b_coarse, A_coarse = amg_solver.solve_V_down()
-  # dummy_x = np.zeros(A_coarse.shape[0], dtype=b_coarse.dtype)
-  # x_soln_coarse = amg_solver.solve_coarse_solver(A_coarse, dummy_x, b_coarse)
-  # x_soln_final, rho_amg = amg_solver.solve_V_up(A_coarse, x_soln_coarse, b_coarse)
+  solver_callable_host = (conjugateGradient, { "max_ite": max_ite, "tol": absolute_tol})
+  x2, rho2 = amg.test_rs_baseline(A_csr, x_1d, b_1d, max_ite, absolute_tol, solver_callable=solver_callable_host)      # split into 3 phases
+
+  # solver_callable_device = (wrapper_solver_device_amg, {"stencil_coeff":stencil_coeff , "args":args, "dirname":dirname, 
+  #                                            "height":height, "width":width, "zDim":zDim, "max_ite":max_ite, "tol":absolute_tol })
+  # x3, rho3 = amg.test_rs_baseline(A_csr, x_1d, b_1d, max_ite, absolute_tol, solver_callable=solver_callable_device)      # split into 3 phases
   
   print("##################################################")
   print("Lower the better(0 = exact solution satifies Ax=b well), below data which solution is better")
@@ -439,7 +439,6 @@ def main():
   print(f"[host] after cg, rho = {rho_cg}")
   print(f"[host] after pyamg, rho = {rho_pyamg}")
   print(f"[host] after rs_baseline(CG from cerebras), rho = {rho2}")
-  # print(f"[host] after amg, rho = {rho_amg}")
   
   
   # Testing
@@ -451,123 +450,8 @@ def main():
   np.testing.assert_allclose(xf_1d.ravel(), x2.ravel(), atol=check_tolerance, err_msg="xf != x_rs_baseline")
 
   print("##################################################")
-  memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
-  simulator = SdkRuntime(dirname, cmaddr=args.cmaddr)
-
-  symbol_b = simulator.get_id("b")
-  symbol_x = simulator.get_id("x")
-  symbol_rho = simulator.get_id("rho")
-  symbol_stencil_coeff = simulator.get_id("stencil_coeff")
-  symbol_time_buf_u16 = simulator.get_id("time_buf_u16")
-  symbol_time_ref = simulator.get_id("time_ref")
-
-  simulator.load()
-  simulator.run()
-
-  print(f"copy vector b and x0")
-  simulator.memcpy_h2d(symbol_b, b_1d, 0, 0, width, height, zDim,\
-    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
-
-  simulator.memcpy_h2d(symbol_x, x_1d, 0, 0, width, height, zDim,\
-    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
-
-  print(f"copy 7 stencil coefficients")
-  stencil_coeff_1d = hwl_2_oned_colmajor(height, width, 7, stencil_coeff, np.float32)
-  simulator.memcpy_h2d(symbol_stencil_coeff, stencil_coeff_1d, 0, 0, width, height, 7,\
-    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
-
-  print("step 0: enable timer")
-  simulator.launch("f_enable_timer", nonblock=False)
-
-  print("step 1: sync all PEs")
-  simulator.launch("f_sync", nonblock=False)
-
-  print("step 2: copy reference clock from reduce module")
-  simulator.launch("f_reference_timestamps", nonblock=False)
-
-  print("step 3: tic() records time_start")
-  simulator.launch("f_tic", nonblock=True)
-
-  print(f"step 4: conjugate gradient with max_ite = {max_ite}, zDim = {zDim}")
-
-  print("step 4.1: initialization")
-  # - setup the length of all DSDs
-  # - setup the size of local tensor
-  simulator.launch("f_cg_init", np.int16(zDim), nonblock=False)
-
-  k = 0
-  print("step 4.2: r0 = b - A*x0 and compute rho = |r0|^2")
-  # w = A*x0
-  simulator.launch("f_spmv_Ax", nonblock=False)
-  # r0 = b - w = b - A*x0
-  # rho = |r0|^2
-  simulator.launch("f_residual", nonblock=False)
-
-  # [optional] D2H(rho)
-  rho_wse = np.zeros(1, np.float32)
-  simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1,\
-    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
-  rho = rho_wse[0]
-  print(f"[CG] iter {k}: rho = {rho}")
-  # if |r_k|_2 < tol, then exit
-  while ( (rho > tol*tol) and (k < max_ite) ):
-    k = k + 1
-    print("step 4.3: update p")
-    # if k == 1
-    #   p = r
-    # else
-    #   beta = rho/rho_old
-    #   p = r + beta * p
-    simulator.launch("f_update_p", np.int16(k), nonblock=False)
-
-    # alpha_{k} = |r_{k-1}|^2/<p_{k}, A*p_{k}>
-    print("step 4.4: compute w = A*p")
-    # w = A*p
-    simulator.launch("f_spmv_Ap", nonblock=False)
-
-    print("step 4.5: update eta")
-    # eta = np.dot(p,w) = <p_{k}, A*p_{k}>
-    simulator.launch("f_eta", nonblock=False)
-
-    print("step 4.6: update alpha, x, r and rho")
-    # alpha = rho/eta
-    # x = x + alpha * p
-    # r = r - alpha * w  where w = A*p
-    # rho_old = rho
-    # rho = np.dot(r,r)
-    simulator.launch("f_update_x_r_rho", nonblock=False)
-
-    # [optional] D2H(rho)
-    simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1,\
-      streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
-    rho = rho_wse[0]
-    print(f"[CG] iter {k}: rho = {rho}")
-
-
-  print("step 5: toc() records time_end")
-  simulator.launch("f_toc", nonblock=False)
-
-  print("step 6: prepare (time_start, time_end)")
-  simulator.launch("f_memcpy_timestamps", nonblock=False)
-
-  print("step 7: D2H (time_start, time_end)")
-  time_memcpy_hwl_1d = np.zeros(height*width*6, np.uint32)
-  simulator.memcpy_d2h(time_memcpy_hwl_1d, symbol_time_buf_u16, 0, 0, width, height, 6,\
-    streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=False)
-  time_memcpy_hwl = oned_to_hwl_colmajor(height, width, 6, time_memcpy_hwl_1d, np.uint16)
-
-  print("step 8: D2H reference clock")
-  time_ref_1d = np.zeros(height*width*3, np.uint32)
-  simulator.memcpy_d2h(time_ref_1d, symbol_time_ref, 0, 0, width, height, 3,\
-    streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=False)
-  time_ref_hwl = oned_to_hwl_colmajor(height, width, 3, time_ref_1d, np.uint16)
-
-  print("step 9: D2H x[zDim]")
-  xf_wse_1d = np.zeros(height*width*zDim, np.float32)
-  simulator.memcpy_d2h(xf_wse_1d, symbol_x, 0, 0, width, height, zDim,\
-    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
-
-  simulator.stop()
+  # # x = fn(A, b, **kwargs)
+  xf_wse_1d = conjugateGradient_device(stencil_coeff, b_1d, x_1d, args, dirname, height, width, zDim, max_ite, tol)
 
   if args.cmaddr is None:
     # move simulation log and core dump to the given folder
@@ -583,8 +467,7 @@ def main():
     if src_trace.exists():
       shutil.move(src_trace, dst_trace)
 
-  timing_analysis(height, width, zDim, time_memcpy_hwl, time_ref_hwl)
-
+  
   nrm2_xf = np.linalg.norm(xf_wse_1d.ravel(), 2)
   print(f"|xf|_2 = {nrm2_xf}")
 
@@ -609,7 +492,263 @@ def main():
       for px in range(width):
         t = debug_mod.get_symbol(core_fabric_offset_x+px, core_fabric_offset_y+py, 'rho', np.float32)
         print(f"(py, px) = {py, px}, rho_ij = {t}")
+print("##################################################")
 
+def wrapper_solver_device_amg(A_csr, b_1d, stencil_coeff, args, dirname, height, width, zDim, max_ite, tol):
+  return conjugateGradient_device_amg(stencil_coeff, b_1d, args, dirname, height, width, zDim, max_ite, tol)
+  
+def conjugateGradient_device_amg(stencil_coeff, b_1d, args, dirname, height, width, zDim, max_ite, tol):
+    x_1d = np.zeros(b_1d.shape, np.float32) # fix
+    memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
+    simulator = SdkRuntime(dirname, cmaddr=args.cmaddr)
+
+    symbol_b = simulator.get_id("b")
+    symbol_x = simulator.get_id("x")
+    symbol_rho = simulator.get_id("rho")
+    symbol_stencil_coeff = simulator.get_id("stencil_coeff")
+    symbol_time_buf_u16 = simulator.get_id("time_buf_u16")
+    symbol_time_ref = simulator.get_id("time_ref")
+
+    simulator.load()
+    simulator.run()
+
+    print(f"copy vector b and x0")
+    print(f"b_1d.shape: {b_1d.shape}, expected: ({height * width * zDim})")
+    print(f"b_1d.size: {b_1d.size}, expected: {height * width * zDim}")
+    # shape of x_1d
+    print(f"x_1d.shape: {x_1d.shape}, expected: ({height * width * zDim})")
+    print(f"x_1d.size: {x_1d.size}, expected: {height * width * zDim}")
+    # shape of stencil_coeff
+    print(f"stencil_coeff.shape: {stencil_coeff.shape}, expected: ({height * width * 7})")
+    print(f"stencil_coeff.size: {stencil_coeff.size}, expected: {height * width * 7}")
+
+    simulator.memcpy_h2d(symbol_b, b_1d, 0, 0, width, height, zDim,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+
+    simulator.memcpy_h2d(symbol_x, x_1d, 0, 0, width, height, zDim,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+
+    print(f"copy 7 stencil coefficients")
+    stencil_coeff_1d = hwl_2_oned_colmajor(height, width, 7, stencil_coeff, np.float32)
+    simulator.memcpy_h2d(symbol_stencil_coeff, stencil_coeff_1d, 0, 0, width, height, 7,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+
+    print("step 0: enable timer")
+    simulator.launch("f_enable_timer", nonblock=False)
+
+    print("step 1: sync all PEs")
+    simulator.launch("f_sync", nonblock=False)
+
+    print("step 2: copy reference clock from reduce module")
+    simulator.launch("f_reference_timestamps", nonblock=False)
+
+    print("step 3: tic() records time_start")
+    simulator.launch("f_tic", nonblock=True)
+
+    print(f"step 4: conjugate gradient with max_ite = {max_ite}, zDim = {zDim}")
+
+    print("step 4.1: initialization")
+  # - setup the length of all DSDs
+  # - setup the size of local tensor
+    simulator.launch("f_cg_init", np.int16(zDim), nonblock=False)
+
+    k = 0
+    print("step 4.2: r0 = b - A*x0 and compute rho = |r0|^2")
+  # w = A*x0
+    simulator.launch("f_spmv_Ax", nonblock=False)
+  # r0 = b - w = b - A*x0
+  # rho = |r0|^2
+    simulator.launch("f_residual", nonblock=False)
+
+  # [optional] D2H(rho)
+    rho_wse = np.zeros(1, np.float32)
+    simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    rho = rho_wse[0]
+    print(f"[CG] iter {k}: rho = {rho}")
+  # if |r_k|_2 < tol, then exit
+    while ( (rho > tol*tol) and (k < max_ite) ):
+      k = k + 1
+      print("step 4.3: update p")
+    # if k == 1
+    #   p = r
+    # else
+    #   beta = rho/rho_old
+    #   p = r + beta * p
+      simulator.launch("f_update_p", np.int16(k), nonblock=False)
+
+    # alpha_{k} = |r_{k-1}|^2/<p_{k}, A*p_{k}>
+      print("step 4.4: compute w = A*p")
+    # w = A*p
+      simulator.launch("f_spmv_Ap", nonblock=False)
+
+      print("step 4.5: update eta")
+    # eta = np.dot(p,w) = <p_{k}, A*p_{k}>
+      simulator.launch("f_eta", nonblock=False)
+
+      print("step 4.6: update alpha, x, r and rho")
+    # alpha = rho/eta
+    # x = x + alpha * p
+    # r = r - alpha * w  where w = A*p
+    # rho_old = rho
+    # rho = np.dot(r,r)
+      simulator.launch("f_update_x_r_rho", nonblock=False)
+
+    # [optional] D2H(rho)
+      simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1,\
+      streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+      rho = rho_wse[0]
+      print(f"[CG] iter {k}: rho = {rho}")
+
+
+    print("step 5: toc() records time_end")
+    simulator.launch("f_toc", nonblock=False)
+
+    print("step 6: prepare (time_start, time_end)")
+    simulator.launch("f_memcpy_timestamps", nonblock=False)
+
+    print("step 7: D2H (time_start, time_end)")
+    time_memcpy_hwl_1d = np.zeros(height*width*6, np.uint32)
+    simulator.memcpy_d2h(time_memcpy_hwl_1d, symbol_time_buf_u16, 0, 0, width, height, 6,\
+    streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    time_memcpy_hwl = oned_to_hwl_colmajor(height, width, 6, time_memcpy_hwl_1d, np.uint16)
+
+    print("step 8: D2H reference clock")
+    time_ref_1d = np.zeros(height*width*3, np.uint32)
+    simulator.memcpy_d2h(time_ref_1d, symbol_time_ref, 0, 0, width, height, 3,\
+    streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    time_ref_hwl = oned_to_hwl_colmajor(height, width, 3, time_ref_1d, np.uint16)
+
+    print("step 9: D2H x[zDim]")
+    xf_wse_1d = np.zeros(height*width*zDim, np.float32)
+    simulator.memcpy_d2h(xf_wse_1d, symbol_x, 0, 0, width, height, zDim,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+
+    simulator.stop()
+    timing_analysis(height, width, zDim, time_memcpy_hwl, time_ref_hwl)
+    
+    return xf_wse_1d
+
+def conjugateGradient_device(stencil_coeff, b_1d, x_1d, args, dirname, height, width, zDim, max_ite, tol):
+    memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
+    simulator = SdkRuntime(dirname, cmaddr=args.cmaddr)
+
+    symbol_b = simulator.get_id("b")
+    symbol_x = simulator.get_id("x")
+    symbol_rho = simulator.get_id("rho")
+    symbol_stencil_coeff = simulator.get_id("stencil_coeff")
+    symbol_time_buf_u16 = simulator.get_id("time_buf_u16")
+    symbol_time_ref = simulator.get_id("time_ref")
+
+    simulator.load()
+    simulator.run()
+
+    simulator.memcpy_h2d(symbol_b, b_1d, 0, 0, width, height, zDim,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+
+    simulator.memcpy_h2d(symbol_x, x_1d, 0, 0, width, height, zDim,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+
+    print(f"copy 7 stencil coefficients")
+    stencil_coeff_1d = hwl_2_oned_colmajor(height, width, 7, stencil_coeff, np.float32)
+    simulator.memcpy_h2d(symbol_stencil_coeff, stencil_coeff_1d, 0, 0, width, height, 7,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+
+    print("step 0: enable timer")
+    simulator.launch("f_enable_timer", nonblock=False)
+
+    print("step 1: sync all PEs")
+    simulator.launch("f_sync", nonblock=False)
+
+    print("step 2: copy reference clock from reduce module")
+    simulator.launch("f_reference_timestamps", nonblock=False)
+
+    print("step 3: tic() records time_start")
+    simulator.launch("f_tic", nonblock=True)
+
+    print(f"step 4: conjugate gradient with max_ite = {max_ite}, zDim = {zDim}")
+
+    print("step 4.1: initialization")
+  # - setup the length of all DSDs
+  # - setup the size of local tensor
+    simulator.launch("f_cg_init", np.int16(zDim), nonblock=False)
+
+    k = 0
+    print("step 4.2: r0 = b - A*x0 and compute rho = |r0|^2")
+  # w = A*x0
+    simulator.launch("f_spmv_Ax", nonblock=False)
+  # r0 = b - w = b - A*x0
+  # rho = |r0|^2
+    simulator.launch("f_residual", nonblock=False)
+
+  # [optional] D2H(rho)
+    rho_wse = np.zeros(1, np.float32)
+    simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    rho = rho_wse[0]
+    print(f"[CG] iter {k}: rho = {rho}")
+  # if |r_k|_2 < tol, then exit
+    while ( (rho > tol*tol) and (k < max_ite) ):
+      k = k + 1
+      print("step 4.3: update p")
+    # if k == 1
+    #   p = r
+    # else
+    #   beta = rho/rho_old
+    #   p = r + beta * p
+      simulator.launch("f_update_p", np.int16(k), nonblock=False)
+
+    # alpha_{k} = |r_{k-1}|^2/<p_{k}, A*p_{k}>
+      print("step 4.4: compute w = A*p")
+    # w = A*p
+      simulator.launch("f_spmv_Ap", nonblock=False)
+
+      print("step 4.5: update eta")
+    # eta = np.dot(p,w) = <p_{k}, A*p_{k}>
+      simulator.launch("f_eta", nonblock=False)
+
+      print("step 4.6: update alpha, x, r and rho")
+    # alpha = rho/eta
+    # x = x + alpha * p
+    # r = r - alpha * w  where w = A*p
+    # rho_old = rho
+    # rho = np.dot(r,r)
+      simulator.launch("f_update_x_r_rho", nonblock=False)
+
+    # [optional] D2H(rho)
+      simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1,\
+      streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+      rho = rho_wse[0]
+      print(f"[CG] iter {k}: rho = {rho}")
+
+
+    print("step 5: toc() records time_end")
+    simulator.launch("f_toc", nonblock=False)
+
+    print("step 6: prepare (time_start, time_end)")
+    simulator.launch("f_memcpy_timestamps", nonblock=False)
+
+    print("step 7: D2H (time_start, time_end)")
+    time_memcpy_hwl_1d = np.zeros(height*width*6, np.uint32)
+    simulator.memcpy_d2h(time_memcpy_hwl_1d, symbol_time_buf_u16, 0, 0, width, height, 6,\
+    streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    time_memcpy_hwl = oned_to_hwl_colmajor(height, width, 6, time_memcpy_hwl_1d, np.uint16)
+
+    print("step 8: D2H reference clock")
+    time_ref_1d = np.zeros(height*width*3, np.uint32)
+    simulator.memcpy_d2h(time_ref_1d, symbol_time_ref, 0, 0, width, height, 3,\
+    streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    time_ref_hwl = oned_to_hwl_colmajor(height, width, 3, time_ref_1d, np.uint16)
+
+    print("step 9: D2H x[zDim]")
+    xf_wse_1d = np.zeros(height*width*zDim, np.float32)
+    simulator.memcpy_d2h(xf_wse_1d, symbol_x, 0, 0, width, height, zDim,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+
+    simulator.stop()
+    timing_analysis(height, width, zDim, time_memcpy_hwl, time_ref_hwl)
+    
+    return xf_wse_1d
 
 if __name__ == "__main__":
   main()

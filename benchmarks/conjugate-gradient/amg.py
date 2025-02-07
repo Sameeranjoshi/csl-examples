@@ -60,13 +60,13 @@ def scipy_iterative_solver(A, x, b, atol, max_ite):
     rho = np.dot(r, r)
     return x, rho
 
-def test_rs_baseline(A, x, b, max_ite, absolute_tol):
+def test_rs_baseline(A, x, b, max_ite, absolute_tol, solver_callable='cg'):
 
     #   coarse_solver_callable = 'cg'
     #   coarse_solver_callable = test_direct_solver_scipy   # foo(A,b) -> x
     #   coarse_solver_callable = (test_direct_solver_scipy, {"x": x})
     
-      coarse_solver_callable = (conjugateGradient, { "max_ite": max_ite, "tol": absolute_tol})
+      coarse_solver_callable = solver_callable
 
       # 2. config
       ruge_stuben_config = {
