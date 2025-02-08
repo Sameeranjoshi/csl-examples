@@ -18,6 +18,7 @@ from pyamg.gallery import poisson, load_example
 from pyamg.strength import classical_strength_of_connection
 from pyamg.classical import split
 from pyamg.classical.classical import ruge_stuben_solver
+from pyamg.aggregation.aggregation import smoothed_aggregation_solver
 from pyamg.classical.interpolate import direct_interpolation, \
     classical_interpolation
 
@@ -71,7 +72,7 @@ def test_rs_baseline(A, x, b, max_ite, absolute_tol, solver_callable='cg'):
       # 2. config
       ruge_stuben_config = {
             'strength': ('classical', {'theta': 0.5}),  # Method to determine connection strength
-            'CF': ('RS', {'second_pass': False}),  # Coarse grid selection method
+            'CF': ('RS', {'second_pass': True}),  # Coarse grid selection method
             'interpolation': 'classical',  # Interpolation method
             'presmoother': ('gauss_seidel', {'sweep': 'symmetric'}),  # Presmoother method
             'postsmoother': ('gauss_seidel', {'sweep': 'symmetric'}),  # Postsmoother method
@@ -101,6 +102,52 @@ def test_rs_baseline(A, x, b, max_ite, absolute_tol, solver_callable='cg'):
       r = b - A*x_sol
       rho = np.dot(r, r)
       return x_sol, rho
+
+def test_aggregate_baseline(A, x, b, max_ite, absolute_tol, solver_callable='cg'):
+    
+    #   coarse_solver_callable = test_direct_solver_scipy   # foo(A,b) -> x
+    #   coarse_solver_callable = (test_direct_solver_scipy, {"x": x})
+    
+    coarse_solver_callable = solver_callable
+    # coarse_solver_callable = 'splu'
+    # 2. config
+    smoothed_aggregation_solver_config = {
+        'B': b,
+        'BH': None,
+        'symmetry': 'symmetric',
+        'aggregate': ('lloyd', {'ratio': 0.125}),   # 0.125 helps!
+        'strength': ('symmetric', {'theta': 0.20}),  # Increase from 0.10 to slow coarsening
+        'smooth': 'jacobi',
+        'presmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5}),
+        'postsmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5}),
+        'improve_candidates': (('gauss_seidel', {'sweep': 'symmetric', 'iterations': 6}), None),
+        'max_levels': 50,  
+        'max_coarse': 8,  # Ensure coarse level is also x^3
+        'diagonal_dominance': False,
+        'keep': False,
+        'coarse_solver': coarse_solver_callable
+    }
+
+    # 3. solver
+    ml = smoothed_aggregation_solver(A, **smoothed_aggregation_solver_config)
+    print(ml)
+    # # 4. solve
+    residual = []
+    solve_config = {
+        'maxiter': 40,
+        'cycle': 'V',
+        'residuals': residual,
+        'tol': 1e-12,
+        'accel': None,
+        'callback': None,
+        'cycles_per_level': 1,
+        'return_info': False,
+    }
+    x_sol = ml.solve(b, x0=x, **solve_config)
+    # # 5. assert
+    r = b - A*x_sol
+    rho = np.dot(r, r)
+    return x_sol, rho
   
 #########Visit later
 class smoother:

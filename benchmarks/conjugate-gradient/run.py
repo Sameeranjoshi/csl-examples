@@ -426,7 +426,11 @@ def main():
   print("##################################################")
 
   solver_callable_host = (conjugateGradient, { "max_ite": max_ite, "tol": absolute_tol})
-  x2, rho2 = amg.test_rs_baseline(A_csr, x_1d, b_1d, max_ite, absolute_tol, solver_callable=solver_callable_host)      # split into 3 phases
+  x2, rho2 = amg.test_aggregate_baseline(A_csr, x_1d, b_1d, max_ite, absolute_tol, solver_callable=solver_callable_host)      # split into 3 phases
+
+
+  solver_callable_host_rs = (conjugateGradient, { "max_ite": max_ite, "tol": absolute_tol})
+  x2_rs, rho2_rs = amg.test_rs_baseline(A_csr, x_1d, b_1d, max_ite, absolute_tol, solver_callable=solver_callable_host)      # split into 3 phases
 
   # solver_callable_device = (wrapper_solver_device_amg, {"stencil_coeff":stencil_coeff , "args":args, "dirname":dirname, 
   #                                            "height":height, "width":width, "zDim":zDim, "max_ite":max_ite, "tol":absolute_tol })
@@ -438,7 +442,8 @@ def main():
   print(f"[host] after spsolve, rho = {rho_spsolve}")
   print(f"[host] after cg, rho = {rho_cg}")
   print(f"[host] after pyamg, rho = {rho_pyamg}")
-  print(f"[host] after rs_baseline(CG from cerebras), rho = {rho2}")
+  print(f"[host] after smoothed_aggregation(CG from cerebras), rho = {rho2}")
+  print(f"[host] after rs_baseline(CG from cerebras), rho = {rho2_rs}")
   
   
   # Testing
