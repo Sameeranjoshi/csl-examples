@@ -450,55 +450,66 @@ def main():
   np.testing.assert_allclose(xf_1d.ravel(), x2.ravel(), atol=check_tolerance, err_msg="xf != x_rs_baseline")
 
   print("##################################################")
-  # # x = fn(A, b, **kwargs)
-  xf_wse_1d = conjugateGradient_device(stencil_coeff, b_1d, x_1d, args, dirname, height, width, zDim, max_ite, tol)
+  # # # x = fn(A, b, **kwargs)
+  # xf_wse_1d = conjugateGradient_device(stencil_coeff, b_1d, x_1d, args, dirname, height, width, zDim, max_ite, tol)
 
-  if args.cmaddr is None:
-    # move simulation log and core dump to the given folder
-    dst_log = Path(f"{dirname}/sim.log")
-    src_log = Path("sim.log")
-    if src_log.exists():
-      shutil.move(src_log, dst_log)
+  # if args.cmaddr is None:
+  #   # move simulation log and core dump to the given folder
+  #   dst_log = Path(f"{dirname}/sim.log")
+  #   src_log = Path("sim.log")
+  #   if src_log.exists():
+  #     shutil.move(src_log, dst_log)
 
-    dst_trace = Path(f"{dirname}/simfab_traces")
-    src_trace = Path("simfab_traces")
-    if dst_trace.exists():
-      shutil.rmtree(dst_trace)
-    if src_trace.exists():
-      shutil.move(src_trace, dst_trace)
+  #   dst_trace = Path(f"{dirname}/simfab_traces")
+  #   src_trace = Path("simfab_traces")
+  #   if dst_trace.exists():
+  #     shutil.rmtree(dst_trace)
+  #   if src_trace.exists():
+  #     shutil.move(src_trace, dst_trace)
 
   
-  nrm2_xf = np.linalg.norm(xf_wse_1d.ravel(), 2)
-  print(f"|xf|_2 = {nrm2_xf}")
+  # nrm2_xf = np.linalg.norm(xf_wse_1d.ravel(), 2)
+  # print(f"|xf|_2 = {nrm2_xf}")
 
-  z = xf_1d.ravel() - xf_wse_1d.ravel()
-  nrm_z = np.linalg.norm(z, np.inf)
-  print(f"|xf_ref - xf_wse| = {nrm_z}")
-  np.testing.assert_allclose(xf_1d.ravel(), xf_wse_1d.ravel(), 1.e-5)
-  print("\nSUCCESS!")
+  # z = xf_1d.ravel() - xf_wse_1d.ravel()
+  # nrm_z = np.linalg.norm(z, np.inf)
+  # print(f"|xf_ref - xf_wse| = {nrm_z}")
+  # np.testing.assert_allclose(xf_1d.ravel(), xf_wse_1d.ravel(), 1.e-5)
+  # print("\nSUCCESS!")
 
-  vals, vecs = eigs(A_csr, k=1, which='SM')
-  min_eig = abs(vals[0])
-  vals, vecs = eigs(A_csr, k=1, which='LM')
-  max_eig = abs(vals[0])
-  print(f"min(eig) = {min_eig}")
-  print(f"max(eig) = {max_eig}")
-  print(f"cond(A) = {max_eig/min_eig}")
+  # vals, vecs = eigs(A_csr, k=1, which='SM')
+  # min_eig = abs(vals[0])
+  # vals, vecs = eigs(A_csr, k=1, which='LM')
+  # max_eig = abs(vals[0])
+  # print(f"min(eig) = {min_eig}")
+  # print(f"max(eig) = {max_eig}")
+  # print(f"cond(A) = {max_eig/min_eig}")
 
-  if 0:
-    debug_mod = debug_util(dirname, cmaddr=args.cmaddr)
-    print(f"=== dump rho with core_fabric_offset_x = {core_fabric_offset_x}, core_fabric_offset_y={core_fabric_offset_y}")
-    for py in range(height):
-      for px in range(width):
-        t = debug_mod.get_symbol(core_fabric_offset_x+px, core_fabric_offset_y+py, 'rho', np.float32)
-        print(f"(py, px) = {py, px}, rho_ij = {t}")
+  # if 0:
+  #   debug_mod = debug_util(dirname, cmaddr=args.cmaddr)
+  #   print(f"=== dump rho with core_fabric_offset_x = {core_fabric_offset_x}, core_fabric_offset_y={core_fabric_offset_y}")
+  #   for py in range(height):
+  #     for px in range(width):
+  #       t = debug_mod.get_symbol(core_fabric_offset_x+px, core_fabric_offset_y+py, 'rho', np.float32)
+  #       print(f"(py, px) = {py, px}, rho_ij = {t}")
 print("##################################################")
 
-def wrapper_solver_device_amg(A_csr, b_1d, stencil_coeff, args, dirname, height, width, zDim, max_ite, tol):
-  return conjugateGradient_device_amg(stencil_coeff, b_1d, args, dirname, height, width, zDim, max_ite, tol)
+def wrapper_solver_device_amg(A_csr_coarse, b_1d_coarse, stencil_coeff, args, dirname, height, width, zDim, max_ite, tol):
   
-def conjugateGradient_device_amg(stencil_coeff, b_1d, args, dirname, height, width, zDim, max_ite, tol):
-    x_1d = np.zeros(b_1d.shape, np.float32) # fix
+  print("A_csr.shape: ", A_csr_coarse.shape)
+  print(f"b_1d.shape: {b_1d_coarse.shape}")
+  print(f"b_1d.size: {b_1d_coarse.size}")
+  
+  # shape of stencil_coeff
+  print(f"stencil_coeff.shape: {stencil_coeff.shape}, expected: ({height * width * 7})")
+  print(f"stencil_coeff.size: {stencil_coeff.size}, expected: {height * width * 7}")
+
+  return conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse,  args, dirname, max_ite, tol, stencil_coeff, height, width, zDim)
+  
+# x <- fn(A, b, **kwargs), kwargs = shouldn't change.
+def conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_ite, tol, stencil_coeff, height, width, zDim):
+    x_1d_coarse = np.zeros(b_1d_coarse.shape, np.float32) # fix
+    
     memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
     simulator = SdkRuntime(dirname, cmaddr=args.cmaddr)
 
@@ -511,21 +522,12 @@ def conjugateGradient_device_amg(stencil_coeff, b_1d, args, dirname, height, wid
 
     simulator.load()
     simulator.run()
-
+    
     print(f"copy vector b and x0")
-    print(f"b_1d.shape: {b_1d.shape}, expected: ({height * width * zDim})")
-    print(f"b_1d.size: {b_1d.size}, expected: {height * width * zDim}")
-    # shape of x_1d
-    print(f"x_1d.shape: {x_1d.shape}, expected: ({height * width * zDim})")
-    print(f"x_1d.size: {x_1d.size}, expected: {height * width * zDim}")
-    # shape of stencil_coeff
-    print(f"stencil_coeff.shape: {stencil_coeff.shape}, expected: ({height * width * 7})")
-    print(f"stencil_coeff.size: {stencil_coeff.size}, expected: {height * width * 7}")
-
-    simulator.memcpy_h2d(symbol_b, b_1d, 0, 0, width, height, zDim,\
+    simulator.memcpy_h2d(symbol_b, b_1d_coarse, 0, 0, width, height, zDim,\
     streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
-    simulator.memcpy_h2d(symbol_x, x_1d, 0, 0, width, height, zDim,\
+    simulator.memcpy_h2d(symbol_x, x_1d_coarse, 0, 0, width, height, zDim,\
     streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
     print(f"copy 7 stencil coefficients")
