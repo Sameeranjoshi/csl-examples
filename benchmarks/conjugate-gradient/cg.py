@@ -37,6 +37,7 @@ from numpy import linalg as LA
 #  k         the number of iterations
 # 
 def conjugateGradient(A_csr, b, max_ite, tol):
+  print("TOL at start of CG: ", tol)
   k = 0
   x0 = np.zeros(b.shape, dtype=np.float32)
   x = np.copy(x0)

@@ -29,15 +29,15 @@ from cg import conjugateGradient
 # where A is a symmetric positive definite matrix
 # The AMG algorithm is from pyamg, https://github.com/pyamg/pyamg
 
-def pyamg(A, x, b, relative_tol, max_ite, cycle_type='V', accel_type='cg'):
+def pyamg(A, x, b, relative_tol, max_ite, cycle_type='V', solver='cg'):
     import pyamg
     from scipy.sparse import random
     # Use PyAMG for solving the system
-    ml = pyamg.ruge_stuben_solver(A)  # Multi-level solver
+    ml = pyamg.ruge_stuben_solver(A, coarse_solver=solver)  # Multi-level solver
 
     # Solve the system
     # Use relative tol as this solver expects it, read documentation.
-    x_pyamg, info = ml.solve(b, tol=relative_tol, cycle=cycle_type, maxiter=max_ite, accel=accel_type, return_info=True)
+    x_pyamg, info = ml.solve(b, tol=relative_tol, cycle=cycle_type, maxiter=max_ite, return_info=True)
     if info != 0:
         print("PyAMG did not converge, maybe try changing it's parameters. halted at iterations: ", info)
 
@@ -71,27 +71,29 @@ def test_rs_baseline(A, x, b, max_ite, absolute_tol, solver_callable='cg'):
 
       # 2. config
       ruge_stuben_config = {
-            'strength': ('classical', {'theta': 0.5}),  # Method to determine connection strength
-            'CF': ('RS', {'second_pass': True}),  # Coarse grid selection method
-            'interpolation': 'classical',  # Interpolation method
-            'presmoother': ('gauss_seidel', {'sweep': 'symmetric'}),  # Presmoother method
-            'postsmoother': ('gauss_seidel', {'sweep': 'symmetric'}),  # Postsmoother method
-            'max_levels': 30,  # Maximum levels
-            'max_coarse': 10,  # Maximum number of variables on coarse grid
-            'keep': False,  # Flag to keep strength in hierarchy for diagnostics
-            'coarse_solver': coarse_solver_callable  # Coarse solver method (default)
+        'strength': ('classical', {'theta': 0.01}),  # Gradual coarsening
+        'CF': ('RS', {'second_pass': True}),  # Standard RS coarsening
+        'interpolation': 'direct',  # Slowest interpolation method
+        'presmoother': ('gauss_seidel', {'sweep': 'symmetric'}),  
+        'postsmoother': ('gauss_seidel', {'sweep': 'symmetric'}),  
+        'max_levels': 50,  # Allow many levels
+        'max_coarse': 16,  # Ensure last level has exactly 16 unknowns
+        'keep': False,  
+        'coarse_solver': coarse_solver_callable  
       }
 
       # 3. solver
-      ml = ruge_stuben_solver(A, **ruge_stuben_config)
+    #   ml = ruge_stuben_solver(A, **ruge_stuben_config)
+      ml = ruge_stuben_solver(A)
+      
       print(ml)
       # 4. solve
       residual = []
       solve_config = {
-            'maxiter': 20,
+            'maxiter': max_ite,
             'cycle': 'V',
             'residuals': residual,
-            'tol': 1e-12,
+            'tol': absolute_tol,
             'accel': None,
             'callback': None,
             'cycles_per_level': 1,
@@ -103,26 +105,27 @@ def test_rs_baseline(A, x, b, max_ite, absolute_tol, solver_callable='cg'):
       rho = np.dot(r, r)
       return x_sol, rho
 
-def test_aggregate_baseline(A, x, b, max_ite, absolute_tol, solver_callable='cg'):
+def smooth_aggregate_baseline(A, x, b, max_ite, relative_tol, solver_callable='cg'):
     
     #   coarse_solver_callable = test_direct_solver_scipy   # foo(A,b) -> x
     #   coarse_solver_callable = (test_direct_solver_scipy, {"x": x})
     
     coarse_solver_callable = solver_callable
-    # coarse_solver_callable = 'splu'
+    # coarse_solver_callable = 'cg'
     # 2. config
+
     smoothed_aggregation_solver_config = {
         'B': b,
         'BH': None,
         'symmetry': 'symmetric',
-        'aggregate': ('lloyd', {'ratio': 0.125}),   # 0.125 helps!
-        'strength': ('symmetric', {'theta': 0.20}),  # Increase from 0.10 to slow coarsening
+        'aggregate': ('lloyd', {'ratio': 0.70}),  # Reduce coarsening aggressiveness
+        'strength': ('symmetric', {'theta': 0.05}),  # Capture more connections
         'smooth': 'jacobi',
         'presmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5}),
         'postsmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5}),
         'improve_candidates': (('gauss_seidel', {'sweep': 'symmetric', 'iterations': 6}), None),
-        'max_levels': 50,  
-        'max_coarse': 8,  # Ensure coarse level is also x^3
+        'max_levels': 20,  
+        'max_coarse': 27,  # Keep more unknowns at the coarsest level
         'diagonal_dominance': False,
         'keep': False,
         'coarse_solver': coarse_solver_callable
@@ -134,15 +137,17 @@ def test_aggregate_baseline(A, x, b, max_ite, absolute_tol, solver_callable='cg'
     # # 4. solve
     residual = []
     solve_config = {
-        'maxiter': 40,
+        'maxiter': 1,
         'cycle': 'V',
         'residuals': residual,
-        'tol': 1e-12,
+        'tol': relative_tol,
         'accel': None,
         'callback': None,
         'cycles_per_level': 1,
         'return_info': False,
     }
+    print("TOL at start of V cycle: ", relative_tol)
+    # create a callback method which prints the rho and tol at each iteration
     x_sol = ml.solve(b, x0=x, **solve_config)
     # # 5. assert
     r = b - A*x_sol

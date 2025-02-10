@@ -201,6 +201,8 @@ def csl_compile_core(
 
 
 def timing_analysis(height, width, zDim, time_memcpy_hwl, time_ref_hwl):
+  # print("shape of xf_wse_1d: ", xf_wse_1d.shape)
+  print("height = ", height)
   # time_start = start time of spmv
   time_start = np.zeros((height, width)).astype(int)
   # time_end = end time of spmv
@@ -400,115 +402,130 @@ def main():
   assert 0 == np.linalg.norm(A_csr.data - A_csc.data, np.inf), "A must be symmetric"
 
   nrm_b = np.linalg.norm(b_1d.ravel(), 2)
-  eps = 1.e-3
+  eps = 1.e-6
   tol = eps * nrm_b # This is absolute tolerance, Note:be careful about checks later.
-  absolute_tol = tol  # This is absolute tolerance and not relative tolerance.
+  absolute_tol = eps  # This is absolute tolerance and not relative tolerance.
+  relative_tol = tol  # This is relative tolerance and not absolute tolerance.
   # abs_tol = ||r||_2 < atol
   # rela_tol = ||r||_2 < rtol * ||b||_2
   print(f"|b| = {nrm_b}")
   print(f"max_ite = {max_ite}")
   print(f"eps = {eps}")
-  print(f"absolute tol = {tol}")
+  print(f"absolute tol = {absolute_tol}")
+  print(f"relative tol = {relative_tol}")
   print("##################################################")
   # Apply CG
   # TODO: Removed the x0 initial guess and doesn't return rho and k. For compatibility with the pyamg.
-  xf_1d = conjugateGradient(A_csr, b_1d, max_ite, absolute_tol) 
+  xf_1d = conjugateGradient(A_csr, b_1d, max_ite, relative_tol) 
   y = A_csr.dot(xf_1d)
   r = b_1d - y
   rho = np.dot(r, r)
   k=-49585
   # Other solvers
   x_spsolve, rho_spsolve = amg.scipy_direct_solver(A_csr, b_1d)
-  x_cg, rho_cg = amg.scipy_iterative_solver(A_csr, x_1d, b_1d, absolute_tol, 1000)
-  relative_tol = (absolute_tol/nrm_b)
-  x_pyamg, rho_pyamg = amg.pyamg(A_csr, x_1d, b_1d, relative_tol, 1000, cycle_type='V', accel_type='cg')
-  
+  x_cg, rho_cg = amg.scipy_iterative_solver(A_csr, x_1d, b_1d, relative_tol, max_ite)
+
   print("##################################################")
+  # pyAMG(CG on host)
+  x_pyamg, rho_pyamg = amg.pyamg(A_csr, x_1d, b_1d, relative_tol, max_ite, cycle_type='V', solver='cg')
+  
+  # AMG(CG on host)
+  solver_callable_host = (conjugateGradient, { "max_ite": max_ite, "tol": relative_tol})
+  x2_host, rho2_host = amg.smooth_aggregate_baseline(A_csr, x_1d, b_1d, max_ite, relative_tol, solver_callable=solver_callable_host)      # split into 3 phases
 
-  solver_callable_host = (conjugateGradient, { "max_ite": max_ite, "tol": absolute_tol})
-  x2, rho2 = amg.test_aggregate_baseline(A_csr, x_1d, b_1d, max_ite, absolute_tol, solver_callable=solver_callable_host)      # split into 3 phases
-
-
-  solver_callable_host_rs = (conjugateGradient, { "max_ite": max_ite, "tol": absolute_tol})
-  x2_rs, rho2_rs = amg.test_rs_baseline(A_csr, x_1d, b_1d, max_ite, absolute_tol, solver_callable=solver_callable_host)      # split into 3 phases
-
-  # solver_callable_device = (wrapper_solver_device_amg, {"stencil_coeff":stencil_coeff , "args":args, "dirname":dirname, 
-  #                                            "height":height, "width":width, "zDim":zDim, "max_ite":max_ite, "tol":absolute_tol })
-  # x3, rho3 = amg.test_rs_baseline(A_csr, x_1d, b_1d, max_ite, absolute_tol, solver_callable=solver_callable_device)      # split into 3 phases
+  # AMG(CG on device)
+  solver_callable_device = (wrapper_solver_device_amg, {"args":args, "dirname":dirname, "max_ite":max_ite, "tol":relative_tol , "stencil_coeff":stencil_coeff, "height":height, "width":width, "zDim":zDim, })
+  x3_device, rho3_device = amg.smooth_aggregate_baseline(A_csr, x_1d, b_1d, max_ite, relative_tol, solver_callable=solver_callable_device)      # split into 3 phases
   
   print("##################################################")
   print("Lower the better(0 = exact solution satifies Ax=b well), below data which solution is better")
-  print(f"[host] after CG, rho = {rho}, k = {k}")
-  print(f"[host] after spsolve, rho = {rho_spsolve}")
-  print(f"[host] after cg, rho = {rho_cg}")
-  print(f"[host] after pyamg, rho = {rho_pyamg}")
-  print(f"[host] after smoothed_aggregation(CG from cerebras), rho = {rho2}")
-  print(f"[host] after rs_baseline(CG from cerebras), rho = {rho2_rs}")
-  
-  
+  print(f"[host] after CG, rho = {rho}")
+  print(f"[host] after direct-solver, rho = {rho_spsolve}")
+  print(f"[host] after scipy-cg-solver, rho = {rho_cg}")
+  print(f"[host] Ruge-stuben-pyAMG, rho = {rho_pyamg}")
+  print(f"[host] SA-pyAMG(CG on host), rho = {rho2_host}")  # SA = smoothed aggregation
+  print(f"[device] SA-AMG(CG from Device), rho = {rho3_device}")
+  print("##################################################")
   # Testing
-  check_tolerance = absolute_tol
-  np.testing.assert_allclose(xf_1d.ravel(), x_spsolve.ravel(), atol=check_tolerance, err_msg="xf != x_spsolve")
-  np.testing.assert_allclose(xf_1d.ravel(), x_cg.ravel(), atol=check_tolerance, err_msg="xf != x_cg")
-  np.testing.assert_allclose(xf_1d.ravel(), x_pyamg.ravel(), atol=check_tolerance, err_msg="xf != x_pyamg")
-  # np.testing.assert_allclose(xf_1d.ravel(), x_soln_final.ravel(), atol=check_tolerance, err_msg="xf != x_amg")
-  np.testing.assert_allclose(xf_1d.ravel(), x2.ravel(), atol=check_tolerance, err_msg="xf != x_rs_baseline")
+  check_tolerance = relative_tol
+  np.testing.assert_allclose(xf_1d.ravel(), x_spsolve.ravel(), atol=check_tolerance, err_msg="CG != x_direct_solver")
+  np.testing.assert_allclose(xf_1d.ravel(), x_cg.ravel(), atol=check_tolerance, err_msg="CG != x_scipy_cg")
+  # pyamg vs host
+  np.testing.assert_allclose(x_pyamg.ravel(), x2_host.ravel(), atol=check_tolerance, err_msg="x_pyamg != x_host")
+  # both host and device should match
+  # np.testing.assert_allclose(x2_host.ravel(), x3_device.ravel(), atol=check_tolerance, err_msg="x_host != x_device(tol)")
 
   print("##################################################")
+  nrm2_xf_device = np.linalg.norm(x3_device.ravel(), 2)
+  print(f"|xf_device|_2 = {nrm2_xf_device}")
+  z = x2_host.ravel() - x3_device.ravel()
+  nrm_z = np.linalg.norm(z, np.inf)
+  print(f"|xf_host - xf_device| = {nrm_z}")
+  np.testing.assert_allclose(x2_host.ravel(), x3_device.ravel(), 1.e-5, err_msg="xf_host != xf_device(1.e-5)")
+  print("\nSUCCESS!")
+  print("##################################################")
+  
   # # # x = fn(A, b, **kwargs)
   # xf_wse_1d = conjugateGradient_device(stencil_coeff, b_1d, x_1d, args, dirname, height, width, zDim, max_ite, tol)
+  # verify(args, dirname, height, width, core_fabric_offset_x, core_fabric_offset_y, A_csr, xf_1d)
 
-  # if args.cmaddr is None:
-  #   # move simulation log and core dump to the given folder
-  #   dst_log = Path(f"{dirname}/sim.log")
-  #   src_log = Path("sim.log")
-  #   if src_log.exists():
-  #     shutil.move(src_log, dst_log)
+def verify(args, dirname, height, width, core_fabric_offset_x, core_fabric_offset_y, A_csr, xf_1d):
+    if args.cmaddr is None:
+    # move simulation log and core dump to the given folder
+      dst_log = Path(f"{dirname}/sim.log")
+      src_log = Path("sim.log")
+      if src_log.exists():
+        shutil.move(src_log, dst_log)
 
-  #   dst_trace = Path(f"{dirname}/simfab_traces")
-  #   src_trace = Path("simfab_traces")
-  #   if dst_trace.exists():
-  #     shutil.rmtree(dst_trace)
-  #   if src_trace.exists():
-  #     shutil.move(src_trace, dst_trace)
+      dst_trace = Path(f"{dirname}/simfab_traces")
+      src_trace = Path("simfab_traces")
+      if dst_trace.exists():
+        shutil.rmtree(dst_trace)
+      if src_trace.exists():
+        shutil.move(src_trace, dst_trace)
 
   
-  # nrm2_xf = np.linalg.norm(xf_wse_1d.ravel(), 2)
-  # print(f"|xf|_2 = {nrm2_xf}")
+    nrm2_xf = np.linalg.norm(xf_wse_1d.ravel(), 2)
+    print(f"|xf|_2 = {nrm2_xf}")
 
-  # z = xf_1d.ravel() - xf_wse_1d.ravel()
-  # nrm_z = np.linalg.norm(z, np.inf)
-  # print(f"|xf_ref - xf_wse| = {nrm_z}")
-  # np.testing.assert_allclose(xf_1d.ravel(), xf_wse_1d.ravel(), 1.e-5)
-  # print("\nSUCCESS!")
+    z = xf_1d.ravel() - xf_wse_1d.ravel()
+    nrm_z = np.linalg.norm(z, np.inf)
+    print(f"|xf_ref - xf_wse| = {nrm_z}")
+    np.testing.assert_allclose(xf_1d.ravel(), xf_wse_1d.ravel(), 1.e-5)
+    print("\nSUCCESS!")
 
-  # vals, vecs = eigs(A_csr, k=1, which='SM')
-  # min_eig = abs(vals[0])
-  # vals, vecs = eigs(A_csr, k=1, which='LM')
-  # max_eig = abs(vals[0])
-  # print(f"min(eig) = {min_eig}")
-  # print(f"max(eig) = {max_eig}")
-  # print(f"cond(A) = {max_eig/min_eig}")
+    vals, vecs = eigs(A_csr, k=1, which='SM')
+    min_eig = abs(vals[0])
+    vals, vecs = eigs(A_csr, k=1, which='LM')
+    max_eig = abs(vals[0])
+    print(f"min(eig) = {min_eig}")
+    print(f"max(eig) = {max_eig}")
+    print(f"cond(A) = {max_eig/min_eig}")
 
-  # if 0:
-  #   debug_mod = debug_util(dirname, cmaddr=args.cmaddr)
-  #   print(f"=== dump rho with core_fabric_offset_x = {core_fabric_offset_x}, core_fabric_offset_y={core_fabric_offset_y}")
-  #   for py in range(height):
-  #     for px in range(width):
-  #       t = debug_mod.get_symbol(core_fabric_offset_x+px, core_fabric_offset_y+py, 'rho', np.float32)
-  #       print(f"(py, px) = {py, px}, rho_ij = {t}")
-print("##################################################")
+    if 0:
+      debug_mod = debug_util(dirname, cmaddr=args.cmaddr)
+      print(f"=== dump rho with core_fabric_offset_x = {core_fabric_offset_x}, core_fabric_offset_y={core_fabric_offset_y}")
+      for py in range(height):
+        for px in range(width):
+          t = debug_mod.get_symbol(core_fabric_offset_x+px, core_fabric_offset_y+py, 'rho', np.float32)
+          print(f"(py, px) = {py, px}, rho_ij = {t}")
 
-def wrapper_solver_device_amg(A_csr_coarse, b_1d_coarse, stencil_coeff, args, dirname, height, width, zDim, max_ite, tol):
-  
+def wrapper_solver_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_ite, tol, stencil_coeff, height, width, zDim):
+  # setting 
+  height = 3
+  width = 3
+  zDim = 3
+  # tol = tol * tol * tol
+  print("##################################################")
   print("A_csr.shape: ", A_csr_coarse.shape)
   print(f"b_1d.shape: {b_1d_coarse.shape}")
-  print(f"b_1d.size: {b_1d_coarse.size}")
-  
-  # shape of stencil_coeff
   print(f"stencil_coeff.shape: {stencil_coeff.shape}, expected: ({height * width * 7})")
-  print(f"stencil_coeff.size: {stencil_coeff.size}, expected: {height * width * 7}")
-
+  print(f"height: {height}, width: {width}, zDim: {zDim}")
+  print(f"max_ite: {max_ite}, tol: {tol}")
+  import inspect
+  caller = inspect.stack()[1]  # Get the caller frame
+  print(f"foo() was called from function: {caller.function}")
+  print("##################################################")
   return conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse,  args, dirname, max_ite, tol, stencil_coeff, height, width, zDim)
   
 # x <- fn(A, b, **kwargs), kwargs = shouldn't change.
@@ -574,6 +591,11 @@ def conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_i
     rho = rho_wse[0]
     print(f"[CG] iter {k}: rho = {rho}")
   # if |r_k|_2 < tol, then exit
+    print(f"rho = {rho}")
+    print(f"tol = {tol*tol}")
+    print(f"k = {k}")
+    print(f"max_ite = {max_ite}")
+    
     while ( (rho > tol*tol) and (k < max_ite) ):
       k = k + 1
       print("step 4.3: update p")
@@ -633,7 +655,7 @@ def conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_i
 
     simulator.stop()
     timing_analysis(height, width, zDim, time_memcpy_hwl, time_ref_hwl)
-    
+    print("xf_wse_1d.shape: ", xf_wse_1d.shape)
     return xf_wse_1d
 
 def conjugateGradient_device(stencil_coeff, b_1d, x_1d, args, dirname, height, width, zDim, max_ite, tol):
