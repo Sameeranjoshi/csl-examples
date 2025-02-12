@@ -10,7 +10,7 @@ from numpy.testing import TestCase, assert_equal, assert_almost_equal, \
 from scipy import sparse as sp
 import scipy.sparse.linalg as spla
 import scipy.sparse.linalg as spla
-from scipy.sparse import csr_matrix, coo_matrix, SparseEfficiencyWarning
+from scipy.sparse import csr_matrix, coo_matrix, SparseEfficiencyWarning, isspmatrix_csr
 # pyamg
 import pyamg    # Maybe we need this, try if it's modular?
 import pyamg.relaxation.relaxation as pyamg_smoother
@@ -25,10 +25,185 @@ from pyamg.classical.interpolate import direct_interpolation, \
 #others
 from cg import conjugateGradient
 
+
 # solve a linear system A * x = b
 # where A is a symmetric positive definite matrix
 # The AMG algorithm is from pyamg, https://github.com/pyamg/pyamg
 
+# only V cycle.
+def AMG_only_solve(A_csr, b0, x0, tol, max_ite, max_levels, max_coarse, solver='cg'):
+    """HAND WRITTEN AMG ALGORITHM FROM SC AMGT PAPER, MATRIX COMPUTATIONS BOOK AND WIKIPEDIA"""
+    # 1. setup
+    # 2. V cycle
+    # 3. return x, rho
+    
+    # # do some checks
+    # if not isspmatrix_csr(A_csr):
+    #     raise TypeError("Matrix A must be in CSR format")
+    # if A_csr.shape[0] != A_csr.shape[1]:
+    #     raise ValueError("Matrix A must be square")
+    # if A_csr.shape[0] != b0.shape[0]:
+    #     raise ValueError("Matrix A and vector b must have the same number of rows")
+    
+    # # 1. setup
+    # # copy along with type
+    # x = np.copy(x0)
+    # b = np.copy(b0)
+    # levels = []
+    
+    # levels[0].A = A_csr
+
+    # i = 0
+    # while len(levels) < max_levels and levels[i].A.shape[0] > max_coarse:
+    #     # If we are at level 0, set up initial values for x and b
+    #     if i == 0:
+    #         levels[i].x = x
+    #         levels[i].b = b
+
+    #     # Compute the interpolation matrix (prolongation operator)
+    #     levels[i].R = restriction(i, levels[i].A, splitting, C_F_splitting)
+    #     levels[i].P = levels[i].R.T
+    #     levels[i + 1].A = levels[i].R @ levels[i].A @ levels[i].P
+
+    #     # Move to the next level
+    #     i = i + 1
+
+    # # print levels
+    # print_table_shapes(levels)
+    
+    
+    # Start as of now with the solve phase use setup from pyamg.
+    ml, setup_config = smooth_aggregate_setup_only(A_csr, x0, b0, max_ite, tol, solver_callable=solver)
+    # print_table_data(ml.levels)
+    
+    level_data_clone = []
+
+    x_level = [x0, ]
+    # if only 1 level solve directly
+    if len(ml.levels) == 1:
+        # x, rho = scipy_iterative_solver(A_csr, x0, b0, tol, max_ite=max_ite)
+        x_coarsest[:] = solver(A_csr, b0)
+        return x, rho
+
+    # solve phase layer by layer.
+    for i, level in enumerate(ml.levels[:-1]):
+        A, b, P, R = level.A, level.B, level.P, level.R
+        x = x_level[i]
+        b_coarse = ml.levels[i+1].B
+        
+        level.presmoother(A, x, b)   
+        r = b - A @ x.reshape(-1, 1)
+        b_coarse = (R @ r)    # b_coarse
+        x_level.append(np.zeros((b_coarse.shape[0],), dtype=np.float32))
+        
+        # fill table_data_clone using tabulate
+        level_data_clone.append({
+            "level": i,
+            "A_shape": A.toarray()[0,0:5],
+            "B_shape": b[0:5],
+            "P_shape": P.shape,
+            "R_shape": R.shape,
+            "b_coarse_shape": b_coarse.shape,
+            "x_coarse_shape": x_level[-1][0:5]
+        })
+
+    # solve coarse
+    b_coarsest = ml.levels[-1].B
+    x_coarsest = x_level[-1]
+    A_coarsest = ml.levels[-1].A
+    # x_coarsest[:], rho = scipy_iterative_solver(A_coarsest, x_coarsest, b_coarsest, tol, max_ite)
+    x_coarsest[:] = solver(A_coarsest, b_coarsest)
+    
+    level_data_clone.append({
+        "level": len(ml.levels)-1,
+        "A_shape": A_coarsest.toarray()[0, 0:5],
+        "b_coarse_shape": b_coarsest[0:5],
+        "x_coarse_shape": x_coarsest[0:5]
+    })
+    
+    # solve up
+    for i in range(len(ml.levels)-2, -1, -1):
+        prev_level = ml.levels[i+1]
+        level = ml.levels[i]
+        
+        A, b, P = level.A, level.B, level.P
+        x = x_level[i]
+        prev_x = x_level[i+1]
+                    
+        x = x + P @ prev_x
+        level.postsmoother(A, x, b)
+        
+        
+    print(tabulate(level_data_clone, headers="keys", tablefmt="grid"))
+    # rho
+    r = ml.levels[0].B - ml.levels[0].A @ x_level[0]
+    rho = np.dot(r, r)
+    
+    return x_level[0], rho
+        
+def print_table_shapes(levels):
+    level_data = []
+    for idx, level in enumerate(levels):
+        level_info = {'level': idx}
+
+        # Handle A
+        if hasattr(level, 'A') and level.A is not None:
+            level_info[f'A_shape({level.A.dtype})'] = f"{level.A.shape}"
+        else:
+            level_info['A_shape'] = "N/A"
+
+        # Handle B
+        if hasattr(level, 'B') and level.B is not None:
+            level_info[f'B_shape({level.B.dtype})'] = f"{level.B.shape}"
+
+        # Handle P
+        if hasattr(level, 'P') and level.P is not None:
+            level_info[f'P_shape({level.P.dtype})'] = f"{level.P.shape}"
+
+        # Handle R
+        if hasattr(level, 'R') and level.R is not None:
+            level_info[f'R_shape({level.R.dtype})'] = f"{level.R.shape}"
+
+        # Handle presmoother
+        if hasattr(level, 'presmoother') and level.presmoother:
+            level_info['presmoother'] = (
+                level.presmoother.func.__name__ if callable(level.presmoother) else str(level.presmoother)
+            )
+
+        # Handle postsmoother
+        if hasattr(level, 'postsmoother') and level.postsmoother:
+            level_info['postsmoother'] = (
+                level.postsmoother.func.__name__ if callable(level.postsmoother) else str(level.postsmoother)
+            )
+
+        level_data.append(level_info)
+
+    # Print table
+    print(tabulate(level_data, headers="keys", tablefmt="grid"))
+
+def print_table_data(levels):
+    level_data = []
+    
+    for idx, level in enumerate(levels):
+        A, b = level.A, level.B
+
+        # Convert first row of A to a readable format
+        A_str = np.array2string(A.toarray()[0, 0:5], separator=', ')
+
+        # Convert first 5 elements of B to a readable format
+        B_str = np.array2string(b[0:5].flatten(), separator=', ')
+
+        level_data.append({
+            "Level": idx,
+            "A[0:5]": A_str,
+            "B[0:5]": B_str,
+        })
+
+
+    print(tabulate(level_data, headers="keys", tablefmt="grid"))
+
+        
+#############################################
 def pyamg(A, x, b, relative_tol, max_ite, cycle_type='V', solver='cg'):
     import pyamg
     from scipy.sparse import random
@@ -46,10 +221,15 @@ def pyamg(A, x, b, relative_tol, max_ite, cycle_type='V', solver='cg'):
     return x_pyamg, rho
 
 def scipy_direct_solver(A, b):
+    # print 5 elements from A anf b
+    A_str = np.array2string(A.toarray()[0, 0:5], separator=', ')
+    B_str = np.array2string(b[0:5].flatten(), separator=', ')
+    print(f"A_COARSE[0:5]: {A_str}")
+    print(f"B_COARSE[0:5]: {B_str}")
     x = spla.spsolve(A, b)
     r = b - A.dot(x)
     rho = np.dot(r, r)
-    return x, rho
+    return x
 
 def scipy_iterative_solver(A, x, b, atol, max_ite):
     x, converged = spla.cg(A, b, x0=x, atol=atol, maxiter=max_ite)
@@ -61,6 +241,7 @@ def scipy_iterative_solver(A, x, b, atol, max_ite):
     rho = np.dot(r, r)
     return x, rho
 
+#############################################
 def test_rs_baseline(A, x, b, max_ite, absolute_tol, solver_callable='cg'):
 
     #   coarse_solver_callable = 'cg'
@@ -109,6 +290,35 @@ def smooth_aggregate_baseline(A, x, b, max_ite, relative_tol, solver_callable='c
     
     #   coarse_solver_callable = test_direct_solver_scipy   # foo(A,b) -> x
     #   coarse_solver_callable = (test_direct_solver_scipy, {"x": x})
+    ml, setup_config = smooth_aggregate_setup_only(A, x, b, max_ite, relative_tol, solver_callable=solver_callable)
+    # print_table_data(ml.levels)    
+    
+    # # 4. solve
+    residual = []
+    x_vals = []
+
+    solve_config = {
+        'maxiter': 1,
+        'cycle': 'V',
+        'residuals': residual,
+        'tol': relative_tol,
+        'accel': None,
+        'callback': None,
+        'cycles_per_level': 1,
+        'return_info': False,
+    }
+    # create a callback method which prints the rho and tol at each iteration
+    x_sol = ml.solve(b, x0=x, **solve_config)
+
+    r = b - A*x_sol
+    rho = np.dot(r, r)
+    print_table_data(ml.levels)
+    return x_sol, rho
+
+def smooth_aggregate_setup_only(A, x, b, max_ite, relative_tol, solver_callable='cg'):
+    
+    #   coarse_solver_callable = test_direct_solver_scipy   # foo(A,b) -> x
+    #   coarse_solver_callable = (test_direct_solver_scipy, {"x": x})
     
     coarse_solver_callable = solver_callable
     # coarse_solver_callable = 'cg'
@@ -132,28 +342,19 @@ def smooth_aggregate_baseline(A, x, b, max_ite, relative_tol, solver_callable='c
     }
 
     # 3. solver
+    np.random.seed(100)  
+    # This is essential to pass seed as smooth is non-deterministic, 
+    # https://github.com/pyamg/pyamg/issues/350
     ml = smoothed_aggregation_solver(A, **smoothed_aggregation_solver_config)
-    print(ml)
-    # # 4. solve
-    residual = []
-    solve_config = {
-        'maxiter': 1,
-        'cycle': 'V',
-        'residuals': residual,
-        'tol': relative_tol,
-        'accel': None,
-        'callback': None,
-        'cycles_per_level': 1,
-        'return_info': False,
-    }
-    print("TOL at start of V cycle: ", relative_tol)
-    # create a callback method which prints the rho and tol at each iteration
-    x_sol = ml.solve(b, x0=x, **solve_config)
-    # # 5. assert
-    r = b - A*x_sol
-    rho = np.dot(r, r)
-    return x_sol, rho
-  
+
+    # print_table_data(ml.levels)
+    # print(ml)
+    # print_table_shapes(ml.levels)
+
+    setup_config = smoothed_aggregation_solver_config
+    
+    return ml, setup_config
+
 #########Visit later
 class smoother:
     def __init__(self, level, x_input=None):
@@ -403,7 +604,7 @@ class AMGSolver:
         
         # Check what solver to use
         if self._coarse_solver == 'cg':
-            print("Soler = cg")
+            print("Solver = cg")
             x, _ = scipy_iterative_solver(a_coarse, x_coarse, b_coarse, atol=1.e-12, max_ite=100)
         elif self._coarse_solver == 'direct':
             print("Solver = 'direct'")
@@ -471,78 +672,3 @@ class AMGSolver:
         r = self._levels[0].level_b - self._levels[0].level_A.dot(self._levels[0].level_x)
         rho = np.dot(r, r)
         return self._levels[0].level_x, rho   # Return the finest-level solution
-                
-# # class AMGVCycle:
-#     def __init__(self, A, levels=3, iterations=3, tol=1.e-5):
-#         self.A = A
-#         self.levels = levels
-#         self.iterations = iterations
-#         self.tol = tol
-
-#     def solve(self, x, b, levels=None):
-#         """AMG V-cycle solver."""
-#         if levels is None:
-#             levels = self.levels
-        
-#         if levels == 0 or self.A.shape[0] < 2:
-#             x, info = spla.cg(self.A, b, x0=x, tol=self.tol, maxiter=self.iterations)
-#             return x
-        
-#         # Pre-smoothing
-#         x = self.jacobi_smooth(x, b, iterations=self.iterations)
-        
-#         # Coarsening
-#         coarse_idx, fine_idx = self.coarsen()
-#         R = self.restrict(fine_idx, coarse_idx)
-#         P = self.interpolate(R)
-#         A_coarse = R @ self.A @ P
-#         b_coarse = R @ (b - self.A @ x)
-        
-#         # Recursive call to solve on coarse grid
-#         x_coarse = np.zeros(len(coarse_idx))
-#         x_coarse = AMGVCycle(A_coarse, levels - 1).solve(x_coarse, b_coarse)
-        
-#         # Coarse-grid correction
-#         x += P @ x_coarse
-        
-#         # Post-smoothing
-#         x = self.jacobi_smooth(x, b, iterations=self.iterations)
-        
-#         return x
-
-# class TwoGridMultigrid:
-#     def __init__(self, A, p1=3, p2=3, omega=2/3):
-#         self.A = A
-#         self.p1 = p1  # Pre-smoothing steps
-#         self.p2 = p2  # Post-smoothing steps
-#         self.omega = omega
-    
-#     def solve(self, x, b):
-#         """Two-grid V-cycle multigrid solver."""
-#         # Pre-smoothing
-#         x = self.weighted_jacobi(x, b, self.p1)
-        
-#         # Compute residual
-#         r = b - self.A @ x
-        
-#         # Restriction to coarse grid
-#         coarse_idx, fine_idx = self.coarsen()
-#         R = self.restrict(fine_idx, coarse_idx)
-#         P = self.prolongate(R)
-#         A_coarse = R @ self.A @ P
-#         r_coarse = R @ r
-        
-#         # Solve on coarse grid
-#         x_coarse = np.zeros(len(coarse_idx))
-#         x_coarse = spla.spsolve(A_coarse, r_coarse)
-        
-#         # Prolongation to fine grid
-#         z = P @ x_coarse
-        
-#         # Update solution
-#         x += z
-        
-#         # Post-smoothing
-#         x = self.weighted_jacobi(x, b, self.p2)
-        
-#         return x

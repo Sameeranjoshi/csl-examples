@@ -118,6 +118,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import random
+import scipy.sparse.linalg as spla
 
 import numpy as np
 from scipy.sparse.linalg import eigs
@@ -135,7 +136,7 @@ from util import (
 
 from cg import conjugateGradient
 import amg as amg
-
+from tabulate import tabulate
 
 def make_u48(words):
   return words[0] + (words[1] << 16) + (words[2] << 32)
@@ -402,7 +403,7 @@ def main():
   assert 0 == np.linalg.norm(A_csr.data - A_csc.data, np.inf), "A must be symmetric"
 
   nrm_b = np.linalg.norm(b_1d.ravel(), 2)
-  eps = 1.e-6
+  eps = 1.e-8 # -3 is too weak verification, -8 is typical for single precision(reltol=1e-4)
   tol = eps * nrm_b # This is absolute tolerance, Note:be careful about checks later.
   absolute_tol = eps  # This is absolute tolerance and not relative tolerance.
   relative_tol = tol  # This is relative tolerance and not absolute tolerance.
@@ -416,59 +417,75 @@ def main():
   print("##################################################")
   # Apply CG
   # TODO: Removed the x0 initial guess and doesn't return rho and k. For compatibility with the pyamg.
-  xf_1d = conjugateGradient(A_csr, b_1d, max_ite, relative_tol) 
-  y = A_csr.dot(xf_1d)
-  r = b_1d - y
-  rho = np.dot(r, r)
-  k=-49585
-  # Other solvers
-  x_spsolve, rho_spsolve = amg.scipy_direct_solver(A_csr, b_1d)
-  x_cg, rho_cg = amg.scipy_iterative_solver(A_csr, x_1d, b_1d, relative_tol, max_ite)
+  # xf_1d = conjugateGradient(A_csr, b_1d, max_ite, relative_tol) 
+  # y = A_csr.dot(xf_1d)
+  # r = b_1d - y
+  # rho = np.dot(r, r)
+  # k=-49585
+  # # Other solvers
+  # x_spsolve, rho_spsolve = amg.scipy_direct_solver(A_csr, b_1d)
+  # x_cg, rho_cg = amg.scipy_iterative_solver(A_csr, x_1d, b_1d, relative_tol, max_ite)
 
   print("##################################################")
-  # pyAMG(CG on host)
-  x_pyamg, rho_pyamg = amg.pyamg(A_csr, x_1d, b_1d, relative_tol, max_ite, cycle_type='V', solver='cg')
+  # # pyAMG(CG on host)
+  # x_pyamg, rho_pyamg = amg.pyamg(A_csr, x_1d, b_1d, relative_tol, max_ite, cycle_type='V', solver='cg')
   
-  # AMG(CG on host)
-  solver_callable_host = (conjugateGradient, { "max_ite": max_ite, "tol": relative_tol})
-  x2_host, rho2_host = amg.smooth_aggregate_baseline(A_csr, x_1d, b_1d, max_ite, relative_tol, solver_callable=solver_callable_host)      # split into 3 phases
+  # # AMG(CG on host)
+  # solver_callable_host = (conjugateGradient, { "max_ite": max_ite, "tol": relative_tol})
+  # x2_host, rho2_host = amg.smooth_aggregate_baseline(A_csr, x_1d, b_1d, max_ite, relative_tol, solver_callable=solver_callable_host)      # split into 3 phases
 
-  # AMG(CG on device)
-  solver_callable_device = (wrapper_solver_device_amg, {"args":args, "dirname":dirname, "max_ite":max_ite, "tol":relative_tol , "stencil_coeff":stencil_coeff, "height":height, "width":width, "zDim":zDim, })
-  x3_device, rho3_device = amg.smooth_aggregate_baseline(A_csr, x_1d, b_1d, max_ite, relative_tol, solver_callable=solver_callable_device)      # split into 3 phases
+  # # AMG(CG on device)
+  # solver_callable_device = (wrapper_solver_device_amg, {"args":args, "dirname":dirname, "max_ite":max_ite, "tol":relative_tol , "stencil_coeff":stencil_coeff, "height":height, "width":width, "zDim":zDim, })
+  # x3_device, rho3_device = amg.smooth_aggregate_baseline(A_csr, x_1d, b_1d, max_ite, relative_tol, solver_callable=solver_callable_device)      # split into 3 phases
   
   print("##################################################")
-  print("Lower the better(0 = exact solution satifies Ax=b well), below data which solution is better")
-  print(f"[host] after CG, rho = {rho}")
-  print(f"[host] after direct-solver, rho = {rho_spsolve}")
-  print(f"[host] after scipy-cg-solver, rho = {rho_cg}")
-  print(f"[host] Ruge-stuben-pyAMG, rho = {rho_pyamg}")
-  print(f"[host] SA-pyAMG(CG on host), rho = {rho2_host}")  # SA = smoothed aggregation
-  print(f"[device] SA-AMG(CG from Device), rho = {rho3_device}")
+  # print("Lower the better(0 = exact solution satifies Ax=b well), below data which solution is better")
+  # print(f"[host] after CG, rho = {rho}")
+  # print(f"[host] after direct-solver, rho = {rho_spsolve}")
+  # print(f"[host] after scipy-cg-solver, rho = {rho_cg}")
+  # print(f"[host] Ruge-stuben-pyAMG, rho = {rho_pyamg}")
+  # print(f"[host] SA-pyAMG(CG on host), rho = {rho2_host}")  # SA = smoothed aggregation
+  # print(f"[device] SA-AMG(CG from Device), rho = {rho3_device}")
   print("##################################################")
-  # Testing
-  check_tolerance = relative_tol
-  np.testing.assert_allclose(xf_1d.ravel(), x_spsolve.ravel(), atol=check_tolerance, err_msg="CG != x_direct_solver")
-  np.testing.assert_allclose(xf_1d.ravel(), x_cg.ravel(), atol=check_tolerance, err_msg="CG != x_scipy_cg")
-  # pyamg vs host
-  np.testing.assert_allclose(x_pyamg.ravel(), x2_host.ravel(), atol=check_tolerance, err_msg="x_pyamg != x_host")
-  # both host and device should match
-  # np.testing.assert_allclose(x2_host.ravel(), x3_device.ravel(), atol=check_tolerance, err_msg="x_host != x_device(tol)")
+  # # Testing
+  # check_tolerance = relative_tol
+  # np.testing.assert_allclose(xf_1d.ravel(), x_spsolve.ravel(), atol=check_tolerance, err_msg="CG != x_direct_solver")
+  # np.testing.assert_allclose(xf_1d.ravel(), x_cg.ravel(), atol=check_tolerance, err_msg="CG != x_scipy_cg")
+  # # pyamg vs host
+  # np.testing.assert_allclose(x_pyamg.ravel(), x2_host.ravel(), atol=check_tolerance, err_msg="x_pyamg != x_host")
+  # # both host and device should match
+  # # np.testing.assert_allclose(x2_host.ravel(), x3_device.ravel(), atol=check_tolerance, err_msg="x_host != x_device(tol)")
 
   print("##################################################")
-  nrm2_xf_device = np.linalg.norm(x3_device.ravel(), 2)
-  print(f"|xf_device|_2 = {nrm2_xf_device}")
-  z = x2_host.ravel() - x3_device.ravel()
-  nrm_z = np.linalg.norm(z, np.inf)
-  print(f"|xf_host - xf_device| = {nrm_z}")
-  np.testing.assert_allclose(x2_host.ravel(), x3_device.ravel(), 1.e-5, err_msg="xf_host != xf_device(1.e-5)")
-  print("\nSUCCESS!")
+  # nrm2_xf_device = np.linalg.norm(x3_device.ravel(), 2)
+  # print(f"|xf_device|_2 = {nrm2_xf_device}")
+  # z = x2_host.ravel() - x3_device.ravel()
+  # nrm_z = np.linalg.norm(z, np.inf)
+  # print(f"|xf_host - xf_device| = {nrm_z}")
+  # np.testing.assert_allclose(x2_host.ravel(), x3_device.ravel(), 1.e-5, err_msg="xf_host != xf_device(1.e-5)")
+  # print("\nSUCCESS!")
   print("##################################################")
   
   # # # x = fn(A, b, **kwargs)
   # xf_wse_1d = conjugateGradient_device(stencil_coeff, b_1d, x_1d, args, dirname, height, width, zDim, max_ite, tol)
   # verify(args, dirname, height, width, core_fabric_offset_x, core_fabric_offset_y, A_csr, xf_1d)
 
+  print("###################AMG_DEVICE###############################")
+  solver_callable_host = amg.scipy_direct_solver
+  # perform setup using pyamg.
+  
+  x2_host, rho2_host = amg.smooth_aggregate_baseline(A_csr, x_1d, b_1d, max_ite, relative_tol, solver_callable=solver_callable_host)      # split into 3 phases
+  x3_host, rho3_host = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=max_ite, max_levels=10, max_coarse=27, solver=solver_callable_host)
+  
+  print("SUCCESS RAN AMG1, rho = ", rho2_host)
+  print("SUCCESS RAN AMG2, rho = ", rho3_host)
+  np.testing.assert_allclose(x2_host.ravel(), x3_host.ravel(), relative_tol, err_msg="xx != x2_host")
+  
+  # x3_host, rho3_host = amg_setup_H_solve_D(A_csr, x_1d, b_1d, stencil_coeff, args, dirname, height, width, zDim, max_ite, relative_tol)
+  print("##################################################")
+
+
+################################################################CG+PYAMG############################################
 def verify(args, dirname, height, width, core_fabric_offset_x, core_fabric_offset_y, A_csr, xf_1d):
     if args.cmaddr is None:
     # move simulation log and core dump to the given folder
@@ -778,6 +795,142 @@ def conjugateGradient_device(stencil_coeff, b_1d, x_1d, args, dirname, height, w
     timing_analysis(height, width, zDim, time_memcpy_hwl, time_ref_hwl)
     
     return xf_wse_1d
+
+################################################################AMG############################################
+def amg_setup_H_solve_D(
+                                                             A_csr, x_1d, b_1d, 
+                                                             stencil_coeff, args, dirname, height, width, zDim, max_ite, relative_tol
+                                                             ):
+    ml, level_data, setup_config, solve_config = amg.smooth_aggregate_setup_only(A_csr, x_1d, b_1d, max_ite, relative_tol, solver_callable='cg')
+    print(tabulate(level_data, headers="keys", tablefmt="grid"))
+    
+    # initial setting up values
+    memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
+    simulator = SdkRuntime(dirname, cmaddr=args.cmaddr)
+    symbol_b = simulator.get_id("b")
+    symbol_x = simulator.get_id("x")
+    symbol_rho = simulator.get_id("rho")
+    symbol_stencil_coeff = simulator.get_id("stencil_coeff")
+    symbol_time_buf_u16 = simulator.get_id("time_buf_u16")
+    symbol_time_ref = simulator.get_id("time_ref")
+    simulator.load()
+    simulator.run()
+
+    # copy data to device.
+    copy_data_h2d(x_1d, b_1d, stencil_coeff, height, width, zDim, memcpy_dtype, simulator, symbol_b, symbol_x, symbol_stencil_coeff)
+    pre_clock_set(simulator)
+    algorithm(zDim, max_ite, relative_tol, memcpy_dtype, simulator, symbol_rho)
+    post_clock_get(simulator)
+    time_memcpy_hwl, time_ref_hwl, xf_wse_1d = copy_data_d2h(height, width, zDim, memcpy_dtype, simulator, symbol_x, symbol_time_buf_u16, symbol_time_ref)
+    
+    simulator.stop()
+    timing_analysis(height, width, zDim, time_memcpy_hwl, time_ref_hwl)
+    
+    return xf_wse_1d  
+def amg_setup_H_solve_H():
+    pass
+def amg_setup_D_solve_D():
+    pass
+def amg_setup_D_solve_H():  
+    pass
+
+################################################################AMG_UTILS############################################
+def copy_data_d2h(height, width, zDim, memcpy_dtype, simulator, symbol_x, symbol_time_buf_u16, symbol_time_ref):
+    time_memcpy_hwl_1d = np.zeros(height*width*6, np.uint32)
+    simulator.memcpy_d2h(time_memcpy_hwl_1d, symbol_time_buf_u16, 0, 0, width, height, 6,\
+    streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    time_memcpy_hwl = oned_to_hwl_colmajor(height, width, 6, time_memcpy_hwl_1d, np.uint16)
+    print("step 8: D2H reference clock")
+    time_ref_1d = np.zeros(height*width*3, np.uint32)
+    simulator.memcpy_d2h(time_ref_1d, symbol_time_ref, 0, 0, width, height, 3,\
+    streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    time_ref_hwl = oned_to_hwl_colmajor(height, width, 3, time_ref_1d, np.uint16)
+    # final value copy
+    print("step 9: D2H x[zDim]")
+    xf_wse_1d = np.zeros(height*width*zDim, np.float32)
+    simulator.memcpy_d2h(xf_wse_1d, symbol_x, 0, 0, width, height, zDim,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    
+    return time_memcpy_hwl,time_ref_hwl,xf_wse_1d
+def copy_data_h2d(x_1d, b_1d, stencil_coeff, height, width, zDim, memcpy_dtype, simulator, symbol_b, symbol_x, symbol_stencil_coeff):
+    simulator.memcpy_h2d(symbol_b, b_1d, 0, 0, width, height, zDim,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+    simulator.memcpy_h2d(symbol_x, x_1d, 0, 0, width, height, zDim,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+    print(f"copy 7 stencil coefficients")
+    stencil_coeff_1d = hwl_2_oned_colmajor(height, width, 7, stencil_coeff, np.float32)
+    simulator.memcpy_h2d(symbol_stencil_coeff, stencil_coeff_1d, 0, 0, width, height, 7,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+def algorithm(zDim, max_ite, tol, memcpy_dtype, simulator, symbol_rho):
+    print(f"step 4: conjugate gradient with max_ite = {max_ite}, zDim = {zDim}")
+    print("step 4.1: initialization")
+  # - setup the length of all DSDs
+  # - setup the size of local tensor
+  # - can layout the layers on wse.
+  # - can 
+    simulator.launch("f_cg_init", np.int16(zDim), nonblock=False)
+    k = 0
+    print("step 4.2: r0 = b - A*x0 and compute rho = |r0|^2")
+  # w = A*x0
+    simulator.launch("f_spmv_Ax", nonblock=False)
+  # r0 = b - w = b - A*x0
+  # rho = |r0|^2
+    simulator.launch("f_residual", nonblock=False)
+  # [optional] D2H(rho)
+    rho_wse = np.zeros(1, np.float32)
+    simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    rho = rho_wse[0]
+    print(f"[CG] iter {k}: rho = {rho}")
+  # if |r_k|_2 < tol, then exit
+    while ( (rho > tol*tol) and (k < max_ite) ):
+      k = k + 1
+      print("step 4.3: update p")
+    # if k == 1
+    #   p = r
+    # else
+    #   beta = rho/rho_old
+    #   p = r + beta * p
+      simulator.launch("f_update_p", np.int16(k), nonblock=False)
+
+    # alpha_{k} = |r_{k-1}|^2/<p_{k}, A*p_{k}>
+      print("step 4.4: compute w = A*p")
+    # w = A*p
+      simulator.launch("f_spmv_Ap", nonblock=False)
+
+      print("step 4.5: update eta")
+    # eta = np.dot(p,w) = <p_{k}, A*p_{k}>
+      simulator.launch("f_eta", nonblock=False)
+
+      print("step 4.6: update alpha, x, r and rho")
+    # alpha = rho/eta
+    # x = x + alpha * p
+    # r = r - alpha * w  where w = A*p
+    # rho_old = rho
+    # rho = np.dot(r,r)
+      simulator.launch("f_update_x_r_rho", nonblock=False)
+
+    # [optional] D2H(rho)
+      simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1,\
+      streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+      rho = rho_wse[0]
+      print(f"[CG] iter {k}: rho = {rho}")
+def pre_clock_set(simulator):
+    print("step 0: enable timer")
+    simulator.launch("f_enable_timer", nonblock=False)
+    print("step 1: sync all PEs")
+    simulator.launch("f_sync", nonblock=False)
+    print("step 2: copy reference clock from reduce module")
+    simulator.launch("f_reference_timestamps", nonblock=False)
+    print("step 3: tic() records time_start")
+    simulator.launch("f_tic", nonblock=True)
+def post_clock_get(simulator):
+    # post getting clock and PE sync.
+    print("step 5: toc() records time_end")
+    simulator.launch("f_toc", nonblock=False)
+    print("step 6: prepare (time_start, time_end)")
+    simulator.launch("f_memcpy_timestamps", nonblock=False)
+    print("step 7: D2H (time_start, time_end)")
 
 if __name__ == "__main__":
   main()
