@@ -414,6 +414,8 @@ def main():
   print(f"eps = {eps}")
   print(f"absolute tol = {absolute_tol}")
   print(f"relative tol = {relative_tol}")
+  print("##################################################PARAMS")
+  solver_callable_host = amg.scipy_direct_solver
   print("##################################################")
   # Apply CG
   # TODO: Removed the x0 initial guess and doesn't return rho and k. For compatibility with the pyamg.
@@ -423,47 +425,69 @@ def main():
   # rho = np.dot(r, r)
   # k=-49585
   # # Other solvers
-  # x_spsolve, rho_spsolve = amg.scipy_direct_solver(A_csr, b_1d)
+  print("##################################################pyamg vs othersolvers")
+  # x_spsolve = amg.scipy_direct_solver(A_csr, b_1d)
   # x_cg, rho_cg = amg.scipy_iterative_solver(A_csr, x_1d, b_1d, relative_tol, max_ite)
+  # x_pyamg = amg.rs_base(A_csr, x_1d, b_1d, solver=solver_callable_host)      # split into 3 phases
+  # x_pyamg_rs, _ = amg.rs_modified(A_csr, x_1d, b_1d, max_ite, relative_tol, cycle_type='V', solver=solver_callable_host)      # split into 3 phases
+  # test(x_spsolve, x_pyamg, relative_tol)  # pyamg vs direct_solver
+  # test(x_cg, x_pyamg, relative_tol) # pyamg vs scipy_cg
+  # test(x_pyamg_rs, x_pyamg, relative_tol) # pyamg vs test_rs_baseline
+  print("##################################################AMG_pyamg_different_algo")
+  #1
 
+  # base
+  x_rs_base = amg.rs_base(A_csr, x_1d, b_1d, solver=solver_callable_host)
+  x_sa_base = amg.smooth_aggregate_base(A_csr, x_1d, b_1d, solver=solver_callable_host)
+  # modified
+  x_rs_modified = amg.rs_modified(A_csr, x_1d, b_1d, max_ite, relative_tol, solver=solver_callable_host, max_level=20, max_coarse=27)
+  x_sa_modified = amg.smooth_aggregate_modified(A_csr, x_1d, b_1d, max_ite, relative_tol, solver=solver_callable_host, max_level=20, max_coarse=27)
+
+  x_values_base = (x_rs_base, x_sa_base)
+  x_values_modified = (x_rs_modified, x_sa_modified)
+  for base in x_values_base:
+    printresidual(A_csr, base, b_1d)
+    for modified in x_values_modified:
+      test(base, modified, relative_tol)
+      printresidual(A_csr, modified, b_1d)
+  
+  print("##################################################any_pyamg_algo vs my own V cycle")
+  # any_pyamg_x = amg.rs_base(A_csr, x_1d, b_1d, solver=solver_callable_host)
+  # x_my_v, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=max_ite, max_levels=20, max_coarse=27, solver=solver_callable_host)
+  # test(x_my_v, any_pyamg_x, relative_tol) # test_rs_baseline vs test_rs_baseline
+
+  print("##################################################my_V_cycle(CG CERE) vs my_V_cycle(SCIPY-Direct)")
+  print("##################################################") 
+  # # 3
+  # CG_from_Cerebras = (conjugateGradient, { "max_ite": max_ite, "tol": relative_tol})
+  # x_my_host_CG, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=max_ite, max_levels=20, max_coarse=27, solver=CG_from_Cerebras)      # split into 3 phases
+  # test(x_my_host_CG, x_sa_modified, relative_tol) # test_rs_baseline vs test_rs_baseline
+  # test(x_my_host_CG, x_my_v, relative_tol) # test_rs_baseline vs test_rs_baseline
+  # print(x_my_host_CG[0:10])
+  # print(x_my_v[0:10])
   print("##################################################")
-  # # pyAMG(CG on host)
-  # x_pyamg, rho_pyamg = amg.pyamg(A_csr, x_1d, b_1d, relative_tol, max_ite, cycle_type='V', solver='cg')
   
   # # AMG(CG on host)
   # solver_callable_host = (conjugateGradient, { "max_ite": max_ite, "tol": relative_tol})
-  # x2_host, rho2_host = amg.smooth_aggregate_baseline(A_csr, x_1d, b_1d, max_ite, relative_tol, solver_callable=solver_callable_host)      # split into 3 phases
+  # x2_host, rho2_host = amg.smooth_aggregate_modified(A_csr, x_1d, b_1d, max_ite, relative_tol, solver_callable=solver_callable_host)      # split into 3 phases
 
-  # # AMG(CG on device)
-  # solver_callable_device = (wrapper_solver_device_amg, {"args":args, "dirname":dirname, "max_ite":max_ite, "tol":relative_tol , "stencil_coeff":stencil_coeff, "height":height, "width":width, "zDim":zDim, })
-  # x3_device, rho3_device = amg.smooth_aggregate_baseline(A_csr, x_1d, b_1d, max_ite, relative_tol, solver_callable=solver_callable_device)      # split into 3 phases
+  # # # AMG(CG on device)
+  # solver_callable_device = (wrapper_solver_device_amg, {"args":args, "dirname":dirname, "max_ite":max_ite, "tol":relative_tol , "stencil_coeff":stencil_coeff, "height":height, "width":width, "zDim":zDim })
+  # x_my_device, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=max_ite, max_levels=20, max_coarse=27, solver=solver_callable_device)
+  # test(x_my_device, x_my_host_CG, relative_tol) # test_rs_baseline vs test_rs_baseline
+  # test(x_my_device, x_my_v, relative_tol) # test_rs_baseline vs test_rs_baseline
+  # print(x_my_device[0:10])
+  # print(x_my_host_CG[0:10])
+  # print(x_my_v[0:10])
+  
+  # # print residual of all
+  # printresidual(A_csr, x_my_device, b_1d)
+  # printresidual(A_csr, x_my_host_CG, b_1d)
+  # printresidual(A_csr, x_my_v, b_1d)
   
   print("##################################################")
-  # print("Lower the better(0 = exact solution satifies Ax=b well), below data which solution is better")
-  # print(f"[host] after CG, rho = {rho}")
-  # print(f"[host] after direct-solver, rho = {rho_spsolve}")
-  # print(f"[host] after scipy-cg-solver, rho = {rho_cg}")
-  # print(f"[host] Ruge-stuben-pyAMG, rho = {rho_pyamg}")
-  # print(f"[host] SA-pyAMG(CG on host), rho = {rho2_host}")  # SA = smoothed aggregation
-  # print(f"[device] SA-AMG(CG from Device), rho = {rho3_device}")
-  print("##################################################")
   # # Testing
-  # check_tolerance = relative_tol
-  # np.testing.assert_allclose(xf_1d.ravel(), x_spsolve.ravel(), atol=check_tolerance, err_msg="CG != x_direct_solver")
-  # np.testing.assert_allclose(xf_1d.ravel(), x_cg.ravel(), atol=check_tolerance, err_msg="CG != x_scipy_cg")
-  # # pyamg vs host
-  # np.testing.assert_allclose(x_pyamg.ravel(), x2_host.ravel(), atol=check_tolerance, err_msg="x_pyamg != x_host")
-  # # both host and device should match
-  # # np.testing.assert_allclose(x2_host.ravel(), x3_device.ravel(), atol=check_tolerance, err_msg="x_host != x_device(tol)")
 
-  print("##################################################")
-  # nrm2_xf_device = np.linalg.norm(x3_device.ravel(), 2)
-  # print(f"|xf_device|_2 = {nrm2_xf_device}")
-  # z = x2_host.ravel() - x3_device.ravel()
-  # nrm_z = np.linalg.norm(z, np.inf)
-  # print(f"|xf_host - xf_device| = {nrm_z}")
-  # np.testing.assert_allclose(x2_host.ravel(), x3_device.ravel(), 1.e-5, err_msg="xf_host != xf_device(1.e-5)")
-  # print("\nSUCCESS!")
   print("##################################################")
   
   # # # x = fn(A, b, **kwargs)
@@ -471,20 +495,27 @@ def main():
   # verify(args, dirname, height, width, core_fabric_offset_x, core_fabric_offset_y, A_csr, xf_1d)
 
   print("###################AMG_DEVICE###############################")
-  solver_callable_host = amg.scipy_direct_solver
-  # perform setup using pyamg.
+  # solver_callable_host = amg.scipy_direct_solver
+  # # perform setup using pyamg.
   
-  x2_host, rho2_host = amg.smooth_aggregate_baseline(A_csr, x_1d, b_1d, max_ite, relative_tol, solver_callable=solver_callable_host)      # split into 3 phases
-  x3_host, rho3_host = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=max_ite, max_levels=10, max_coarse=27, solver=solver_callable_host)
+  # x2_host, rho2_host = amg.smooth_aggregate_modified(A_csr, x_1d, b_1d, max_ite, relative_tol, solver_callable=solver_callable_host)      # split into 3 phases
+  # x3_host, rho3_host = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=max_ite, max_levels=10, max_coarse=27, solver=solver_callable_host)
   
-  print("SUCCESS RAN AMG1, rho = ", rho2_host)
-  print("SUCCESS RAN AMG2, rho = ", rho3_host)
-  np.testing.assert_allclose(x2_host.ravel(), x3_host.ravel(), relative_tol, err_msg="xx != x2_host")
+  # print("SUCCESS RAN AMG1, rho = ", rho2_host)
+  # print("SUCCESS RAN AMG2, rho = ", rho3_host)
+  # np.testing.assert_allclose(x2_host.ravel(), x3_host.ravel(), relative_tol, err_msg="xx != x2_host")
   
   # x3_host, rho3_host = amg_setup_H_solve_D(A_csr, x_1d, b_1d, stencil_coeff, args, dirname, height, width, zDim, max_ite, relative_tol)
   print("##################################################")
 
+def test(a, b, tol):
+  np.testing.assert_allclose(a.ravel(), b.ravel(), rtol=tol, verbose=True)
 
+def printresidual(A, x, b):
+  y = A.dot(x)
+  r = b - y
+  rho = np.dot(r, r)
+  print(f"residual = {rho}")
 ################################################################CG+PYAMG############################################
 def verify(args, dirname, height, width, core_fabric_offset_x, core_fabric_offset_y, A_csr, xf_1d):
     if args.cmaddr is None:
