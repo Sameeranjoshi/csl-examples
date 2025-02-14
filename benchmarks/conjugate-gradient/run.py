@@ -457,11 +457,20 @@ def main():
   
   print("##################################################any_pyamg_algo vs my own V cycle")
   x_my_v, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=max_ite, max_levels=20, max_coarse=27, solver=solver_callable_host)
-  test(x_my_v, tmp2, relative_tol) # test_rs_baseline vs test_rs_baseline
-  # test(x_my_v, x_rs_base, relative_tol) # test_rs_baseline vs test_rs_baseline
-  #test(x_my_v, x_rs_modified, relative_tol) # test_rs_baseline vs test_rs_baseline
-  #test(x_my_v, x_sa_modified, relative_tol) # test_rs_baseline vs test_rs_baseline
+  x_my_v_withsolver, _ = amg.scipy_iterative_solver(A_csr, x_my_v, b_1d, relative_tol, max_ite)
+  
+  test(x_my_v_withsolver, x_sa_modified, relative_tol) # test_rs_baseline vs test_rs_baseline
+  test(x_my_v_withsolver, x_rs_modified, relative_tol) # test_rs_baseline vs test_rs_baseline
+  test(x_my_v_withsolver, x_sa_base, relative_tol) # test_rs_baseline vs test_rs_baseline
+  test(x_my_v_withsolver, x_rs_base, relative_tol) # test_rs_baseline vs test_rs_baseline
 
+  printresidual(A_csr, x_my_v_withsolver, b_1d)
+  printresidual(A_csr, x_sa_modified, b_1d)
+  printresidual(A_csr, x_rs_modified, b_1d)
+  printresidual(A_csr, x_sa_base, b_1d)
+  printresidual(A_csr, x_rs_base, b_1d)
+  
+  
   print("##################################################my_V_cycle(CG CERE) vs my_V_cycle(SCIPY-Direct)")
   print("##################################################") 
   # # 3
