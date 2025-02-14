@@ -83,6 +83,8 @@ def AMG_only_solve(A_csr, b0, x0, tol, max_ite, max_levels, max_coarse, solver):
     # if only 1 level solve directly
     if not ml.levels:
         raise RuntimeError("AMG setup failed: No levels generated.")
+
+
     if len(ml.levels) == 1:
         # x, rho = scipy_iterative_solver(A_csr, x0, b0, tol, max_ite=max_ite)
         if isinstance(solver, tuple):
@@ -95,8 +97,7 @@ def AMG_only_solve(A_csr, b0, x0, tol, max_ite, max_levels, max_coarse, solver):
         r = b0 - A_csr @ x
         rho = np.dot(r, r)
         return x, rho
-    
-    
+
     level_data_clone = []
     coarse_data = []
     x_level = [np.copy(x0)]
@@ -220,13 +221,13 @@ def rs_base(A, x, b, solver='cg'):
     np.random.seed(100)
     ml = ruge_stuben_solver(A, coarse_solver=solver)  # Multi-level solver
     print(ml)
-    x_pyamg = ml.solve(b, x0=x)
+    x_pyamg = ml.solve(b, x0=x, maxiter=1)
     return x_pyamg
 def smooth_aggregate_base(A, x, b, solver='cg'):
     np.random.seed(100)  
     ml = smoothed_aggregation_solver(A, B=b, coarse_solver=solver)
     print(ml)
-    x_sol = ml.solve(b, x0=x)
+    x_sol = ml.solve(b, x0=x, maxiter=1)
     return x_sol
 
 def scipy_direct_solver(A, b):
@@ -246,6 +247,7 @@ def scipy_direct_solver(A, b):
     rho = np.dot(r, r)
     return x
 
+# TODO: Fix the atol and issues like those.
 def scipy_iterative_solver(A, x, b, atol, max_ite):
     x, converged = spla.cg(A, b, x0=x, atol=atol, maxiter=max_ite)
     if converged > 0:
@@ -264,18 +266,20 @@ def rs_modified(A, x, b, max_ite, relative_tol, solver, max_level=None, max_coar
       # 4. solve
       residual = []
       solve_config = {
-            'maxiter': max_ite,
+            'maxiter': 1, # TODO: Full solver=max_ite, as_preconditioner=1, only_one_V_cycle for testing.
             'residuals': residual,
             'tol': relative_tol,
             'return_info': True,
       }
       x_sol, info = ml.solve(b, x0=x, **solve_config)
       if info != 0:
-          print("PyAMG did not converge, maybe try changing it's parameters. halted at iterations: ", info)
-    
-      for i, r in enumerate(residual):
-         print(f"[RS_modified]Iteration {i}: Residual {r}")
-    
+         warnings.warn(
+             "\033[91mPyAMG did not converge, this is because I have explicitly set the max_iter=1, "
+             "this means only do 1 cycle of AMG, as a full solver it should keep repeating the cycles until max_iter, "
+             "now as a preconditioner cycles=1 followed by CG/GMRES/...: \033[0m" + str(info), 
+             UserWarning
+         )
+
       return x_sol
 
 def smooth_aggregate_modified(A, x, b, max_ite, relative_tol, solver, max_level=None, max_coarse=None):
@@ -286,15 +290,20 @@ def smooth_aggregate_modified(A, x, b, max_ite, relative_tol, solver, max_level=
 
     residual = []
     solve_config = {
-        'maxiter': max_ite,
+        'maxiter': 1,
         'residuals': residual,
         'tol': relative_tol,
         'return_info': True,
     }
     # create a callback method which prints the rho and tol at each iteration
     x_sol, info = ml.solve(b, x0=x, **solve_config)
-    if info!=0:
-        print("PyAMG did not converge, maybe try changing it's parameters. halted at iterations: ", info)
+    if info != 0:
+        warnings.warn(
+            "\033[91mPyAMG did not converge, this is because I have explicitly set the max_iter=1, "
+            "this means only do 1 cycle of AMG, as a full solver it should keep repeating the cycles until max_iter, "
+            "now as a preconditioner cycles=1 followed by CG/GMRES/...: \033[0m" + str(info), 
+            UserWarning
+        )
 
     # for i, r in enumerate(residual):
     #     print(f"[SA_modified]Iteration {i}: Residual {r}")

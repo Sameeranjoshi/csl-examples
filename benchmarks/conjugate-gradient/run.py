@@ -433,28 +433,34 @@ def main():
   # test(x_spsolve, x_pyamg, relative_tol)  # pyamg vs direct_solver
   # test(x_cg, x_pyamg, relative_tol) # pyamg vs scipy_cg
   # test(x_pyamg_rs, x_pyamg, relative_tol) # pyamg vs test_rs_baseline
-  print("##################################################AMG_pyamg_different_algo")
+  print("##################################################AMG_pyamg_different_configs as PRECONDITIONER")
   #1
-
-  # base
-  x_rs_base = amg.rs_base(A_csr, x_1d, b_1d, solver=solver_callable_host)
-  x_sa_base = amg.smooth_aggregate_base(A_csr, x_1d, b_1d, solver=solver_callable_host)
+  # RS-preconditioner + iterative Solver
+  x1 = amg.rs_base(A_csr, x_1d, b_1d, solver=solver_callable_host) # V cycle preconditioner.
+  x_rs_base, _ = amg.scipy_iterative_solver(A_csr, x1, b_1d, relative_tol, max_ite) # Solver(coarse)
+  # SA-preconditioner + iterative Solver
+  x2 = amg.smooth_aggregate_base(A_csr, x_1d, b_1d, solver=solver_callable_host)
+  x_sa_base, _ = amg.scipy_iterative_solver(A_csr, x2, b_1d, relative_tol, max_ite)
+  
   # modified
-  x_rs_modified = amg.rs_modified(A_csr, x_1d, b_1d, max_ite, relative_tol, solver=solver_callable_host, max_level=20, max_coarse=27)
-  x_sa_modified = amg.smooth_aggregate_modified(A_csr, x_1d, b_1d, max_ite, relative_tol, solver=solver_callable_host, max_level=20, max_coarse=27)
+  # (Modified)RS-preconditioner + iterative Solver
+  tmp1 = amg.rs_modified(A_csr, x_1d, b_1d, max_ite, relative_tol, solver=solver_callable_host, max_level=20, max_coarse=27)
+  x_rs_modified, _ = amg.scipy_iterative_solver(A_csr, tmp1, b_1d, relative_tol, max_ite)
+  # (Modified)SA-preconditioner + iterative Solver
+  tmp2 = amg.smooth_aggregate_modified(A_csr, x_1d, b_1d, max_ite, relative_tol, solver=solver_callable_host, max_level=20, max_coarse=27)
+  x_sa_modified, _ = amg.scipy_iterative_solver(A_csr, tmp2, b_1d, relative_tol, max_ite)
 
-  x_values_base = (x_rs_base, x_sa_base)
-  x_values_modified = (x_rs_modified, x_sa_modified)
-  for base in x_values_base:
-    printresidual(A_csr, base, b_1d)
-    for modified in x_values_modified:
-      test(base, modified, relative_tol)
-      printresidual(A_csr, modified, b_1d)
+  print("# RS-preconditioner(1 cycle) + Direct Solver(max_ite)............")
+  test(x_rs_base, x_sa_base, relative_tol)  # Test the variables
+  print("# SA-preconditioner(1 cycle) + Direct Solver(max_ite)............")  
+  test(x_rs_modified, x_sa_modified, relative_tol)  # Test the variables
   
   print("##################################################any_pyamg_algo vs my own V cycle")
-  # any_pyamg_x = amg.rs_base(A_csr, x_1d, b_1d, solver=solver_callable_host)
-  # x_my_v, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=max_ite, max_levels=20, max_coarse=27, solver=solver_callable_host)
-  # test(x_my_v, any_pyamg_x, relative_tol) # test_rs_baseline vs test_rs_baseline
+  x_my_v, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=max_ite, max_levels=20, max_coarse=27, solver=solver_callable_host)
+  test(x_my_v, tmp2, relative_tol) # test_rs_baseline vs test_rs_baseline
+  # test(x_my_v, x_rs_base, relative_tol) # test_rs_baseline vs test_rs_baseline
+  #test(x_my_v, x_rs_modified, relative_tol) # test_rs_baseline vs test_rs_baseline
+  #test(x_my_v, x_sa_modified, relative_tol) # test_rs_baseline vs test_rs_baseline
 
   print("##################################################my_V_cycle(CG CERE) vs my_V_cycle(SCIPY-Direct)")
   print("##################################################") 
