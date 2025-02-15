@@ -427,7 +427,7 @@ def main():
   # # Other solvers
   print("##################################################pyamg vs othersolvers")
   # x_spsolve = amg.scipy_direct_solver(A_csr, b_1d)
-  # x_cg, rho_cg = amg.scipy_iterative_solver(A_csr, x_1d, b_1d, relative_tol, max_ite)
+  # x_cg, rho_cg = amg.scipy_iterative_solver(A_csr, b_1d, x_1d, relative_tol, max_ite)
   # x_pyamg = amg.rs_base(A_csr, x_1d, b_1d, solver=solver_callable_host)      # split into 3 phases
   # x_pyamg_rs, _ = amg.rs_modified(A_csr, x_1d, b_1d, max_ite, relative_tol, cycle_type='V', solver=solver_callable_host)      # split into 3 phases
   # test(x_spsolve, x_pyamg, relative_tol)  # pyamg vs direct_solver
@@ -435,62 +435,52 @@ def main():
   # test(x_pyamg_rs, x_pyamg, relative_tol) # pyamg vs test_rs_baseline
   print("##################################################AMG_pyamg_different_configs as PRECONDITIONER")
   #1
-  # RS-preconditioner + iterative Solver
-  x1 = amg.rs_base(A_csr, x_1d, b_1d, solver=solver_callable_host) # V cycle preconditioner.
-  x_rs_base, _ = amg.scipy_iterative_solver(A_csr, x1, b_1d, relative_tol, max_ite) # Solver(coarse)
-  # SA-preconditioner + iterative Solver
-  x2 = amg.smooth_aggregate_base(A_csr, x_1d, b_1d, solver=solver_callable_host)
-  x_sa_base, _ = amg.scipy_iterative_solver(A_csr, x2, b_1d, relative_tol, max_ite)
+  # print("Using AMG as preconditioner")
+  # print("# preconditioner(1 cycle) + Direct Solver(max_ite)............")
+  # # RS-preconditioner + iterative Solver
+  # x1 = amg.rs_base(A_csr, x_1d, b_1d, max_iter=1, solver=solver_callable_host) # V cycle preconditioner.
+  # x_rs_base, _ = amg.scipy_iterative_solver(A_csr, b_1d, x1, relative_tol, max_ite) # Solver(coarse)
+  # # SA-preconditioner + iterative Solver
+  # x2 = amg.smooth_aggregate_base(A_csr, x_1d, b_1d, max_iter=1, solver=solver_callable_host)
+  # x_sa_base, _ = amg.scipy_iterative_solver(A_csr, b_1d, x2, relative_tol, max_ite)
+  # test(x_rs_base, x_sa_base, relative_tol)  # Test the variables
   
-  # modified
-  # (Modified)RS-preconditioner + iterative Solver
-  tmp1 = amg.rs_modified(A_csr, x_1d, b_1d, max_ite, relative_tol, solver=solver_callable_host, max_level=20, max_coarse=27)
-  x_rs_modified, _ = amg.scipy_iterative_solver(A_csr, tmp1, b_1d, relative_tol, max_ite)
-  # (Modified)SA-preconditioner + iterative Solver
-  tmp2 = amg.smooth_aggregate_modified(A_csr, x_1d, b_1d, max_ite, relative_tol, solver=solver_callable_host, max_level=20, max_coarse=27)
-  x_sa_modified, _ = amg.scipy_iterative_solver(A_csr, tmp2, b_1d, relative_tol, max_ite)
+  # #2 Full solver
+  # print("Using AMG as full solver")
+  # x_rs_modified = amg.rs_modified(A_csr, x_1d, b_1d, max_ite, relative_tol, solver=solver_callable_host, max_level=20, max_coarse=27)
+  # x_sa_modified = amg.smooth_aggregate_modified(A_csr, x_1d, b_1d, max_ite, relative_tol, solver=solver_callable_host, max_level=20, max_coarse=27)
+  # test(x_rs_modified, x_sa_modified, relative_tol)  # Test the variables
+  
+  print("##################################################any_pyamg_algo vs my_V_Coarse_Solver_on_Host")
+  # x_my_v, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=max_ite, max_levels=20, max_coarse=27, solver=solver_callable_host)
+  
+  # test(x_my_v, x_sa_modified, relative_tol) # test_rs_baseline vs test_rs_baseline
+  # test(x_my_v, x_rs_modified, relative_tol) # test_rs_baseline vs test_rs_baseline
+  # test(x_my_v, x_sa_base, relative_tol) # test_rs_baseline vs test_rs_baseline
+  # test(x_my_v, x_rs_base, relative_tol) # test_rs_baseline vs test_rs_baseline
 
-  print("# RS-preconditioner(1 cycle) + Direct Solver(max_ite)............")
-  test(x_rs_base, x_sa_base, relative_tol)  # Test the variables
-  print("# SA-preconditioner(1 cycle) + Direct Solver(max_ite)............")  
-  test(x_rs_modified, x_sa_modified, relative_tol)  # Test the variables
-  
-  print("##################################################any_pyamg_algo vs my own V cycle")
-  x_my_v, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=max_ite, max_levels=20, max_coarse=27, solver=solver_callable_host)
-  x_my_v_withsolver, _ = amg.scipy_iterative_solver(A_csr, x_my_v, b_1d, relative_tol, max_ite)
-  
-  test(x_my_v_withsolver, x_sa_modified, relative_tol) # test_rs_baseline vs test_rs_baseline
-  test(x_my_v_withsolver, x_rs_modified, relative_tol) # test_rs_baseline vs test_rs_baseline
-  test(x_my_v_withsolver, x_sa_base, relative_tol) # test_rs_baseline vs test_rs_baseline
-  test(x_my_v_withsolver, x_rs_base, relative_tol) # test_rs_baseline vs test_rs_baseline
-
-  printresidual(A_csr, x_my_v_withsolver, b_1d)
-  printresidual(A_csr, x_sa_modified, b_1d)
-  printresidual(A_csr, x_rs_modified, b_1d)
-  printresidual(A_csr, x_sa_base, b_1d)
-  printresidual(A_csr, x_rs_base, b_1d)
-  
+  # printresidual(A_csr, x_my_v, b_1d)
+  # printresidual(A_csr, x_sa_modified, b_1d)
+  # printresidual(A_csr, x_rs_modified, b_1d)
+  # printresidual(A_csr, x_sa_base, b_1d)
+  # printresidual(A_csr, x_rs_base, b_1d)
   
   print("##################################################my_V_cycle(CG CERE) vs my_V_cycle(SCIPY-Direct)")
-  print("##################################################") 
+  print("##################################################my_V_CG_(SOLVER- Direct vs CG CEREBRAS") 
   # # 3
-  # CG_from_Cerebras = (conjugateGradient, { "max_ite": max_ite, "tol": relative_tol})
-  # x_my_host_CG, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=max_ite, max_levels=20, max_coarse=27, solver=CG_from_Cerebras)      # split into 3 phases
-  # test(x_my_host_CG, x_sa_modified, relative_tol) # test_rs_baseline vs test_rs_baseline
-  # test(x_my_host_CG, x_my_v, relative_tol) # test_rs_baseline vs test_rs_baseline
-  # print(x_my_host_CG[0:10])
-  # print(x_my_v[0:10])
+  CG_from_Cerebras = (conjugateGradient, { "max_ite": max_ite, "tol": relative_tol})
+  x_my_host_CG, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=max_ite, max_levels=20, max_coarse=27, solver=CG_from_Cerebras)      # split into 3 phases
+  
+  # x_my_host_scipy_CG, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=max_ite, max_levels=20, max_coarse=27, solver=solver_callable_host)      # split into 3 phases
+  # test(x_my_host_CG, x_my_host_scipy_CG, relative_tol) # test_rs_baseline vs test_rs_baseline
+
   print("##################################################")
   
-  # # AMG(CG on host)
-  # solver_callable_host = (conjugateGradient, { "max_ite": max_ite, "tol": relative_tol})
-  # x2_host, rho2_host = amg.smooth_aggregate_modified(A_csr, x_1d, b_1d, max_ite, relative_tol, solver_callable=solver_callable_host)      # split into 3 phases
-
-  # # # AMG(CG on device)
-  # solver_callable_device = (wrapper_solver_device_amg, {"args":args, "dirname":dirname, "max_ite":max_ite, "tol":relative_tol , "stencil_coeff":stencil_coeff, "height":height, "width":width, "zDim":zDim })
-  # x_my_device, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=max_ite, max_levels=20, max_coarse=27, solver=solver_callable_device)
-  # test(x_my_device, x_my_host_CG, relative_tol) # test_rs_baseline vs test_rs_baseline
-  # test(x_my_device, x_my_v, relative_tol) # test_rs_baseline vs test_rs_baseline
+  # # AMG(CG on device)
+  CG_on_device = (wrapper_solver_device_amg, {"args":args, "dirname":dirname, "max_ite":max_ite, "tol":relative_tol , "stencil_coeff":stencil_coeff, "height":height, "width":width, "zDim":zDim })
+  x_my_device, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=2, max_levels=20, max_coarse=27, solver=CG_on_device)      # split into 3 phases
+  test(x_my_device, x_my_host_CG, relative_tol) # test_rs_baseline vs test_rs_baseline
+  # test(x_my_device, x_my_host_scipy_CG, relative_tol) # test_rs_baseline vs test_rs_baseline
   # print(x_my_device[0:10])
   # print(x_my_host_CG[0:10])
   # print(x_my_v[0:10])
@@ -585,18 +575,15 @@ def wrapper_solver_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_ite,
   print(f"stencil_coeff.shape: {stencil_coeff.shape}, expected: ({height * width * 7})")
   print(f"height: {height}, width: {width}, zDim: {zDim}")
   print(f"max_ite: {max_ite}, tol: {tol}")
-  import inspect
-  caller = inspect.stack()[1]  # Get the caller frame
-  print(f"foo() was called from function: {caller.function}")
   print("##################################################")
   return conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse,  args, dirname, max_ite, tol, stencil_coeff, height, width, zDim)
   
 # x <- fn(A, b, **kwargs), kwargs = shouldn't change.
 def conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_ite, tol, stencil_coeff, height, width, zDim):
     x_1d_coarse = np.zeros(b_1d_coarse.shape, np.float32) # fix
-    
+    print("Checkpoint 1")
     memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
-    simulator = SdkRuntime(dirname, cmaddr=args.cmaddr)
+    simulator = SdkRuntime(dirname, cmaddr=args.cmaddr, msg_level="DEBUG")
 
     symbol_b = simulator.get_id("b")
     symbol_x = simulator.get_id("x")
@@ -604,10 +591,11 @@ def conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_i
     symbol_stencil_coeff = simulator.get_id("stencil_coeff")
     symbol_time_buf_u16 = simulator.get_id("time_buf_u16")
     symbol_time_ref = simulator.get_id("time_ref")
-
+    print("Checkpoint 2")
     simulator.load()
+    print("Checkpoint 2.1")
     simulator.run()
-    
+    print("Checkpoint 3")
     print(f"copy vector b and x0")
     simulator.memcpy_h2d(symbol_b, b_1d_coarse, 0, 0, width, height, zDim,\
     streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
@@ -619,7 +607,7 @@ def conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_i
     stencil_coeff_1d = hwl_2_oned_colmajor(height, width, 7, stencil_coeff, np.float32)
     simulator.memcpy_h2d(symbol_stencil_coeff, stencil_coeff_1d, 0, 0, width, height, 7,\
     streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
-
+    print("Checkpoint 4")
     print("step 0: enable timer")
     simulator.launch("f_enable_timer", nonblock=False)
 
@@ -716,6 +704,7 @@ def conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_i
     simulator.memcpy_d2h(xf_wse_1d, symbol_x, 0, 0, width, height, zDim,\
     streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
 
+    runner.dump_core("corefile.cs1")
     simulator.stop()
     timing_analysis(height, width, zDim, time_memcpy_hwl, time_ref_hwl)
     print("xf_wse_1d.shape: ", xf_wse_1d.shape)

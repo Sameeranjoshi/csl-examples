@@ -84,63 +84,74 @@ def AMG_only_solve(A_csr, b0, x0, tol, max_ite, max_levels, max_coarse, solver):
     if not ml.levels:
         raise RuntimeError("AMG setup failed: No levels generated.")
 
-
-    if len(ml.levels) == 1:
-        # x, rho = scipy_iterative_solver(A_csr, x0, b0, tol, max_ite=max_ite)
-        if isinstance(solver, tuple):
-            solver_fn, solver_kwargs = solver
-            x = solver_fn(A_csr, b0, **solver_kwargs)  # Pass additional arguments
-        else:
-            solver_fn = solver  # Direct function call
-            x = solver_fn(A_csr, b0)  # Call without extra kwargs
-
-        r = b0 - A_csr @ x
-        rho = np.dot(r, r)
-        return x, rho
-
     level_data_clone = []
     coarse_data = []
-    x_level = [np.copy(x0)]
-    b_level = [np.copy(b0)]
-    
-    # solve phase layer by layer.
-    for i, level in enumerate(ml.levels[:-1]):
-        A, b, P, R = level.A, level.B, level.P, level.R
-        x = x_level[i]
-        b = b_level[i]
+    V_levels = len(ml.levels)
+    x_level = [None] * V_levels
+    b_level = [None] * V_levels
+
+    x_level[0] = np.copy(x0)
+    b_level[0] = np.copy(b0)
+
+    for _ in range(max_ite):  # Run V-cycle up to max_iter or until convergence
+        if V_levels == 1:
+            A = ml.levels[0].A
+            x = x_level[0]
+            b = b_level[0]
+            # x, rho = scipy_iterative_solver(A_csr, b0, x0, tol, max_ite=max_ite)
+            if isinstance(solver, tuple):
+                solver_fn, solver_kwargs = solver
+                x[:] = solver_fn(A, b, **solver_kwargs)  # Pass additional arguments
+            else:
+                solver_fn = solver  # Direct function call
+                x[:] = solver_fn(A, b)  # Call without extra kwargs
+        else:   # N layers   
+            # solve phase layer by layer.
+            for i, level in enumerate(ml.levels[:-1]):
+                A, P, R = level.A, level.P, level.R
+                x = x_level[i]
+                b = b_level[i]
+                
+                level.presmoother(A, x, b)
+                r = b - A @ x
+                b_coarse = R @ r
+                
+                b_level[i + 1] = b_coarse  # Directly store in the next level
+                x_coarse = np.zeros_like(b_coarse)
+                x_level[i + 1] = x_coarse
+                
+            # print after solve down.
+            # debugprint(ml.levels, b_level, x_level)
+            # solve coarse
+            b_coarsest = b_level[-1]
+            x_coarsest = x_level[-1]
+            A_coarsest = ml.levels[-1].A
+            if isinstance(solver, tuple):
+                solver_fn, solver_kwargs = solver
+                sol_result = solver_fn(A_coarsest, b_coarsest, **solver_kwargs)  # Pass additional arguments
+                x_coarsest[:] = sol_result[0] if isinstance(sol_result, tuple) else sol_result
+            else:
+                x_coarsest[:] = solver(A_coarsest, b_coarsest)  # Call without extra kwargs
+            
+            # Solve up
+            for i in reversed(range(len(ml.levels) - 1)):
+                P = ml.levels[i].P
+                x_level[i] += P @ x_level[i+1]  # Prolongation
+
+                # Apply post-smoother
+                ml.levels[i].postsmoother(ml.levels[i].A, x_level[i], b_level[i])
+
+        resi = b_level[0] - ml.levels[0].A @ x_level[0]
+        norm_b0 = np.linalg.norm(b0)
+        relative_residual = np.linalg.norm(resi) / norm_b0  # Relative residual
         
-        level.presmoother(A, x, b)
-        r = b - A @ x
-        b_coarse = R @ r
-        
-        b_level.append(b_coarse)
-        x_coarse = np.zeros_like(b_coarse)
-        x_level.append(x_coarse)     
-    # print after solve down.
-    # debugprint(ml.levels, b_level, x_level)
-    # solve coarse
-    b_coarsest = b_level[-1]
-    x_coarsest = x_level[-1]
-    A_coarsest = ml.levels[-1].A
-    if isinstance(solver, tuple):
-        solver_fn, solver_kwargs = solver
-        x_coarsest[:] = solver_fn(A_coarsest, b_coarsest, **solver_kwargs)  # Pass additional arguments
-    else:
-        solver_fn = solver  # Direct function call
-        x_coarsest[:] = solver_fn(A_coarsest, b_coarsest)  # Call without extra kwargs
-    
-    # Solve up
-    for i in reversed(range(len(ml.levels) - 1)):
-        P = ml.levels[i].P
-        x_level[i] += P @ x_level[i+1]  # Prolongation
+        if relative_residual < tol:
+            print(f"Relative residual: {relative_residual}")
+            print(f"Tolerance: {tol}")
+            print(f"Converged at iteration {i}")
+            break
 
-        # Apply post-smoother
-        ml.levels[i].postsmoother(ml.levels[i].A, x_level[i], b_level[i])
-
-
-    # rho
-    r = b_level[0] - ml.levels[0].A @ x_level[0]
-    rho = np.dot(r, r)
+    rho = np.dot(resi, resi)
     return x_level[0], rho
         
 def print_table_shapes(levels):
@@ -217,17 +228,18 @@ def debugprint(levels, b_level, x_level):
     print(tabulate(level_data_clone, headers="keys", tablefmt="grid"))  
     
 #############################################
-def rs_base(A, x, b, solver='cg'):
+def rs_base(A, x, b, max_iter=100, solver='cg'):
     np.random.seed(100)
     ml = ruge_stuben_solver(A, coarse_solver=solver)  # Multi-level solver
     print(ml)
-    x_pyamg = ml.solve(b, x0=x, maxiter=1)
+    x_pyamg = ml.solve(b, x0=x, maxiter=max_iter)
     return x_pyamg
-def smooth_aggregate_base(A, x, b, solver='cg'):
+
+def smooth_aggregate_base(A, x, b, max_iter=100, solver='cg'):
     np.random.seed(100)  
     ml = smoothed_aggregation_solver(A, B=b, coarse_solver=solver)
     print(ml)
-    x_sol = ml.solve(b, x0=x, maxiter=1)
+    x_sol = ml.solve(b, x0=x, maxiter=max_iter)
     return x_sol
 
 def scipy_direct_solver(A, b):
@@ -248,7 +260,7 @@ def scipy_direct_solver(A, b):
     return x
 
 # TODO: Fix the atol and issues like those.
-def scipy_iterative_solver(A, x, b, atol, max_ite):
+def scipy_iterative_solver(A, b, x, atol, max_ite):
     x, converged = spla.cg(A, b, x0=x, atol=atol, maxiter=max_ite)
     if converged > 0:
         print("spla.cg from scipy_iterative_solver did not converge, maybe use more iterations or reduce tolerance.")
@@ -266,7 +278,7 @@ def rs_modified(A, x, b, max_ite, relative_tol, solver, max_level=None, max_coar
       # 4. solve
       residual = []
       solve_config = {
-            'maxiter': 1, # TODO: Full solver=max_ite, as_preconditioner=1, only_one_V_cycle for testing.
+            'maxiter': max_ite, # TODO: Full solver=max_ite, as_preconditioner=1, only_one_V_cycle for testing.
             'residuals': residual,
             'tol': relative_tol,
             'return_info': True,
@@ -290,7 +302,7 @@ def smooth_aggregate_modified(A, x, b, max_ite, relative_tol, solver, max_level=
 
     residual = []
     solve_config = {
-        'maxiter': 1,
+        'maxiter': max_ite,
         'residuals': residual,
         'tol': relative_tol,
         'return_info': True,
@@ -612,7 +624,7 @@ class AMGSolver:
         # Check what solver to use
         if self._coarse_solver == 'cg':
             print("Solver = cg")
-            x, _ = scipy_iterative_solver(a_coarse, x_coarse, b_coarse, atol=1.e-12, max_ite=100)
+            x, _ = scipy_iterative_solver(a_coarse, b_coarse, x_coarse, atol=1.e-12, max_ite=100)
         elif self._coarse_solver == 'direct':
             print("Solver = 'direct'")
             x, _ = scipy_direct_solver(a_coarse, b_coarse)
