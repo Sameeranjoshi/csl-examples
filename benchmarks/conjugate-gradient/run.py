@@ -471,15 +471,15 @@ def main():
   CG_from_Cerebras = (conjugateGradient, { "max_ite": max_ite, "tol": relative_tol})
   x_my_host_CG, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=max_ite, max_levels=20, max_coarse=27, solver=CG_from_Cerebras)      # split into 3 phases
   
-  # x_my_host_scipy_CG, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=max_ite, max_levels=20, max_coarse=27, solver=solver_callable_host)      # split into 3 phases
-  # test(x_my_host_CG, x_my_host_scipy_CG, relative_tol) # test_rs_baseline vs test_rs_baseline
+  x_my_host_scipy_CG, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=max_ite, max_levels=20, max_coarse=27, solver=solver_callable_host)      # split into 3 phases
+  test(x_my_host_CG, x_my_host_scipy_CG, relative_tol) # test_rs_baseline vs test_rs_baseline
 
   print("##################################################")
   
   # # AMG(CG on device)
   CG_on_device = (wrapper_solver_device_amg, {"args":args, "dirname":dirname, "max_ite":max_ite, "tol":relative_tol , "stencil_coeff":stencil_coeff, "height":height, "width":width, "zDim":zDim })
-  x_my_device, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=2, max_levels=20, max_coarse=27, solver=CG_on_device)      # split into 3 phases
-  test(x_my_device, x_my_host_CG, relative_tol) # test_rs_baseline vs test_rs_baseline
+  x_my_device, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=1, max_levels=20, max_coarse=27, solver=CG_on_device)      # split into 3 phases
+  # test(x_my_device, x_my_host_CG, relative_tol) # test_rs_baseline vs test_rs_baseline
   # test(x_my_device, x_my_host_scipy_CG, relative_tol) # test_rs_baseline vs test_rs_baseline
   # print(x_my_device[0:10])
   # print(x_my_host_CG[0:10])
@@ -704,7 +704,6 @@ def conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_i
     simulator.memcpy_d2h(xf_wse_1d, symbol_x, 0, 0, width, height, zDim,\
     streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
 
-    runner.dump_core("corefile.cs1")
     simulator.stop()
     timing_analysis(height, width, zDim, time_memcpy_hwl, time_ref_hwl)
     print("xf_wse_1d.shape: ", xf_wse_1d.shape)
