@@ -26,6 +26,8 @@ from pyamg.classical.interpolate import direct_interpolation, \
 from cg import conjugateGradient
 from pyamg import smoothed_aggregation_solver, ruge_stuben_solver
 from scipy.sparse import random
+import matplotlib.pyplot as plt
+import math
 
 
 # solve a linear system A * x = b
@@ -76,6 +78,8 @@ def AMG_only_solve(A_csr, b0, x0, tol, max_ite, max_levels, max_coarse, solver):
     
     # Start as of now with the solve phase use setup from pyamg.
     ml, setup_config = smooth_aggregate_setup_only(A_csr, x0, b0, solver, max_levels, max_coarse)
+    visualize(ml)
+        
     print(ml)
     # print_table_shapes(ml.levels)
     # print_table_data(ml.levels)
@@ -226,7 +230,43 @@ def debugprint(levels, b_level, x_level):
             "x_computed": x_level[i][0:5].flatten()
         })
     print(tabulate(level_data_clone, headers="keys", tablefmt="grid"))  
+
+def visualize(ml):
+    # Determine the number of levels
+    num_levels = len(ml.levels)
     
+    # Calculate the number of rows and columns for the grid
+    grid_size = math.ceil(math.sqrt(num_levels))  # Calculate grid size (square-like)
+    fig, axes = plt.subplots(grid_size, grid_size, figsize=(5 * grid_size, 5 * grid_size))
+    
+    # Flatten the axes array in case it's a 2D array (for easy indexing)
+    axes = axes.flatten()
+
+    for i, level in enumerate(ml.levels):
+        A_viz = level.A
+        R_viz = level.R if hasattr(level, 'R') else None
+        P_viz = level.P if hasattr(level, 'P') else None
+        # Plot sparsity pattern for A
+        axes[i].spy(A_viz.toarray(), markersize=2)
+        axes[i].set_title(f"Level {i+1} - A")
+        # Plot sparsity pattern for R
+        if R_viz is not None and i+1 < len(axes):
+            axes[i+1].spy(R_viz.toarray(), markersize=2)
+            axes[i+1].set_title(f"Level {i+1} - R")
+        # Plot sparsity pattern for P
+        if P_viz is not None and i+2 < len(axes):
+            axes[i+2].spy(P_viz.toarray(), markersize=2)
+            axes[i+2].set_title(f"Level {i+1} - P")
+    
+    # Hide any unused subplots (if num_levels is less than grid_size^2)
+    for j in range(num_levels, len(axes)):
+        axes[j].axis('off')
+
+    # Adjust layout and save the figure
+    plt.tight_layout()
+    plt.savefig("sparse_matrix_visualization.png", dpi=300)
+    plt.show()
+   
 #############################################
 def rs_base(A, x, b, max_iter=100, solver='cg'):
     np.random.seed(100)
