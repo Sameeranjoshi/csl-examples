@@ -78,9 +78,9 @@ def AMG_only_solve(A_csr, b0, x0, tol, max_ite, max_levels, max_coarse, solver):
     
     # Start as of now with the solve phase use setup from pyamg.
     ml, setup_config = smooth_aggregate_setup_only(A_csr, x0, b0, solver, max_levels, max_coarse)
-    visualize(ml)
+    # visualize(ml)
         
-    print(ml)
+    # print(ml)
     # print_table_shapes(ml.levels)
     # print_table_data(ml.levels)
     

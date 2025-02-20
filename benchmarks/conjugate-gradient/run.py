@@ -137,10 +137,41 @@ from util import (
 from cg import conjugateGradient
 import amg as amg
 from tabulate import tabulate
+import subprocess
 
 def make_u48(words):
   return words[0] + (words[1] << 16) + (words[2] << 32)
 
+
+from dataclasses import dataclass
+
+@dataclass
+class CompileCoreArgs:
+    cslc: str
+    width: int  # width of the core
+    height: int  # height of the core
+    pe_length: int
+    blockSize: int
+    file_config: str
+    elf_dir: str
+    fabric_width: int
+    fabric_height: int
+    core_fabric_offset_x: int  # fabric-offsets of the core
+    core_fabric_offset_y: int
+    use_precompile: bool
+    arch: Optional[str]
+    C0: int
+    C1: int
+    C2: int
+    C3: int
+    C4: int
+    C5: int
+    C6: int
+    C7: int
+    C8: int
+    channels: int
+    width_west_buf: int
+    width_east_buf: int
 
 def csl_compile_core(
     cslc: str,
@@ -194,12 +225,41 @@ def csl_compile_core(
     args.append(f"--channels={channels}")
     args.append(f"--width-west-buf={width_west_buf}")
     args.append(f"--width-east-buf={width_east_buf}")
+    args.append(f"--max-inlined-iterations=1000000")
 
     print(f"subprocess.check_call(args = {args}")
     subprocess.check_call(args)
   else:
     print("\tuse pre-compile ELFs")
 
+def calculate_fabric_dimensions(args, width, height, width_west_buf, width_east_buf):
+  # fabric-offsets = 1,1
+  fabric_offset_x = 1
+  fabric_offset_y = 1
+  # starting point of the core rectangle = (core_fabric_offset_x, core_fabric_offset_y)
+  # memcpy framework requires 3 columns at the west of the core rectangle
+  # memcpy framework requires 2 columns at the east of the core rectangle
+  core_fabric_offset_x = fabric_offset_x + 3 + width_west_buf
+  core_fabric_offset_y = fabric_offset_y
+  # (min_fabric_width, min_fabric_height) is the minimal dimension to run the app
+  min_fabric_width = (core_fabric_offset_x + width + 2 + 1 + width_east_buf)
+  min_fabric_height = (core_fabric_offset_y + height + 1)
+
+  fabric_width = 0
+  fabric_height = 0
+  if args.fabric_dims:
+    w_str, h_str = args.fabric_dims.split(",")
+    fabric_width = int(w_str)
+    fabric_height = int(h_str)
+
+  if fabric_width == 0 or fabric_height == 0:
+    fabric_width = min_fabric_width
+    fabric_height = min_fabric_height
+
+  assert fabric_width >= min_fabric_width
+  assert fabric_height >= min_fabric_height
+
+  return fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y
 
 def timing_analysis(height, width, zDim, time_memcpy_hwl, time_ref_hwl):
   # print("shape of xf_wse_1d: ", xf_wse_1d.shape)
@@ -320,38 +380,10 @@ def main():
       stencil_coeff[(i, j, 6)] = 6  # center
 
 
-  # fabric-offsets = 1,1
-  fabric_offset_x = 1
-  fabric_offset_y = 1
-  # starting point of the core rectangle = (core_fabric_offset_x, core_fabric_offset_y)
-  # memcpy framework requires 3 columns at the west of the core rectangle
-  # memcpy framework requires 2 columns at the east of the core rectangle
-  core_fabric_offset_x = fabric_offset_x + 3 + width_west_buf
-  core_fabric_offset_y = fabric_offset_y
-  # (min_fabric_width, min_fabric_height) is the minimal dimension to run the app
-  min_fabric_width = (core_fabric_offset_x + width + 2 + 1 + width_east_buf)
-  min_fabric_height = (core_fabric_offset_y + height + 1)
-
-  fabric_width = 0
-  fabric_height = 0
-  if args.fabric_dims:
-    w_str, h_str = args.fabric_dims.split(",")
-    fabric_width = int(w_str)
-    fabric_height = int(h_str)
-
-  if fabric_width == 0 or fabric_height == 0:
-    fabric_width = min_fabric_width
-    fabric_height = min_fabric_height
-
-  assert fabric_width >= min_fabric_width
-  assert fabric_height >= min_fabric_height
-
   # prepare the simulation
   print('store ELFs and log files in the folder ', dirname)
-
   # layout of a rectangle
-  code_csl = "layout.csl"
-
+  code_csl = "./src/layout.csl"
   C0 = 0
   C1 = 1
   C2 = 2
@@ -361,35 +393,18 @@ def main():
   C6 = 6
   C7 = 7
   C8 = 8
-
-  csl_compile_core(
-      cslc,
-      width,
-      height,
-      pe_length,
-      blockSize,
-      code_csl,
-      dirname,
-      fabric_width,
-      fabric_height,
-      core_fabric_offset_x,
-      core_fabric_offset_y,
-      args.run_only,
-      args.arch,
-      C0,
-      C1,
-      C2,
-      C3,
-      C4,
-      C5,
-      C6,
-      C7,
-      C8,
-      channels,
-      width_west_buf,
-      width_east_buf
+  fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y = calculate_fabric_dimensions(args, width, height, width_west_buf, width_east_buf)
+  layout_arguments = CompileCoreArgs(
+      cslc, width, height, pe_length, blockSize, code_csl, dirname,
+      fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y,
+      args.run_only, args.arch, C0, C1, C2, C3, C4, C5, C6, C7, C8, channels,
+      width_west_buf, width_east_buf
   )
+  
+  print("Finer level default layout details")
+  print(layout_arguments)
   if args.compile_only:
+    csl_compile_core(**vars(layout_arguments))
     print("COMPILE ONLY: EXIT")
     return
 
@@ -477,7 +492,7 @@ def main():
   print("##################################################")
   
   # # AMG(CG on device)
-  CG_on_device = (wrapper_solver_device_amg, {"args":args, "dirname":dirname, "max_ite":max_ite, "tol":relative_tol , "stencil_coeff":stencil_coeff, "height":height, "width":width, "zDim":zDim })
+  CG_on_device = (wrapper_solver_device_amg, {"args":args, "dirname":dirname, "max_ite":max_ite, "tol":relative_tol , "stencil_coeff":stencil_coeff, "height":height, "width":width, "zDim":zDim, "layout_arguments": layout_arguments })
   x_my_device, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=1, max_levels=20, max_coarse=27, solver=CG_on_device)      # split into 3 phases
   # test(x_my_device, x_my_host_CG, relative_tol) # test_rs_baseline vs test_rs_baseline
   # test(x_my_device, x_my_host_scipy_CG, relative_tol) # test_rs_baseline vs test_rs_baseline
@@ -563,27 +578,47 @@ def verify(args, dirname, height, width, core_fabric_offset_x, core_fabric_offse
           t = debug_mod.get_symbol(core_fabric_offset_x+px, core_fabric_offset_y+py, 'rho', np.float32)
           print(f"(py, px) = {py, px}, rho_ij = {t}")
 
-def wrapper_solver_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_ite, tol, stencil_coeff, height, width, zDim):
+def wrapper_solver_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_ite, tol, stencil_coeff, height, width, zDim, layout_arguments):
   # setting 
-  height = 3
-  width = 3
+  # height = 3
+  # width = 3
   zDim = 3
-  # tol = tol * tol * tol
+  
+  # # New layout arguments at Coarse level.
+  layout_arguments.height = 3
+  layout_arguments.width = 3
+  layout_arguments.pe_length = 3
+  
+  layout_arguments.fabric_width, layout_arguments.fabric_height, \
+  layout_arguments.core_fabric_offset_x, layout_arguments.core_fabric_offset_y = calculate_fabric_dimensions(args, layout_arguments.width, 
+                                                                                                             layout_arguments.height, 
+                                                                                                             layout_arguments.width_west_buf, 
+                                                                                                             layout_arguments.width_east_buf)
+  
+  # create a new layout based on the last level size.
+  csl_compile_core(**vars(layout_arguments))
+
+  # print fabric details
+  print("##################################################")
+  print("New layout details")
+  print(layout_arguments)
+  print("##################################################")
+  
   print("##################################################")
   print("A_csr.shape: ", A_csr_coarse.shape)
   print(f"b_1d.shape: {b_1d_coarse.shape}")
   print(f"stencil_coeff.shape: {stencil_coeff.shape}, expected: ({height * width * 7})")
-  print(f"height: {height}, width: {width}, zDim: {zDim}")
+  print(f"COARSE: height: {layout_arguments.height}, width: {layout_arguments.width}, pe_length: {layout_arguments.pe_length}")
   print(f"max_ite: {max_ite}, tol: {tol}")
   print("##################################################")
-  return conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse,  args, dirname, max_ite, tol, stencil_coeff, height, width, zDim)
+  return conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse,  args, dirname, max_ite, tol, stencil_coeff, height, width, zDim, layout_arguments)
   
 # x <- fn(A, b, **kwargs), kwargs = shouldn't change.
-def conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_ite, tol, stencil_coeff, height, width, zDim):
+def conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_ite, tol, stencil_coeff, height, width, zDim, coarse_level_layout):
     x_1d_coarse = np.zeros(b_1d_coarse.shape, np.float32) # fix
-    print("Checkpoint 1")
+
     memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
-    simulator = SdkRuntime(dirname, cmaddr=args.cmaddr, msg_level="DEBUG")
+    simulator = SdkRuntime(dirname, cmaddr=args.cmaddr)
 
     symbol_b = simulator.get_id("b")
     symbol_x = simulator.get_id("x")
@@ -591,23 +626,29 @@ def conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_i
     symbol_stencil_coeff = simulator.get_id("stencil_coeff")
     symbol_time_buf_u16 = simulator.get_id("time_buf_u16")
     symbol_time_ref = simulator.get_id("time_ref")
-    print("Checkpoint 2")
+
     simulator.load()
-    print("Checkpoint 2.1")
+
     simulator.run()
-    print("Checkpoint 3")
-    print(f"copy vector b and x0")
-    simulator.memcpy_h2d(symbol_b, b_1d_coarse, 0, 0, width, height, zDim,\
-    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
-    simulator.memcpy_h2d(symbol_x, x_1d_coarse, 0, 0, width, height, zDim,\
-    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+    # print(f"copy vector b and x0")
+    # simulator.memcpy_h2d(symbol_b, b_1d_coarse, 0, 0, coarse_level_layout.width, coarse_level_layout.height, zDim,\
+    # streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
-    print(f"copy 7 stencil coefficients")
-    stencil_coeff_1d = hwl_2_oned_colmajor(height, width, 7, stencil_coeff, np.float32)
-    simulator.memcpy_h2d(symbol_stencil_coeff, stencil_coeff_1d, 0, 0, width, height, 7,\
-    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
-    print("Checkpoint 4")
+    # simulator.memcpy_h2d(symbol_x, x_1d_coarse, 0, 0 ,coarse_level_layout.width, coarse_level_layout.height, zDim,\
+    # streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+
+    # print(f"copy 7 stencil coefficients")
+    # stencil_coeff_1d = hwl_2_oned_colmajor(coarse_level_layout.height, coarse_level_layout.width, 7, stencil_coeff, np.float32)
+    # simulator.memcpy_h2d(symbol_stencil_coeff, stencil_coeff_1d, 0, 0, coarse_level_layout.width, coarse_level_layout.height, 7,\
+    # streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+
+    # print x , b, stencil_coeff
+    print("##################################################")
+    # print("b_1d_coarse: ", b_1d_coarse)
+    # print("x_1d_coarse: ", x_1d_coarse)
+    # print("stencil_coeff_1d: ", stencil_coeff_1d)
+    print("##################################################")
     print("step 0: enable timer")
     simulator.launch("f_enable_timer", nonblock=False)
 
@@ -688,27 +729,29 @@ def conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_i
     simulator.launch("f_memcpy_timestamps", nonblock=False)
 
     print("step 7: D2H (time_start, time_end)")
-    time_memcpy_hwl_1d = np.zeros(height*width*6, np.uint32)
-    simulator.memcpy_d2h(time_memcpy_hwl_1d, symbol_time_buf_u16, 0, 0, width, height, 6,\
+    time_memcpy_hwl_1d = np.zeros(coarse_level_layout.height*coarse_level_layout.width*6, np.uint32)
+    simulator.memcpy_d2h(time_memcpy_hwl_1d, symbol_time_buf_u16, 0, 0, coarse_level_layout.width, coarse_level_layout.height, 6,\
     streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=False)
-    time_memcpy_hwl = oned_to_hwl_colmajor(height, width, 6, time_memcpy_hwl_1d, np.uint16)
+    time_memcpy_hwl = oned_to_hwl_colmajor(coarse_level_layout.height, coarse_level_layout.width, 6, time_memcpy_hwl_1d, np.uint16)
 
     print("step 8: D2H reference clock")
-    time_ref_1d = np.zeros(height*width*3, np.uint32)
-    simulator.memcpy_d2h(time_ref_1d, symbol_time_ref, 0, 0, width, height, 3,\
+    time_ref_1d = np.zeros(coarse_level_layout.height*coarse_level_layout.width*3, np.uint32)
+    simulator.memcpy_d2h(time_ref_1d, symbol_time_ref, 0, 0, coarse_level_layout.width, coarse_level_layout.height, 3,\
     streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=False)
-    time_ref_hwl = oned_to_hwl_colmajor(height, width, 3, time_ref_1d, np.uint16)
+    time_ref_hwl = oned_to_hwl_colmajor(coarse_level_layout.height, coarse_level_layout.width, 3, time_ref_1d, np.uint16)
 
     print("step 9: D2H x[zDim]")
-    xf_wse_1d = np.zeros(height*width*zDim, np.float32)
-    simulator.memcpy_d2h(xf_wse_1d, symbol_x, 0, 0, width, height, zDim,\
+    xf_wse_1d = np.zeros(coarse_level_layout.height*coarse_level_layout.width*zDim, np.float32)
+    simulator.memcpy_d2h(xf_wse_1d, symbol_x, 0, 0, coarse_level_layout.width, coarse_level_layout.height, zDim,\
     streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
 
     simulator.stop()
-    timing_analysis(height, width, zDim, time_memcpy_hwl, time_ref_hwl)
+    timing_analysis(coarse_level_layout.height, coarse_level_layout.width, zDim, time_memcpy_hwl, time_ref_hwl)
     print("xf_wse_1d.shape: ", xf_wse_1d.shape)
     return xf_wse_1d
 
+
+################################################################AMG############################################
 def conjugateGradient_device(stencil_coeff, b_1d, x_1d, args, dirname, height, width, zDim, max_ite, tol):
     memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
     simulator = SdkRuntime(dirname, cmaddr=args.cmaddr)
@@ -830,7 +873,6 @@ def conjugateGradient_device(stencil_coeff, b_1d, x_1d, args, dirname, height, w
     
     return xf_wse_1d
 
-################################################################AMG############################################
 def amg_setup_H_solve_D(
                                                              A_csr, x_1d, b_1d, 
                                                              stencil_coeff, args, dirname, height, width, zDim, max_ite, relative_tol

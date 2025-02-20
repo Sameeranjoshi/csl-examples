@@ -29,6 +29,8 @@ const math_lib = @import_module("<math>");
 
 const blas_lib = @import_module("blas.csl");
 
+const simprint = @import_module("<simprint>");
+
 // memcpy module reserves
 // - input/output queue 0 and 1
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
@@ -161,10 +163,45 @@ fn f_cg_init(size:i16) void {
     sys_mod.unblock_cmd_stream();
 }
 
+fn f_dense_Ax() void {
+    // some other logic
+    simprint.fmt_with_coords("In fn f_dense_Ax", .{});
+    simprint.print_string("\n");
+}
 
 // w = A*x
 fn f_spmv_Ax() void {
+    simprint.print_string("In fn f_spmv_Ax\n");
+
+    // Assuming x is an array or slice of numbers
+
+    for (stencil_coeff) |val, i| {
+        simprint.fmt_with_coords("stencil_coeff[{d}] = {f}", .{ i, val });
+    }
+    for (x) |val, i| {
+        simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
+    }
+    for (w) |val, i| {
+        simprint.fmt_with_coords("b[{d}] = {f}", .{ i, val });
+    }    
+
+    simprint.print_string("\n");
+   
     stencil_mod.spmv(n, &stencil_coeff, &x, &w);
+    
+    for (stencil_coeff) |val, i| {
+        simprint.fmt_with_coords("stencil_coeff[{d}] = {f}", .{ i, val });
+    }
+    for (x) |val, i| {
+        simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
+    }
+    for (w) |val, i| {
+        simprint.fmt_with_coords("b[{d}] = {f}", .{ i, val });
+    }    
+    
+    simprint.print_string("\n");
+   
+    //   simprint.print_string("\n");
 }
 
 // compute r = b - w and rho = |r|^2
@@ -200,6 +237,10 @@ fn f_update_p(k:i16) void {
     sys_mod.unblock_cmd_stream();
 }
 
+fn f_dense_Ap() void {
+    // some other logic
+    simprint.fmt_with_coords("In fn f_dense_Ap", .{});
+}
 // w = A*p
 fn f_spmv_Ap() void {
     stencil_mod.spmv(n, &stencil_coeff, &p, &w);
@@ -280,9 +321,11 @@ comptime{
 
     @export_symbol(f_cg_init);
     @export_symbol(f_spmv_Ax);
+    @export_symbol(f_dense_Ax);
     @export_symbol(f_residual);
     @export_symbol(f_update_p);
     @export_symbol(f_spmv_Ap);
+    @export_symbol(f_dense_Ap);
     @export_symbol(f_eta);
     @export_symbol(f_update_x_r_rho);
 
