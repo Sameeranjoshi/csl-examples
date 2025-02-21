@@ -132,12 +132,15 @@ from util import (
     oned_to_hwl_colmajor,
     laplacian,
     csr_7_pt_stencil,
+    plot_3d_shapes,
+
 )
 
 from cg import conjugateGradient
 import amg as amg
 from tabulate import tabulate
 import subprocess
+
 
 def make_u48(words):
   return words[0] + (words[1] << 16) + (words[2] << 32)
@@ -379,7 +382,6 @@ def main():
       stencil_coeff[(i, j, 5)] = -1 # top
       stencil_coeff[(i, j, 6)] = 6  # center
 
-
   # prepare the simulation
   print('store ELFs and log files in the folder ', dirname)
   # layout of a rectangle
@@ -417,6 +419,17 @@ def main():
   assert 0 == np.linalg.norm(A_csr.indices - A_csc.indices, np.inf), "A must be symmetric"
   assert 0 == np.linalg.norm(A_csr.data - A_csc.data, np.inf), "A must be symmetric"
 
+  
+  # visualize:
+  plot_3d_shapes([x, b, stencil_coeff], 
+               titles=["Array X - Slices along Z-Dimension", 
+                       "Array B - Slices along PE-Dimension", 
+                       "Stencil Coefficients",
+                       "Matrix A_csr.toarray()"], 
+               colors=["grey", "yellow", "pink", "springgreen"], 
+               alphas=[1, 1, 1, 1],
+               filename="fine_level.png")
+  print("##################################################")
   nrm_b = np.linalg.norm(b_1d.ravel(), 2)
   eps = 1.e-8 # -3 is too weak verification, -8 is typical for single precision(reltol=1e-4)
   tol = eps * nrm_b # This is absolute tolerance, Note:be careful about checks later.
@@ -626,29 +639,76 @@ def conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_i
     symbol_stencil_coeff = simulator.get_id("stencil_coeff")
     symbol_time_buf_u16 = simulator.get_id("time_buf_u16")
     symbol_time_ref = simulator.get_id("time_ref")
+    symbol_dummyA = simulator.get_id("dummyA")
+    
 
     simulator.load()
 
     simulator.run()
 
-    # print(f"copy vector b and x0")
-    # simulator.memcpy_h2d(symbol_b, b_1d_coarse, 0, 0, coarse_level_layout.width, coarse_level_layout.height, zDim,\
-    # streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+    # visualize
+    x_3d = x_1d_coarse.reshape(coarse_level_layout.height, coarse_level_layout.width, zDim)
+    b_3d = b_1d_coarse.reshape(coarse_level_layout.height, coarse_level_layout.width, zDim)
+    
 
-    # simulator.memcpy_h2d(symbol_x, x_1d_coarse, 0, 0 ,coarse_level_layout.width, coarse_level_layout.height, zDim,\
-    # streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+    A_rows = A_csr_coarse.toarray().shape[0] 
+    A_cols = A_csr_coarse.toarray().shape[1]
+    kernel_rows = coarse_level_layout.height
+    kernel_cols = coarse_level_layout.width
+    
+    per_pe_rows = A_rows // kernel_rows
+    per_pe_cols = A_cols // kernel_cols
+    
+    print("A_csr_coarse.rows: ", A_csr_coarse.shape[0])
+    print("A_csr_coarse.cols: ", A_csr_coarse.shape[1])
+    print("Total PE rows: ", coarse_level_layout.height)
+    print("Total PE cols: ", coarse_level_layout.width)
+    print(f"the local size of y: per_pe_rows = {per_pe_rows}")
+    print(f"the local size of x: per_pe_cols = {per_pe_cols}")
 
-    # print(f"copy 7 stencil coefficients")
-    # stencil_coeff_1d = hwl_2_oned_colmajor(coarse_level_layout.height, coarse_level_layout.width, 7, stencil_coeff, np.float32)
-    # simulator.memcpy_h2d(symbol_stencil_coeff, stencil_coeff_1d, 0, 0, coarse_level_layout.width, coarse_level_layout.height, 7,\
-    # streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+    A1 = A_csr_coarse.toarray().reshape(kernel_rows, per_pe_rows,
+               kernel_cols, per_pe_cols)
+    A2 = A1.transpose(0, 2, 1, 3)
+    A3 = A2.reshape(kernel_rows, kernel_cols, per_pe_rows*per_pe_cols)
+    print("A3.shape: ", A3.shape)
+    print("A3.ndim: ", A3.ndim)
+    print("Stencil_coeff.shape: ", stencil_coeff.shape)
+    print("Stencil_coeff.ndim: ", stencil_coeff.ndim)
+    plot_3d_shapes([x_3d, b_3d, A3], 
+                titles=["Array X - Coarse", 
+                        "Array B - Coarse", 
+                        "A_coarse"], 
+                colors=["grey", "yellow", "pink"], 
+                alphas=[1, 1, 1],
+                filename="coarse_level.png")
+    print(A3.shape)
+    
+    
+    print(f"copy vector b and x0")
+    print(b_1d_coarse)
+    simulator.memcpy_h2d(symbol_b, b_1d_coarse, 0, 0, coarse_level_layout.width, coarse_level_layout.height, zDim,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
-    # print x , b, stencil_coeff
-    print("##################################################")
-    # print("b_1d_coarse: ", b_1d_coarse)
-    # print("x_1d_coarse: ", x_1d_coarse)
-    # print("stencil_coeff_1d: ", stencil_coeff_1d)
-    print("##################################################")
+    simulator.memcpy_h2d(symbol_x, x_1d_coarse, 0, 0 ,coarse_level_layout.width, coarse_level_layout.height, zDim,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+
+    print(f"copy 7 stencil coefficients")
+    stencil_coeff_1d = hwl_2_oned_colmajor(coarse_level_layout.height, coarse_level_layout.width, 7, stencil_coeff, np.float32)
+    simulator.memcpy_h2d(symbol_stencil_coeff, stencil_coeff_1d, 0, 0, coarse_level_layout.width, coarse_level_layout.height, 7,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+    
+    print(f"copy dummyA")
+    dummyA = np.arange(1, A3.size + 1, dtype=np.float32).reshape(A3.shape)
+    dummy_1d = hwl_2_oned_colmajor(coarse_level_layout.height, coarse_level_layout.width, per_pe_rows*per_pe_cols, dummyA, np.float32)
+    # print(symbol_dummyA)
+    # print(symbol_rho)
+    # print(symbol_stencil_coeff)
+    simulator.memcpy_h2d(symbol_dummyA, dummy_1d, 0, 0, coarse_level_layout.width, coarse_level_layout.height, per_pe_rows*per_pe_cols, \
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
+    
+    print("step 0.0: print layouts and data on (0,0) PE")
+    simulator.launch("f_print_dummy_1d", nonblock=False)
+    
     print("step 0: enable timer")
     simulator.launch("f_enable_timer", nonblock=False)
 
@@ -745,6 +805,21 @@ def conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_i
     simulator.memcpy_d2h(xf_wse_1d, symbol_x, 0, 0, coarse_level_layout.width, coarse_level_layout.height, zDim,\
     streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
 
+    # # Now get the data back from device
+    print("step 10: D2H dummyA")
+    device_dummy_1d = np.zeros(coarse_level_layout.height*coarse_level_layout.width*per_pe_rows*per_pe_cols, np.float32)
+    simulator.memcpy_d2h(device_dummy_1d, symbol_dummyA, 0, 0, coarse_level_layout.width, coarse_level_layout.height, per_pe_rows*per_pe_cols,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    
+    # check if device_dumy_1d and dummy_1d are same
+    if np.array_equal(device_dummy_1d, dummy_1d):
+        print("Arrays are exactly the same!")
+    else:
+        print("Arrays are different.")
+        print("Host: ", dummy_1d[0:10])
+        print("Device: ", device_dummy_1d[0:10])
+    
+    
     simulator.stop()
     timing_analysis(coarse_level_layout.height, coarse_level_layout.width, zDim, time_memcpy_hwl, time_ref_hwl)
     print("xf_wse_1d.shape: ", xf_wse_1d.shape)

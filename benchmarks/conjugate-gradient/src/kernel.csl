@@ -31,6 +31,8 @@ const blas_lib = @import_module("blas.csl");
 
 const simprint = @import_module("<simprint>");
 
+const layout_module = @import_module("<layout>");
+
 // memcpy module reserves
 // - input/output queue 0 and 1
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
@@ -85,6 +87,7 @@ var beta: f32 = @as(f32,0);
 //    c_bottom * x[i][j][k-1] + c_top * x[i][j][k+1] +
 //    c_center * x[i][j][k]
 var stencil_coeff = @zeros([7]f32);
+var dummyA = @zeros([81]f32);
 
 // time_buf_u16[0:5] = {tscStartBuffer, tscEndBuffer}
 var time_buf_u16 = @zeros([timestamp.tsc_size_words*2]u16);
@@ -95,6 +98,7 @@ var time_ref_u16 = @zeros([timestamp.tsc_size_words]u16);
 var ptr_b: [*]f32 = &b;
 var ptr_x: [*]f32 = &x;
 var ptr_stencil_coeff: [*]f32 = &stencil_coeff;
+var ptr_dummyA: [*]f32 = &dummyA;
 var ptr_time_buf_u16: [*]u16 = &time_buf_u16;
 var ptr_time_ref: [*]u16 = &time_ref_u16;
 var ptr_rho: [*]f32 = &rho;
@@ -107,7 +111,47 @@ var mem_x_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> x[i] });
 var mem_r_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r[i] });
 var mem_p_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> p[i] });
 var mem_w_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> w[i] });
+var mem_dummyA_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{81} -> dummyA[i] });
 
+
+fn f_print_dummy_1d() void {
+    var my_pe_col_id = layout_module.get_x_coord();
+    var my_pe_row_id = layout_module.get_y_coord();  
+    if (my_pe_col_id == 0 and my_pe_row_id == 0) {
+        simprint.print_string("In fn f_print_dummy_1d\n");
+  
+        for (dummyA) |val, i| {
+            simprint.fmt_with_coords("dummyA[{d}] = {f}", .{ i, val });
+        }
+        simprint.print_string("\n");
+
+        for (stencil_coeff) |val, i| {
+            simprint.fmt_with_coords("stencil_coeff[{d}] = {f}", .{ i, val });
+        }
+        simprint.print_string("\n");
+
+        for (x) |val, i| {
+            simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
+        }
+        simprint.print_string("\n");
+
+        // print b
+        for (b) |val, i| {
+            simprint.fmt_with_coords("b[{d}] = {f}", .{ i, @as(f32,val)  });
+        }
+        simprint.print_string("\n");
+
+    }
+    // // change the value of dummyA
+    // // for (dummyA) |val, i| {
+    // //     dummyA[i] = 1.0;
+    // // }
+    // // use  mem_dummyA_dsd to change 
+    // // the value of dummyA
+    // @fsubs(mem_dummyA_dsd, mem_dummyA_dsd, 1000.0);
+
+    sys_mod.unblock_cmd_stream();
+}
 
 fn f_enable_timer() void {
     timestamp.enable_tsc();
@@ -308,6 +352,7 @@ comptime {
     @export_symbol(ptr_b, "b");
     @export_symbol(ptr_x, "x");
     @export_symbol(ptr_stencil_coeff, "stencil_coeff");
+    @export_symbol(ptr_dummyA, "dummyA");
     @export_symbol(ptr_time_buf_u16, "time_buf_u16");
     @export_symbol(ptr_time_ref, "time_ref");
     @export_symbol(ptr_rho, "rho");
@@ -315,6 +360,7 @@ comptime {
 
 comptime{
     @export_symbol(f_enable_timer);
+    @export_symbol(f_print_dummy_1d);
     @export_symbol(f_tic);
     @export_symbol(f_toc);
     @export_symbol(f_memcpy_timestamps);
