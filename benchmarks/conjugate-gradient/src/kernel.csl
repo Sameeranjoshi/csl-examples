@@ -58,6 +58,7 @@ const stencil_mod = @import_module( "../../csl-libs/stencil_3d_7pts/pe.csl", @co
      .src1_dsr_ids = [2]u16{2,3}
      }));
 
+// const matmul_mod = @import_module("../../csl-libs/matmul/pe.csl");
 
 // tsc_size_words = 3
 // starting time of H2D/D2H
@@ -65,7 +66,7 @@ var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
 // ending time of H2D/D2H
 var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
 
-
+const sizeA = 81;
 var b = @zeros([MAX_ZDIM]f32); // right-hand-side
 var x = @zeros([MAX_ZDIM]f32); // approximated solution
 var p = @zeros([MAX_ZDIM]f32); // Krylov space
@@ -87,8 +88,7 @@ var beta: f32 = @as(f32,0);
 //    c_bottom * x[i][j][k-1] + c_top * x[i][j][k+1] +
 //    c_center * x[i][j][k]
 var stencil_coeff = @zeros([7]f32);
-var dummyA = @zeros([81]f32);
-
+var dummyA = @zeros([sizeA]f32);
 // time_buf_u16[0:5] = {tscStartBuffer, tscEndBuffer}
 var time_buf_u16 = @zeros([timestamp.tsc_size_words*2]u16);
 
@@ -111,13 +111,13 @@ var mem_x_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> x[i] });
 var mem_r_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r[i] });
 var mem_p_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> p[i] });
 var mem_w_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> w[i] });
-var mem_dummyA_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{81} -> dummyA[i] });
+var mem_dummyA_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{sizeA} -> dummyA[i] });
 
 
 fn f_print_dummy_1d() void {
     var my_pe_col_id = layout_module.get_x_coord();
     var my_pe_row_id = layout_module.get_y_coord();  
-    if (my_pe_col_id == 0 and my_pe_row_id == 0) {
+    if (my_pe_col_id == 0 and (my_pe_row_id == 0)) {
         simprint.print_string("In fn f_print_dummy_1d\n");
   
         for (dummyA) |val, i| {
@@ -134,14 +134,12 @@ fn f_print_dummy_1d() void {
             simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
         }
         simprint.print_string("\n");
-
+    }
         // print b
         for (b) |val, i| {
             simprint.fmt_with_coords("b[{d}] = {f}", .{ i, @as(f32,val)  });
         }
         simprint.print_string("\n");
-
-    }
     // // change the value of dummyA
     // // for (dummyA) |val, i| {
     // //     dummyA[i] = 1.0;
@@ -211,41 +209,14 @@ fn f_dense_Ax() void {
     // some other logic
     simprint.fmt_with_coords("In fn f_dense_Ax", .{});
     simprint.print_string("\n");
+    // matmul_mod.dense(n, &dummyA, &x, &w);
 }
 
 // w = A*x
 fn f_spmv_Ax() void {
     simprint.print_string("In fn f_spmv_Ax\n");
-
-    // Assuming x is an array or slice of numbers
-
-    for (stencil_coeff) |val, i| {
-        simprint.fmt_with_coords("stencil_coeff[{d}] = {f}", .{ i, val });
-    }
-    for (x) |val, i| {
-        simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
-    }
-    for (w) |val, i| {
-        simprint.fmt_with_coords("b[{d}] = {f}", .{ i, val });
-    }    
-
-    simprint.print_string("\n");
-   
     stencil_mod.spmv(n, &stencil_coeff, &x, &w);
-    
-    for (stencil_coeff) |val, i| {
-        simprint.fmt_with_coords("stencil_coeff[{d}] = {f}", .{ i, val });
-    }
-    for (x) |val, i| {
-        simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
-    }
-    for (w) |val, i| {
-        simprint.fmt_with_coords("b[{d}] = {f}", .{ i, val });
-    }    
-    
     simprint.print_string("\n");
-   
-    //   simprint.print_string("\n");
 }
 
 // compute r = b - w and rho = |r|^2

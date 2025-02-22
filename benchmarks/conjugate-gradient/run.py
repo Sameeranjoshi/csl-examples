@@ -681,7 +681,6 @@ def conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_i
                 colors=["grey", "yellow", "pink"], 
                 alphas=[1, 1, 1],
                 filename="coarse_level.png")
-    print(A3.shape)
     
     
     print(f"copy vector b and x0")
@@ -700,12 +699,9 @@ def conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_i
     print(f"copy dummyA")
     dummyA = np.arange(1, A3.size + 1, dtype=np.float32).reshape(A3.shape)
     dummy_1d = hwl_2_oned_colmajor(coarse_level_layout.height, coarse_level_layout.width, per_pe_rows*per_pe_cols, dummyA, np.float32)
-    # print(symbol_dummyA)
-    # print(symbol_rho)
-    # print(symbol_stencil_coeff)
     simulator.memcpy_h2d(symbol_dummyA, dummy_1d, 0, 0, coarse_level_layout.width, coarse_level_layout.height, per_pe_rows*per_pe_cols, \
     streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
-    
+
     print("step 0.0: print layouts and data on (0,0) PE")
     simulator.launch("f_print_dummy_1d", nonblock=False)
     
@@ -828,6 +824,7 @@ def conjugateGradient_device_amg(A_csr_coarse, b_1d_coarse, args, dirname, max_i
 
 ################################################################AMG############################################
 def conjugateGradient_device(stencil_coeff, b_1d, x_1d, args, dirname, height, width, zDim, max_ite, tol):
+    pass
     memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
     simulator = SdkRuntime(dirname, cmaddr=args.cmaddr)
 
@@ -952,6 +949,7 @@ def amg_setup_H_solve_D(
                                                              A_csr, x_1d, b_1d, 
                                                              stencil_coeff, args, dirname, height, width, zDim, max_ite, relative_tol
                                                              ):
+    pass
     ml, level_data, setup_config, solve_config = amg.smooth_aggregate_setup_only(A_csr, x_1d, b_1d, max_ite, relative_tol, solver_callable='cg')
     print(tabulate(level_data, headers="keys", tablefmt="grid"))
     
