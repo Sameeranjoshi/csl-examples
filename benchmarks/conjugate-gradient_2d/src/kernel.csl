@@ -14,25 +14,16 @@
 
 
 param memcpyParams: comptime_struct;
-
 param reduceParams: comptime_struct;
-
 param stencilParams: comptime_struct;
-
-param MAX_ZDIM: i16; // size of vector x
-
 param BLOCK_SIZE: i16; // size of temporary buffers for communication
-
+// Size of our local tile of `A`
+param local_rows: u16; // Height of local matrix, or num rows per PE
+param local_cols: u16; // Width of local matrix, or num cols per PE
 const timestamp = @import_module("<time>");
-
 const math_lib = @import_module("<math>");
-
 const blas_lib = @import_module("blas.csl");
-
-// memcpy module reserves
-// - input/output queue 0 and 1
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
-
 // allreduce uses input queue/output queue 1
 const reduce_mod = @import_module( "../../csl-libs/allreduce/pe.csl", @concat_structs(reduceParams, .{
      .f_callback = sys_mod.unblock_cmd_stream,
@@ -57,17 +48,17 @@ const stencil_mod = @import_module( "../../csl-libs/stencil_3d_7pts/pe.csl", @co
 
 // tsc_size_words = 3
 // starting time of H2D/D2H
+
 var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
 // ending time of H2D/D2H
 var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
+var b = @zeros([1]f32); // right-hand-side
+var x = @zeros([1]f32); // approximated solution
+var p = @zeros([1]f32); // Krylov space
+var w = @zeros([1]f32); // w = A * p
+var r = @zeros([1]f32); // residual
 
-
-var b = @zeros([MAX_ZDIM]f32); // right-hand-side
-var x = @zeros([MAX_ZDIM]f32); // approximated solution
-var p = @zeros([MAX_ZDIM]f32); // Krylov space
-var w = @zeros([MAX_ZDIM]f32); // w = A * p
-var r = @zeros([MAX_ZDIM]f32); // residual
-
+// A = 10x5, x = 5x1, b = 10x1
 var dot = @zeros([1]f32); // dummy variable for f_sync
 var rho = @zeros([1]f32);
 var rho_old = @zeros([1]f32);

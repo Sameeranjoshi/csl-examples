@@ -39,11 +39,21 @@ param C7_ID: i16;
 // c8 is an internal color of allreduce
 param C8_ID: i16;
 
-param MAX_ZDIM: i16; // maximum size of local vector x and y
-param width: i16 ; // width of the core
-param height: i16 ; // height of the core
 
+param pe_cols: i16 ; // width of the core rectangle
+param pe_rows: i16 ; // height of the core rectangle
+param matrix_rows: i16; // number of rows in the matrix
+param matrix_cols: i16; // number of columns in the matrix
 param BLOCK_SIZE: i16; // size of temporary buffers for communication
+comptime {
+  // Number of matrix rows must be multiple of kernel rectangle height
+  @comptime_assert(matrix_rows % pe_rows == 0);
+  // Number of matrix cols must be multiple of kernel rectangle width
+  @comptime_assert(matrix_cols % pe_cols == 0);
+}
+// Local matrix dimensions
+const local_rows: u16 = matrix_rows / pe_rows; // Number of rows per PE
+const local_cols: u16 = matrix_cols / pe_cols; // Number of columns per PE
 
 const C0: color = @get_color(C0_ID);
 const C1: color = @get_color(C1_ID);
@@ -69,20 +79,20 @@ const EN_REDUCE_4: local_task_id = @get_local_task_id(20);
 const stencil = @import_module( "../../csl-libs/stencil_3d_7pts/layout.csl", .{
     .colors = [8]color{C0, C1, C2, C3, C4, C5, C6, C7},
     .entrypoints = [3]local_task_id{EN_STENCIL_1, EN_STENCIL_2, EN_STENCIL_3},
-    .width = width,
-    .height = height
+    .width = pe_cols,
+    .height = pe_rows
     });
 
 const reduce = @import_module( "../../csl-libs/allreduce/layout.csl", .{
     .colors = [1]color{C8},
     .entrypoints = [4]local_task_id{EN_REDUCE_1, EN_REDUCE_2, EN_REDUCE_3, EN_REDUCE_4},
-    .width = width,
-    .height = height
+    .width = pe_cols,
+    .height = pe_rows
     });
 
 const memcpy = @import_module( "<memcpy/get_params>", .{
-    .width = width,
-    .height = height,
+    .width = pe_cols,
+    .height = pe_rows
     });
 
 layout{
@@ -97,15 +107,15 @@ layout{
     @comptime_assert(C7_ID < C8_ID);
 
     // step 1: configure the rectangle which does not include halo
-    @set_rectangle( width, height );
+    @set_rectangle( pe_cols, pe_rows );
 
     // step 2: compile csl code for a set of PEx.y and generate out_x_y.elf
     //   format: @set_tile_code(x, y, code.csl, param_binding);
 
     var py: i16 = 0;
-    while(py < height) : (py +=1) {
+    while(py < pe_rows) : (py +=1) {
         var px: i16 = 0;
-        while(px < width) : (px +=1) {
+        while(px < pe_cols) : (px +=1) {
 
             const memcpyParams = memcpy.get_params(px);
             const stencilParams = stencil.get_params(px, py);
@@ -113,9 +123,10 @@ layout{
             var params: comptime_struct = .{
                 .memcpyParams = memcpyParams,
                 .reduceParams = reduceParams,
-                .MAX_ZDIM = MAX_ZDIM,
                 .BLOCK_SIZE = BLOCK_SIZE,
-                .stencilParams = stencilParams
+                .stencilParams = stencilParams,
+                .local_rows = local_rows,
+                .local_cols = local_cols
             };
 
             @set_tile_code(px, py, "kernel.csl", params);

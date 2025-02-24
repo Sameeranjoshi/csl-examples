@@ -15,12 +15,7 @@
 # This is not a real test, but a module that gets imported in other tests.
 
 """command parser for bandwidthTest
-
-   -m <int>     number of rows of the core rectangle
-   -n <int>     number of columns of the core rectangle
-   -k <int>     number of elements of local tensor
-   --zDim <int>   number of elements to compute y=A*x
-   --blockSize <int>  the size of temporary buffers for communication
+   
    --latestlink   working directory
    --driver     path to CSL compiler
    --fabric-dims  fabric dimension of a WSE
@@ -39,22 +34,9 @@ import argparse
 
 def parse_args():
   parser = argparse.ArgumentParser()
-  parser.add_argument(
-      "-m",
-      default=1, type=int,
-      help="number of rows")
-  parser.add_argument(
-      "-n",
-      default=1, type=int,
-      help="number of columns")
-  parser.add_argument(
-      "-k",
-      default=1, type=int,
-      help="size of local tensor, no less than 2")
-  parser.add_argument(
-      "--zDim",
-      default=2, type=int,
-      help="[0 zDim-1) is the domain of Laplacian")
+
+  parser.add_argument("--name", required=False, default="out",
+                      help="prefix of ELF files")
   parser.add_argument(
       "--max-ite",
       default=1, type=int,
@@ -93,11 +75,7 @@ def parse_args():
       "--channels",
       default=1, type=int,
       help="number of I/O channels, between 1 and 16")
-  parser.add_argument(
-      "--blockSize",
-      default=2, type=int,
-      help="the size of temporary buffers for communication")
-
+  
   args = parser.parse_args()
 
   logs_dir = "latest"

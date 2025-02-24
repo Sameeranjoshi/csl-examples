@@ -47,7 +47,6 @@ def hwl_2_oned_colmajor(
         idx = idx + 1
   return A_1d
 
-
 def oned_to_hwl_colmajor(
     height: int,
     width: int,
