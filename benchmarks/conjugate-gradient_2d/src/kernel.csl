@@ -14,7 +14,6 @@
 
 
 param memcpyParams: comptime_struct;
-param reduceParams: comptime_struct;
 param BLOCK_SIZE: i16; // size of temporary buffers for communication
 // Size of our local tile of `A`
 param local_rows: i16; // Height of local matrix, or num rows per PE
@@ -25,15 +24,6 @@ const blas_lib = @import_module("blas.csl");
 const layout_module = @import_module("<layout>");
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
 const simprint = @import_module("<simprint>");
-// allreduce uses input queue/output queue 1
-const reduce_mod = @import_module( "../../csl-libs/allreduce/pe.csl", @concat_structs(reduceParams, .{
-     .f_callback = sys_mod.unblock_cmd_stream,
-     .queues = [1]u16{2},
-     .dest_dsr_ids = [1]u16{1},
-     .src0_dsr_ids = [1]u16{1},
-     .src1_dsr_ids = [1]u16{1}
-     }));
-
 
 // tsc_size_words = 3
 // starting time of H2D/D2H
@@ -116,55 +106,51 @@ fn f_memcpy_timestamps() void {
 // - setup the size of local tensor
 //
 fn f_cg_init() void {
-    simprint.print_string("In init\n");
-    simprint.print_string("\n");
-    simprint.fmt_with_coords("local_rows: {d}", .{@as(u16, local_rows)});
-    simprint.fmt_with_coords("local_cols: {d}", .{@as(u16, local_cols)});
-    simprint.print_string("\n");
+    // simprint.print_string("In init\n");
+    // simprint.print_string("\n");
+    // // simprint.fmt_with_coords("local_rows: {d}", .{@as(u16, local_rows)});
+    // // simprint.fmt_with_coords("local_cols: {d}", .{@as(u16, local_cols)});
+    // simprint.print_string("\n");
 
-    var my_pe_col_id = layout_module.get_x_coord();
-    var my_pe_row_id = layout_module.get_y_coord();  
-    if (my_pe_col_id == 0 and my_pe_row_id == 0) {
-  
-        for (@range(i16, local_rows)) |i| {   // Iterate over columns first
-            for (@range(i16, local_cols)) |j| { // Iterate over rows second
-                simprint.fmt_with_coords("A[{d}][{d}] = {f}", .{@as(u16,i), @as(u16,j), A[i*local_cols + j]});
-            }
-        }
-        simprint.print_string("\n");
+    // var my_pe_col_id = layout_module.get_x_coord();
+    // var my_pe_row_id = layout_module.get_y_coord();  
 
-        for (b) |val, i| {
-            simprint.fmt_with_coords("b[{d}] = {f}", .{ i, val });
-        }
-        simprint.print_string("\n");
+    //     // for (@range(i16, local_rows)) |i| {   // Iterate over columns first
+    //     //     for (@range(i16, local_cols)) |j| { // Iterate over rows second
+    //     //         simprint.fmt_with_coords("A[{d}][{d}] = {f}", .{@as(u16,i), @as(u16,j), A[i*local_cols + j]});
+    //     //     }
+    //     // }
+    //     // simprint.print_string("\n");
 
-        for (x) |val, i| {
-            simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
-        }
-        simprint.print_string("\n");
-    }
+    //     for (b) |val, i| {
+    //         simprint.fmt_with_coords("b[{d}] = {f}", .{ i, val });
+    //     }
+    //     simprint.print_string("\n");
+
+    //     for (x) |val, i| {
+    //         simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
+    //     }
+    //     simprint.print_string("\n");
+    // }
     // the user must unblock cmd color for every PE
     
-    // Explicitly initialize A, x, w
-    for (@range(i16, local_cols * local_rows)) |i| { A[i] = 1.0; }
-    for (@range(i16, local_cols)) |i| { x[i] = 1.0; }
-    for (@range(i16, local_rows)) |i| { w[i] = 0.0; }
+
 
     sys_mod.unblock_cmd_stream();
 }
 
 // local GEMV col-major
 fn gemv(A: [*]f32, x: [*]f32, y:[*]f32) void {
-  for (@range(i16, local_cols)) |j| {   // Iterate over columns first
-    for (@range(i16, local_rows)) |i| { // Iterate over rows second
-      y[i] += A[j*local_rows + i] * x[j]; // Access A in column-major order
-    }
-  }
+//   for (@range(i16, local_cols)) |j| {   // Iterate over columns first
+//     for (@range(i16, local_rows)) |i| { // Iterate over rows second
+//       y[i] += A[j*local_rows + i] * x[j]; // Access A in column-major order
+//     }
+//   }
 }
 
 // w = A*x
 fn f_spmv_Ax() void {
-    // gemv(&A, &x, &w);
+    gemv(&A, &x, &w);
     // the user must unblock cmd color for every PE
 }
 
@@ -178,8 +164,6 @@ fn f_residual() void {
     n = local_rows;
     rho[0] = blas_lib.dot(n, &r, &r);
 
-    // reduce(|r|^2)
-    reduce_mod.allreduce(1, &rho, reduce_mod.TYPE_BINARY_OP.ADD);
 }
 
 // if k is 1
@@ -213,7 +197,7 @@ fn f_eta() void {
     n = local_rows;
     eta[0] = blas_lib.dot(n, &w, &p);
     // reduce(<w,p>)
-    reduce_mod.allreduce(1, &eta, reduce_mod.TYPE_BINARY_OP.ADD);
+    // reduce_mod.allreduce(1, &eta, reduce_mod.TYPE_BINARY_OP.ADD);
 }
 
 // update x, r and rho
@@ -249,23 +233,9 @@ fn f_update_x_r_rho() void {
     n = local_rows;
     rho[0] = blas_lib.dot(n, &r, &r);
     // reduce(|r|^2)
-    reduce_mod.allreduce(1, &rho, reduce_mod.TYPE_BINARY_OP.ADD);
+    // reduce_mod.allreduce(1, &rho, reduce_mod.TYPE_BINARY_OP.ADD);
 }
 
-
-fn f_sync() void {
-   reduce_mod.allreduce(1, &dot, reduce_mod.TYPE_BINARY_OP.ADD);
-}
-
-fn f_reference_timestamps() void {
-    
-    time_ref_u16[0] = reduce_mod.tscRefBuffer[0];
-    time_ref_u16[1] = reduce_mod.tscRefBuffer[1];
-    time_ref_u16[2] = reduce_mod.tscRefBuffer[2];
-
-    // the user must unblock cmd color for every PE
-    sys_mod.unblock_cmd_stream();
-}
 
 comptime {
     @export_symbol(ptr_b, "b");
@@ -291,6 +261,4 @@ comptime{
     @export_symbol(f_eta);
     @export_symbol(f_update_x_r_rho);
 
-    @export_symbol(f_sync);
-    @export_symbol(f_reference_timestamps);
 }

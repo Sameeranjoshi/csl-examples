@@ -45,40 +45,17 @@ param pe_rows: i16 ; // height of the core rectangle
 param matrix_rows: i16; // number of rows in the matrix
 param matrix_cols: i16; // number of columns in the matrix
 param BLOCK_SIZE: i16; // size of temporary buffers for communication
-comptime {
-  // Number of matrix rows must be multiple of kernel rectangle height
-  @comptime_assert(matrix_rows % pe_rows == 0);
-  // Number of matrix cols must be multiple of kernel rectangle width
-  @comptime_assert(matrix_cols % pe_cols == 0);
-}
+// comptime {
+//   // Number of matrix rows must be multiple of kernel rectangle height
+//   @comptime_assert(matrix_rows % pe_rows == 0);
+//   // Number of matrix cols must be multiple of kernel rectangle width
+//   @comptime_assert(matrix_cols % pe_cols == 0);
+// }
 // Local matrix dimensions
 // const local_rows: i16 = matrix_rows / pe_rows; // Number of rows per PE
 // const local_cols: i16 = matrix_cols / pe_cols; // Number of columns per PE
 const local_rows: i16 = matrix_rows; 
 const local_cols: i16 = matrix_cols;    // TODO: change me back to division
-
-const C0: color = @get_color(C0_ID);
-const C1: color = @get_color(C1_ID);
-const C2: color = @get_color(C2_ID);
-const C3: color = @get_color(C3_ID);
-const C4: color = @get_color(C4_ID);
-const C5: color = @get_color(C5_ID);
-const C6: color = @get_color(C6_ID);
-const C7: color = @get_color(C7_ID);
-const C8: color = @get_color(C8_ID);
-
-// entrypoints of allreduce
-const EN_REDUCE_1: local_task_id = @get_local_task_id(17);
-const EN_REDUCE_2: local_task_id = @get_local_task_id(18);
-const EN_REDUCE_3: local_task_id = @get_local_task_id(19);
-const EN_REDUCE_4: local_task_id = @get_local_task_id(20);
-
-const reduce = @import_module( "../../csl-libs/allreduce/layout.csl", .{
-    .colors = [1]color{C8},
-    .entrypoints = [4]local_task_id{EN_REDUCE_1, EN_REDUCE_2, EN_REDUCE_3, EN_REDUCE_4},
-    .width = pe_cols,
-    .height = pe_rows
-    });
 
 const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = pe_cols,
@@ -86,15 +63,6 @@ const memcpy = @import_module( "<memcpy/get_params>", .{
     });
 
 layout{
-
-    @comptime_assert(C0_ID < C1_ID);
-    @comptime_assert(C1_ID < C2_ID);
-    @comptime_assert(C2_ID < C3_ID);
-    @comptime_assert(C3_ID < C4_ID);
-    @comptime_assert(C4_ID < C5_ID);
-    @comptime_assert(C5_ID < C6_ID);
-    @comptime_assert(C6_ID < C7_ID);
-    @comptime_assert(C7_ID < C8_ID);
 
     // step 1: configure the rectangle which does not include halo
     @set_rectangle( pe_cols, pe_rows );
@@ -108,10 +76,8 @@ layout{
         while(px < pe_cols) : (px +=1) {
 
             const memcpyParams = memcpy.get_params(px);
-            const reduceParams = reduce.get_params(px, py);
             var params: comptime_struct = .{
                 .memcpyParams = memcpyParams,
-                .reduceParams = reduceParams,
                 .BLOCK_SIZE = BLOCK_SIZE,
                 .local_rows = local_rows,
                 .local_cols = local_cols
@@ -142,6 +108,5 @@ layout{
     @export_name("f_eta", fn()void);
     @export_name("f_update_x_r_rho", fn()void);
 
-    @export_name("f_sync", fn()void);
-    @export_name("f_reference_timestamps", fn()void);
+    // @export_name("f_reference_timestamps", fn()void);
 } // end of layout
