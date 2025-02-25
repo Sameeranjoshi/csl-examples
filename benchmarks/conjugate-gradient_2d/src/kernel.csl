@@ -15,15 +15,16 @@
 
 param memcpyParams: comptime_struct;
 param reduceParams: comptime_struct;
-param stencilParams: comptime_struct;
 param BLOCK_SIZE: i16; // size of temporary buffers for communication
 // Size of our local tile of `A`
-param local_rows: u16; // Height of local matrix, or num rows per PE
-param local_cols: u16; // Width of local matrix, or num cols per PE
+param local_rows: i16; // Height of local matrix, or num rows per PE
+param local_cols: i16; // Width of local matrix, or num cols per PE
 const timestamp = @import_module("<time>");
 const math_lib = @import_module("<math>");
 const blas_lib = @import_module("blas.csl");
+const layout_module = @import_module("<layout>");
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
+const simprint = @import_module("<simprint>");
 // allreduce uses input queue/output queue 1
 const reduce_mod = @import_module( "../../csl-libs/allreduce/pe.csl", @concat_structs(reduceParams, .{
      .f_callback = sys_mod.unblock_cmd_stream,
@@ -33,18 +34,6 @@ const reduce_mod = @import_module( "../../csl-libs/allreduce/pe.csl", @concat_st
      .src1_dsr_ids = [1]u16{1}
      }));
 
-// output queue cannot overlap input queues
-const stencil_mod = @import_module( "../../csl-libs/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
-     .f_callback = sys_mod.unblock_cmd_stream,
-     .input_queues = [4]u16{4, 5, 6, 7},
-     .output_queues = if (@is_arch("wse3")) [4]u16{4, 5, 6, 7} else [1]u16{3},
-     .output_ut_id = 3,
-     .BLOCK_SIZE = BLOCK_SIZE,
-     .dest_dsr_ids = [2]u16{2,3},
-     .src0_dsr_ids = [1]u16{2},
-     .src1_dsr_ids = [2]u16{2,3}
-     }));
-
 
 // tsc_size_words = 3
 // starting time of H2D/D2H
@@ -52,50 +41,40 @@ const stencil_mod = @import_module( "../../csl-libs/stencil_3d_7pts/pe.csl", @co
 var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
 // ending time of H2D/D2H
 var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
-var b = @zeros([1]f32); // right-hand-side
-var x = @zeros([1]f32); // approximated solution
-var p = @zeros([1]f32); // Krylov space
-var w = @zeros([1]f32); // w = A * p
-var r = @zeros([1]f32); // residual
 
-// A = 10x5, x = 5x1, b = 10x1
+
+// 48 kB of global memory contain A, x, b, y
+var A: [local_rows*local_cols]f32; // A is stored in Col-major order
+var x: [local_cols*1]f32;
+var b: [local_rows*1]f32;
+var w = @zeros([local_rows*1]f32); // w = A * p
+var r = @zeros([local_rows*1]f32); // residual
+var p = @zeros([local_rows]f32); // Krylov space, p=r
+
+var n: i16 = 0;
 var dot = @zeros([1]f32); // dummy variable for f_sync
 var rho = @zeros([1]f32);
 var rho_old = @zeros([1]f32);
 var eta = @zeros([1]f32);
 var beta: f32 = @as(f32,0);
-
-// stencil coefficients are organized as
-// {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
-//
-// The formula is
-//    c_west * x[i-1][j][k] + c_east * x[i+1][j][k] +
-//    c_south * x[i][j-1][k] + c_north * x[i][j+1][k] +
-//    c_bottom * x[i][j][k-1] + c_top * x[i][j][k+1] +
-//    c_center * x[i][j][k]
-var stencil_coeff = @zeros([7]f32);
-
 // time_buf_u16[0:5] = {tscStartBuffer, tscEndBuffer}
 var time_buf_u16 = @zeros([timestamp.tsc_size_words*2]u16);
-
 // reference clock inside allreduce module
 var time_ref_u16 = @zeros([timestamp.tsc_size_words]u16);
 
 var ptr_b: [*]f32 = &b;
 var ptr_x: [*]f32 = &x;
-var ptr_stencil_coeff: [*]f32 = &stencil_coeff;
+var ptr_A: [*]f32 = &A;
 var ptr_time_buf_u16: [*]u16 = &time_buf_u16;
 var ptr_time_ref: [*]u16 = &time_ref_u16;
 var ptr_rho: [*]f32 = &rho;
 
-// size of local tensor during the CG
-var n: i16 = 0;
 
-var mem_b_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> b[i] });
-var mem_x_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> x[i] });
-var mem_r_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r[i] });
-var mem_p_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> p[i] });
-var mem_w_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> w[i] });
+var mem_b_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{local_rows} -> b[i] });
+var mem_x_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{local_cols} -> x[i] });
+var mem_r_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{local_rows} -> r[i] });
+var mem_p_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{local_rows} -> p[i] }); // p=r
+var mem_w_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{local_rows} -> w[i] });
 
 
 fn f_enable_timer() void {
@@ -136,26 +115,57 @@ fn f_memcpy_timestamps() void {
 // - setup the length of all DSDs
 // - setup the size of local tensor
 //
-fn f_cg_init(size:i16) void {
+fn f_cg_init() void {
+    simprint.print_string("In init\n");
+    simprint.print_string("\n");
+    simprint.fmt_with_coords("local_rows: {d}", .{@as(u16, local_rows)});
+    simprint.fmt_with_coords("local_cols: {d}", .{@as(u16, local_cols)});
+    simprint.print_string("\n");
 
-    // setup the size of local tensor
-    n = size;
+    var my_pe_col_id = layout_module.get_x_coord();
+    var my_pe_row_id = layout_module.get_y_coord();  
+    if (my_pe_col_id == 0 and my_pe_row_id == 0) {
+  
+        for (@range(i16, local_rows)) |i| {   // Iterate over columns first
+            for (@range(i16, local_cols)) |j| { // Iterate over rows second
+                simprint.fmt_with_coords("A[{d}][{d}] = {f}", .{@as(u16,i), @as(u16,j), A[i*local_cols + j]});
+            }
+        }
+        simprint.print_string("\n");
 
-    // set the length of all DSDs
-    mem_b_dsd = @set_dsd_length(mem_b_dsd, @bitcast(u16,n));
-    mem_x_dsd = @set_dsd_length(mem_x_dsd, @bitcast(u16,n));
-    mem_p_dsd = @set_dsd_length(mem_p_dsd, @bitcast(u16,n));
-    mem_r_dsd = @set_dsd_length(mem_r_dsd, @bitcast(u16,n));
-    mem_w_dsd = @set_dsd_length(mem_w_dsd, @bitcast(u16,n));
+        for (b) |val, i| {
+            simprint.fmt_with_coords("b[{d}] = {f}", .{ i, val });
+        }
+        simprint.print_string("\n");
 
+        for (x) |val, i| {
+            simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
+        }
+        simprint.print_string("\n");
+    }
     // the user must unblock cmd color for every PE
+    
+    // Explicitly initialize A, x, w
+    for (@range(i16, local_cols * local_rows)) |i| { A[i] = 1.0; }
+    for (@range(i16, local_cols)) |i| { x[i] = 1.0; }
+    for (@range(i16, local_rows)) |i| { w[i] = 0.0; }
+
     sys_mod.unblock_cmd_stream();
 }
 
+// local GEMV col-major
+fn gemv(A: [*]f32, x: [*]f32, y:[*]f32) void {
+  for (@range(i16, local_cols)) |j| {   // Iterate over columns first
+    for (@range(i16, local_rows)) |i| { // Iterate over rows second
+      y[i] += A[j*local_rows + i] * x[j]; // Access A in column-major order
+    }
+  }
+}
 
 // w = A*x
 fn f_spmv_Ax() void {
-    stencil_mod.spmv(n, &stencil_coeff, &x, &w);
+    // gemv(&A, &x, &w);
+    // the user must unblock cmd color for every PE
 }
 
 // compute r = b - w and rho = |r|^2
@@ -165,6 +175,7 @@ fn f_residual() void {
     @fsubs(mem_r_dsd, mem_b_dsd, mem_w_dsd);
 
     // compute <r, r> locally
+    n = local_rows;
     rho[0] = blas_lib.dot(n, &r, &r);
 
     // reduce(|r|^2)
@@ -193,12 +204,13 @@ fn f_update_p(k:i16) void {
 
 // w = A*p
 fn f_spmv_Ap() void {
-    stencil_mod.spmv(n, &stencil_coeff, &p, &w);
+    gemv(&A, &p, &w);
 }
 
 // eta = np.dot(p,w)
 fn f_eta() void {
     // compute <w, p> locally
+    n = local_rows;
     eta[0] = blas_lib.dot(n, &w, &p);
     // reduce(<w,p>)
     reduce_mod.allreduce(1, &eta, reduce_mod.TYPE_BINARY_OP.ADD);
@@ -234,6 +246,7 @@ fn f_update_x_r_rho() void {
 
     // rho = np.dot(r,r)
     // compute <r, r> locally
+    n = local_rows;
     rho[0] = blas_lib.dot(n, &r, &r);
     // reduce(|r|^2)
     reduce_mod.allreduce(1, &rho, reduce_mod.TYPE_BINARY_OP.ADD);
@@ -257,7 +270,7 @@ fn f_reference_timestamps() void {
 comptime {
     @export_symbol(ptr_b, "b");
     @export_symbol(ptr_x, "x");
-    @export_symbol(ptr_stencil_coeff, "stencil_coeff");
+    @export_symbol(ptr_A, "A");
     @export_symbol(ptr_time_buf_u16, "time_buf_u16");
     @export_symbol(ptr_time_ref, "time_ref");
     @export_symbol(ptr_rho, "rho");
@@ -270,6 +283,7 @@ comptime{
     @export_symbol(f_memcpy_timestamps);
 
     @export_symbol(f_cg_init);
+    @export_symbol(gemv);
     @export_symbol(f_spmv_Ax);
     @export_symbol(f_residual);
     @export_symbol(f_update_p);

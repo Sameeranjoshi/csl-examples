@@ -170,3 +170,27 @@ def hw_2_oned_colmajor(
       idx = idx + 1
   return A_1d
 
+
+def transform_to_cliff_distribution(A, H, W):
+    """
+    Transforms a 2D tensor into a cliff distribution with column-major local tensor.
+
+    Parameters:
+    A (numpy.ndarray): Input 2D array of shape (H*W, H*W)
+    H (int): Number of vertical partitions (rows of local blocks)
+    W (int): Number of horizontal partitions (columns of local blocks)
+
+    Returns:
+    numpy.ndarray: Transformed array with column-major local tensor
+    """
+    # Step 1: Reshape into (H, W, local_H, local_W)
+    local_H, local_W = A.shape[0] // H, A.shape[1] // W
+    A1 = A.reshape(H, local_H, W, local_W)
+
+    # Step 2: Transpose to (H, W, local_W, local_H) for column-major order
+    A2 = A1.transpose(0, 2, 3, 1)
+
+    # Step 3: Reshape back to 2D as (H*W, H*W)
+    A3 = A2.reshape(H * W, local_H * local_W)
+
+    return A3

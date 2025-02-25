@@ -52,8 +52,10 @@ comptime {
   @comptime_assert(matrix_cols % pe_cols == 0);
 }
 // Local matrix dimensions
-const local_rows: u16 = matrix_rows / pe_rows; // Number of rows per PE
-const local_cols: u16 = matrix_cols / pe_cols; // Number of columns per PE
+// const local_rows: i16 = matrix_rows / pe_rows; // Number of rows per PE
+// const local_cols: i16 = matrix_cols / pe_cols; // Number of columns per PE
+const local_rows: i16 = matrix_rows; 
+const local_cols: i16 = matrix_cols;    // TODO: change me back to division
 
 const C0: color = @get_color(C0_ID);
 const C1: color = @get_color(C1_ID);
@@ -65,23 +67,11 @@ const C6: color = @get_color(C6_ID);
 const C7: color = @get_color(C7_ID);
 const C8: color = @get_color(C8_ID);
 
-// entrypoints of 7-point stenil
-const EN_STENCIL_1: local_task_id = @get_local_task_id(14);
-const EN_STENCIL_2: local_task_id = @get_local_task_id(15);
-const EN_STENCIL_3: local_task_id = @get_local_task_id(16);
-
 // entrypoints of allreduce
 const EN_REDUCE_1: local_task_id = @get_local_task_id(17);
 const EN_REDUCE_2: local_task_id = @get_local_task_id(18);
 const EN_REDUCE_3: local_task_id = @get_local_task_id(19);
 const EN_REDUCE_4: local_task_id = @get_local_task_id(20);
-
-const stencil = @import_module( "../../csl-libs/stencil_3d_7pts/layout.csl", .{
-    .colors = [8]color{C0, C1, C2, C3, C4, C5, C6, C7},
-    .entrypoints = [3]local_task_id{EN_STENCIL_1, EN_STENCIL_2, EN_STENCIL_3},
-    .width = pe_cols,
-    .height = pe_rows
-    });
 
 const reduce = @import_module( "../../csl-libs/allreduce/layout.csl", .{
     .colors = [1]color{C8},
@@ -118,13 +108,11 @@ layout{
         while(px < pe_cols) : (px +=1) {
 
             const memcpyParams = memcpy.get_params(px);
-            const stencilParams = stencil.get_params(px, py);
             const reduceParams = reduce.get_params(px, py);
             var params: comptime_struct = .{
                 .memcpyParams = memcpyParams,
                 .reduceParams = reduceParams,
                 .BLOCK_SIZE = BLOCK_SIZE,
-                .stencilParams = stencilParams,
                 .local_rows = local_rows,
                 .local_cols = local_cols
             };
@@ -135,7 +123,7 @@ layout{
 
     @export_name("b", [*]f32, true);
     @export_name("x", [*]f32, true);
-    @export_name("stencil_coeff", [*]f32, true);
+    @export_name("A", [*]f32, true);
     @export_name("time_buf_u16", [*]u16, true);
     @export_name("time_ref", [*]u16, true);
     @export_name("rho", [*]f32, true);
@@ -145,7 +133,8 @@ layout{
     @export_name("f_toc", fn()void);
     @export_name("f_memcpy_timestamps", fn()void);
 
-    @export_name("f_cg_init", fn(i16)void);
+    @export_name("f_cg_init", fn()void);
+    @export_name("gemv", fn([*]f32, [*]f32, [*]f32) void);
     @export_name("f_spmv_Ax", fn()void);
     @export_name("f_residual", fn()void);
     @export_name("f_update_p", fn(i16)void);
