@@ -12,6 +12,6 @@ cslc ./src/layout.csl \
 --memcpy --channels=1 --width-west-buf=0 --width-east-buf=0 -o=out --max-inlined-iterations=1000000
 
 # # # # Run it
-# cs_python ./run.py --max-ite=80 --run-only --latestlink out
+cs_python ./run.py --max-ite=80 --run-only --latestlink out
 
 # CG - needs matrix to be symmetric and positive definite.
