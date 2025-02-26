@@ -1,0 +1,98 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
+// color map: memcpy + allreduce + stencil
+//
+// color  var   color  var        color  var              color  var
+//   0   C0       9                18    EN_REDUCE_2       27   reserved (memcpy)
+//   1   C1      10                19    EN_REDUCE_3       28   reserved (memcpy)
+//   2   C2      11                20    EN_REDUCE_4       29   reserved (memcpy)
+//   3   C3      12                21    reserved (memcpy) 30   reserved (memcpy)
+//   4   C4      13                22    reserved (memcpy) 31   reserved
+//   5   C5      14  EN_STENCIL_1  23    reserved (memcpy) 32
+//   6   C6      15  EN_STENCIL_2  24                      33
+//   7   C7      16  EN_STENCIL_3  25                      34
+//   8   C8      17  EN_REDUCE_1   26                      35
+//
+
+// c0,c1,c2,c3,c4,c5,c6,c7 are internal colors of 7-point stencil
+
+
+param pe_cols: i16 ; // width of the core rectangle
+param pe_rows: i16 ; // height of the core rectangle
+param matrix_rows: i16; // number of rows in the matrix
+param matrix_cols: i16; // number of columns in the matrix
+param BLOCK_SIZE: i16; // size of temporary buffers for communication
+// comptime {
+//   // Number of matrix rows must be multiple of kernel rectangle height
+//   @comptime_assert(matrix_rows % pe_rows == 0);
+//   // Number of matrix cols must be multiple of kernel rectangle width
+//   @comptime_assert(matrix_cols % pe_cols == 0);
+// }
+// Local matrix dimensions
+// const local_rows: i16 = matrix_rows / pe_rows; // Number of rows per PE
+// const local_cols: i16 = matrix_cols / pe_cols; // Number of columns per PE
+const local_rows: i16 = matrix_rows; 
+const local_cols: i16 = matrix_cols;    // TODO: change me back to division
+
+// entrypoint of state machine in CG
+const STATE: local_task_id = @get_local_task_id(12);
+
+const memcpy = @import_module( "<memcpy/get_params>", .{
+    .width = pe_cols,
+    .height = pe_rows
+    });
+
+layout{
+
+    // step 1: configure the rectangle which does not include halo
+    @set_rectangle( pe_cols, pe_rows );
+
+    // step 2: compile csl code for a set of PEx.y and generate out_x_y.elf
+    //   format: @set_tile_code(x, y, code.csl, param_binding);
+
+    var py: i16 = 0;
+    while(py < pe_rows) : (py +=1) {
+        var px: i16 = 0;
+        while(px < pe_cols) : (px +=1) {
+
+            const memcpyParams = memcpy.get_params(px);
+            var params: comptime_struct = .{
+                .memcpyParams = memcpyParams,
+                .BLOCK_SIZE = BLOCK_SIZE,
+                .local_rows = local_rows,
+                .local_cols = local_cols,
+                .STATE = STATE,
+            };
+
+            @set_tile_code(px, py, "kernel.csl", params);
+        }
+    }
+
+    @export_name("b", [*]f32, true);
+    @export_name("x", [*]f32, true);
+    @export_name("A", [*]f32, true);
+    @export_name("time_buf_u16", [*]u16, true);
+    @export_name("time_ref", [*]u16, true);    
+    @export_name("rho", [*]f32, true);
+
+    @export_name("f_enable_timer", fn()void);
+    @export_name("f_tic", fn()void);
+    @export_name("f_toc", fn()void);
+    @export_name("f_memcpy_timestamps", fn()void);
+    @export_name("f_cg", fn(f32,i16)void);
+    @export_name("f_reference_timestamps", fn()void);    
+
+} // end of layout
