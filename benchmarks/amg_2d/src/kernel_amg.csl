@@ -1,0 +1,131 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+////////////////////////////////////////
+// params
+////////////////////////////////////////
+param memcpy_params: comptime_struct;
+
+
+////////////////////////////////////////
+// DATA(local + global)
+////////////////////////////////////////
+// Constants defining dimensions of our matrix(MxN)
+const M: i16 = 4;   // pe_rows
+const N: i16 = 4;   // pe_cols
+// R shape parameters here
+// 48 kB of global memory contain A, x, b, R
+// Accessible from host.
+var A: [M*N]f32; // A is stored in row-major order
+var x: [N*1]f32;    // vector
+var b: [M*1]f32;    // vector
+// var R: [M*N]f32; // R is stored in row-major order
+// var b_coarse: @zeros([M]f32);
+// var x_coarse: @zeros([N]f32);
+// more temporary variables, local to PE.
+var residual: [M*1]f32;
+var AX: [M*1]f32;
+
+// local vars
+const _MAX_SIZE_A = M*N;
+const _MAX_SIZE_X = N*1;
+const _MAX_SIZE_AX = M*1;
+
+////////////////////////////////////////
+// Decide what is visible from outside world.
+////////////////////////////////////////
+const residual_ptr: [*]f32 = &residual;
+
+
+
+////////////////////////////////////////
+// import modules
+////////////////////////////////////////
+const gemv_mod   = @import_module("../libraries/gemv.csl",   .{ .sizeA = _MAX_SIZE_A, .sizeX = _MAX_SIZE_X, .sizeY = _MAX_SIZE_AX });
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+
+////////////////////////////////////////
+// Functions
+////////////////////////////////////////
+// Initialize matrix and vectors
+fn initialize() void {
+    // for loop with range syntax
+    // loops over 0, 1, ...., M*N-1
+    // idx stores the loop index
+    for (@range(i16, M*N)) |idx| {
+        // @as casts idx from i16 to f32
+        A[idx] = @as(f32, idx);
+    }
+
+    for (@range(i16, N)) |j| {
+        x[j] = 1.0;
+    }
+        // B = 2.0
+        // residual = 0.0
+        // AX = 0.0
+    for (@range(i16, M)) |i| {
+        b[i] = 0.0;
+        residual[i] = 0.0;
+        AX[i] = 0.0;
+    }
+
+}
+
+//  General: Ax = aplha. (A * x) + beta.y
+//  answer= 1.(A * x) + 0.y
+
+// fn gemv_using_library() void {
+
+//     var alpha: f32 = 1.0;
+//     var beta: f32 = 0.0;
+//     gemv_mod.sgemv_outer(LOCAL_OUT_SZ, LOCAL_IN_SZ, alpha, &A, LOCAL_OUT_SZ, &x, beta, &Ax, &ws);
+
+// }
+// Compute gemv
+fn gemv() void {
+  for (@range(i16, M)) |i| {
+    var tmp: f32 = 0.0;
+    for (@range(i16, N)) |j| {
+      tmp += A[i*N + j] * x[j];
+    }
+    AX[i] = tmp;
+    // y[i] = tmp + b[i];
+  }
+}
+
+fn residual_operator() void {
+    for (@range(i16, M)) |i| {
+        residual[i] = b[i] - AX[i];
+    }
+}
+
+// Call initialize and gemv functions
+fn init_and_compute() void {
+    initialize();
+    gemv();
+    residual_operator();
+
+    // unblock memcpy so that it can send data outside.
+    sys_mod.unblock_cmd_stream();
+}
+
+
+////////////////////////////////////////
+// Visibility to outside world
+////////////////////////////////////////
+comptime {
+  // Export symbol pointing to y so it is host-readable
+  @export_symbol(residual_ptr, "residual");
+  // Export function so it is host-callable by RPC mechanism
+  @export_symbol(init_and_compute);
+}

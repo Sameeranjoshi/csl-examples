@@ -27,14 +27,12 @@
 //   8   C8      17  EN_REDUCE_1   26                      35
 //
 
-// c0,c1,c2,c3,c4,c5,c6,c7 are internal colors of 7-point stencil
 
 
-param pe_cols: i16 ; // width of the core rectangle
-param pe_rows: i16 ; // height of the core rectangle
-param matrix_rows: i16; // number of rows in the matrix
-param matrix_cols: i16; // number of columns in the matrix
-param BLOCK_SIZE: i16; // size of temporary buffers for communication
+param pe_cols: i16 ; // width of the core rectangle // 1
+param pe_rows: i16 ; // height of the core rectangle    //1 initially
+// param matrix_rows: i16; // number of rows in the matrix
+// param matrix_cols: i16; // number of columns in the matrix
 // comptime {
 //   // Number of matrix rows must be multiple of kernel rectangle height
 //   @comptime_assert(matrix_rows % pe_rows == 0);
@@ -44,19 +42,15 @@ param BLOCK_SIZE: i16; // size of temporary buffers for communication
 // Local matrix dimensions
 // const local_rows: i16 = matrix_rows / pe_rows; // Number of rows per PE
 // const local_cols: i16 = matrix_cols / pe_cols; // Number of columns per PE
-const local_rows: i16 = matrix_rows; 
-const local_cols: i16 = matrix_cols;    // TODO: change me back to division
-
-// entrypoint of state machine in CG
-const STATE: local_task_id = @get_local_task_id(12);
+// const local_rows: i16 = matrix_rows;
+// const local_cols: i16 = matrix_cols;    // TODO: change me back to division
 
 const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = pe_cols,
     .height = pe_rows
     });
 
-layout{
-
+layout {
     // step 1: configure the rectangle which does not include halo
     @set_rectangle( pe_cols, pe_rows );
 
@@ -70,29 +64,21 @@ layout{
 
             const memcpyParams = memcpy.get_params(px);
             var params: comptime_struct = .{
-                .memcpyParams = memcpyParams,
-                .BLOCK_SIZE = BLOCK_SIZE,
-                .local_rows = local_rows,
-                .local_cols = local_cols,
-                .STATE = STATE,
+                .memcpy_params = memcpyParams,
             };
 
-            @set_tile_code(px, py, "kernel.csl", params);
+            @set_tile_code(px, py, "kernel_amg.csl", params);
         }
     }
 
-    @export_name("b", [*]f32, true);
-    @export_name("x", [*]f32, true);
-    @export_name("A", [*]f32, true);
-    @export_name("time_buf_u16", [*]u16, true);
-    @export_name("time_ref", [*]u16, true);    
-    @export_name("rho", [*]f32, true);
+    // input (true = mutability from host?)
+    // @export_name("b", [*]f32, true);
+    // @export_name("x", [*]f32, true);
+    // @export_name("A", [*]f32, true);
 
-    @export_name("f_enable_timer", fn()void);
-    @export_name("f_tic", fn()void);
-    @export_name("f_toc", fn()void);
-    @export_name("f_memcpy_timestamps", fn()void);
-    @export_name("f_cg", fn(f32,i16)void);
-    @export_name("f_reference_timestamps", fn()void);    
+    // kernels
+    @export_name("init_and_compute", fn()void);
 
+    // outputs
+    @export_name("residual", [*]f32, false);    // host can't modify residual.
 } // end of layout
