@@ -369,6 +369,9 @@ def main():
   #   print("COMPILE ONLY: EXIT")
   #   return
 
+  ################################################################################
+  # INPUT DATA
+  ################################################################################
   print(layout_arguments)
   np.random.seed(127)
   sparsity = 0.90  # 90% sparse
@@ -380,19 +383,16 @@ def main():
   A_csr_SPD = sp.csr_matrix(A_SPD, dtype=np.float32)
   ut.visualize_matrix(A_csr_SPD, title="A Matrix SPD", filename="A_spd.png")
   
-  ################################################################################
-  # INPUT DATA
-  ################################################################################
   A_csr = A_csr_SPD
   # SPD check
   # ut.isspd(A_csr) # TODO fails
   b_1d = np.random.rand(matrix_rows).astype(np.float32)   # random right-hand side vector
   x_1d = np.zeros(matrix_cols, dtype=np.float32)    # initial guess
-  ################################################################################
+
   print("Input Matrix Shape:", A_csr.shape)
   print("Input b_1d Shape:", b_1d.shape)
   print("Input x_1d Shape:", x_1d.shape)
-
+  ################################################################################
   nrm_b = np.linalg.norm(b_1d.ravel(), 2)
   eps = 1.e-3
   tol = eps * nrm_b
@@ -430,79 +430,35 @@ def main():
   simulator.memcpy_h2d(symbol_A, A_csr.toarray().flatten(), 0, 0, 1, 1, matrix_cols * matrix_rows,\
     streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
-  # print("step 0: enable timer")
-  # simulator.launch("f_enable_timer", nonblock=False)
+  ################################################################################
+  print("step 0: enable timer")
+  simulator.launch("f_enable_timer", nonblock=False)
 
-  # # print("step 1: sync all PEs")
-  # # simulator.launch("f_sync", nonblock=False)
+  # print("step 1: sync all PEs")
+  # simulator.launch("f_sync", nonblock=False)
 
-  # print("step 2: copy reference clock from reduce module")
-  # simulator.launch("f_reference_timestamps", nonblock=False)
+  print("step 2: copy reference clock from reduce module")
+  simulator.launch("f_reference_timestamps", nonblock=False)
 
-  # print("step 3: tic() records time_start")
-  # simulator.launch("f_tic", nonblock=True)
+  print("step 3: tic() records time_start")
+  simulator.launch("f_tic", nonblock=True)
 
-  print(f"step 4: conjugate gradient with max_ite = {max_ite}")
+  print(f"step 4: Conjugate Gradient with max_ite={max_ite}, tol={tol}")
+  simulator.launch("f_cg", np.float32(tol), np.int16(max_ite), nonblock=False)
 
-  print("step 4.1: initialization")
-  # - setup the length of all DSDs
-  # - setup the size of local tensor
-  simulator.launch("f_cg_init", nonblock=False)
-  
-  k = 0
-  print("step 4.2: r0 = b - A*x0 and compute rho = |r0|^2")
-  # w = A*x0
-  simulator.launch("f_spmv_Ax", nonblock=False)
-  # r0 = b - w = b - A*x0
-  # rho = |r0|^2
-  simulator.launch("f_residual", nonblock=False)
+  print("step 5: toc() records time_end")
+  simulator.launch("f_toc", nonblock=False)
 
-  # # # # [optional] D2H(rho)
   rho_wse = np.zeros(1, np.float32)
-  # simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1,\
-  #   streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
-  # rho = rho_wse[0]
-  print(f"[CG] iter {k}: rho = {rho}")
-  # if |r_k|_2 < tol, then exit
-  while ( (rho > tol*tol) and (k < max_ite) ):
-    k = k + 1
-    print("step 4.3: update p")
-    # if k == 1
-    #   p = r
-    # else
-    #   beta = rho/rho_old
-    #   p = r + beta * p
-    simulator.launch("f_update_p", np.int16(k), nonblock=False)
+  simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+  rho = rho_wse[0]
+  print(rho)
+  print(f"[CG] rho = |b-A*x|^2 = {rho}")
 
-    # alpha_{k} = |r_{k-1}|^2/<p_{k}, A*p_{k}>
-    print("step 4.4: compute w = A*p")
-    # w = A*p
-    simulator.launch("f_spmv_Ap", nonblock=False)
+  print("step 6: prepare (time_start, time_end)")
+  simulator.launch("f_memcpy_timestamps", nonblock=False)
 
-    print("step 4.5: update eta")
-    # eta = np.dot(p,w) = <p_{k}, A*p_{k}>
-    simulator.launch("f_eta", nonblock=False)
-
-    print("step 4.6: update alpha, x, r and rho")
-    # alpha = rho/eta
-    # x = x + alpha * p
-    # r = r - alpha * w  where w = A*p
-    # rho_old = rho
-    # rho = np.dot(r,r)
-    simulator.launch("f_update_x_r_rho", nonblock=False)
-
-    # [optional] D2H(rho)
-    simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1,\
-      streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
-    rho = rho_wse[0]
-    print(f"[CG] iter {k}: rho = {rho}")
-
-
-  # print("step 5: toc() records time_end")
-  # simulator.launch("f_toc", nonblock=False)
-
-  # print("step 6: prepare (time_start, time_end)")
-  # simulator.launch("f_memcpy_timestamps", nonblock=False)
 
   # print("step 7: D2H (time_start, time_end)")
   # time_memcpy_hwl_1d = np.zeros(pe_rows*pe_cols*6, np.uint32)
@@ -521,6 +477,7 @@ def main():
   simulator.memcpy_d2h(xf_wse_1d, symbol_x, 0, 0, 1, 1, matrix_cols*1,\
     streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
   
+  print("################################################################################")
   simulator.stop()
 
   if args.cmaddr is None:
@@ -548,13 +505,13 @@ def main():
   np.testing.assert_allclose(xf_1d.ravel(), xf_wse_1d.ravel(), 1.e-5)
   print("\nSUCCESS!")
 
-  vals, vecs = eigs(A_csr, k=1, which='SM')
-  min_eig = abs(vals[0])
-  vals, vecs = eigs(A_csr, k=1, which='LM')
-  max_eig = abs(vals[0])
-  print(f"min(eig) = {min_eig}")
-  print(f"max(eig) = {max_eig}")
-  print(f"cond(A) = {max_eig/min_eig}")
+  # vals, vecs = eigs(A_csr, k=1, which='SM')
+  # min_eig = abs(vals[0])
+  # vals, vecs = eigs(A_csr, k=1, which='LM')
+  # max_eig = abs(vals[0])
+  # print(f"min(eig) = {min_eig}")
+  # print(f"max(eig) = {max_eig}")
+  # print(f"cond(A) = {max_eig/min_eig}")
 
   if 0:
     debug_mod = debug_util(dirname, cmaddr=args.cmaddr)
