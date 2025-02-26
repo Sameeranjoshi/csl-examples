@@ -13,7 +13,7 @@ cslc ./src/layout_amg.csl \
 --arch wse2 --fabric-dims=8,3 --fabric-offsets=4,1 \
 --memcpy --channels=1 --max-inlined-iterations=1000000 -o out 
 
-
+cs_python ./run_amg.py --run-only --latestlink out --name out
 
 
 # # # # Run it

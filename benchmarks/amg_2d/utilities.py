@@ -150,6 +150,32 @@ def visualize_matrix(A, title="Matrix", filename=None):
     
     plt.show()
 
+def visualize_matrix_or_vector(data, title="Data", filename=None):
+    """
+    Visualizes a sparse matrix or vector using a heatmap or line plot.
+
+    Parameters:
+    data (numpy array or scipy sparse matrix): The data to visualize.
+    """
+    if sp.issparse(data):
+        data = data.toarray()
+
+    if data.ndim == 1:
+        plt.figure(figsize=(8, 6))
+        data = data.reshape((int(np.sqrt(data.size)), -1))  # Reshape to square grid
+        plt.imshow(data, cmap="viridis", aspect="auto", interpolation="nearest")
+        plt.title(title)
+        plt.xlabel("Columns")
+        plt.ylabel("Rows")
+        plt.colorbar(label="Value")
+        if filename:
+            plt.savefig(filename)
+        plt.show()
+    elif data.ndim == 2:
+        visualize_matrix(data, title, filename)
+    else:
+        raise ValueError("Data must be either a 1D vector or 2D matrix.")
+
 
 
 def hw_2_oned_colmajor(

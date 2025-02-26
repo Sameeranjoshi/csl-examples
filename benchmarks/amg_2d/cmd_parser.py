@@ -62,6 +62,7 @@ def parse_args():
       help="Run only", action="store_true")
   parser.add_argument(
       "--arch",
+      default="wse2",
       help="wse2 or wse3. Default is wse2 when not supplied.")
   parser.add_argument(
       "--width-west-buf",
