@@ -1,6 +1,7 @@
 
 
 import os
+import argparse
 from typing import Optional
 from pathlib import Path
 import shutil
@@ -28,6 +29,8 @@ from sklearn.datasets import make_sparse_spd_matrix
 
 @dataclass
 class CompileCoreArgs:
+    args: argparse.Namespace
+    dirname: str
     cslc: str
     pe_rows: int
     pe_cols: int
@@ -94,13 +97,31 @@ def parse_and_get_arguments():
 
 	
 	layout_arguments = CompileCoreArgs(
-			cslc, pe_cols, pe_rows, code_csl, dirname,
+			args, dirname, cslc, pe_cols, pe_rows, code_csl, dirname,
 			fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y,  # fabric details
 			args.run_only, args.arch, channels,
 			width_west_buf, width_east_buf
 	)
 	return layout_arguments
 
+def logs(input_data, layout_arguments):
+  args = layout_arguments.args
+  dirname = layout_arguments.dirname
+  
+  if args.cmaddr is None:
+    # move simulation log and core dump to the given folder
+    dst_log = Path(f"{dirname}/sim.log")
+    src_log = Path("sim.log")
+    if src_log.exists():
+      shutil.move(src_log, dst_log)
+
+    dst_trace = Path(f"{dirname}/simfab_traces")
+    src_trace = Path("simfab_traces")
+    if dst_trace.exists():
+      shutil.rmtree(dst_trace)
+    if src_trace.exists():
+      shutil.move(src_trace, dst_trace)
+      
 def host_calculations(input_data, layout_arguments):
   A = input_data["A"]
   x = input_data["x"]
@@ -110,6 +131,58 @@ def host_calculations(input_data, layout_arguments):
   residual_host = b - A @ x
   return residual_host
 
+def device_calculations(input_data, layout_arguments):
+  ############################################################
+  # unpack data
+  ############################################################
+  # unpack the input data
+  A = input_data["A"]
+  x = input_data["x"]
+  b = input_data["b"]
+  M = input_data["M"]
+  N = input_data["N"]
+  # unpack the layout arguments
+  args = layout_arguments.args
+  dirname = layout_arguments.dirname
+  pe_rows = layout_arguments.pe_rows
+  pe_cols = layout_arguments.pe_cols
+  
+  ############################################################
+  # Setup simulator
+  ############################################################
+  memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
+  simulator = SdkRuntime(dirname, cmaddr=args.cmaddr)
+
+  # data accessible from host and device.
+  symbol_residual = simulator.get_id("residual")
+
+  simulator.load()
+  simulator.run()
+
+  ############################################################
+  # H2D
+  ############################################################
+  
+  ############################################################
+  # Kernel
+  ############################################################
+  simulator.launch('init_and_compute', nonblock=False)
+  
+  ############################################################
+  # D2H
+  ############################################################
+  residual_device = np.zeros([M*1], dtype=np.float32)
+  simulator.memcpy_d2h(residual_device, symbol_residual, 0, 0, 1, 1, M*1, streaming=False,
+    order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
+
+  ############################################################
+  # Cleanup
+  ############################################################
+  simulator.stop()
+  logs(input_data, layout_arguments)
+  return residual_device
+
+  
 def main():
   random.seed(127)
   ############################################################
@@ -141,6 +214,8 @@ def main():
     "A": A,
     "x": x,
     "b": b,
+    "M": M,
+    "N": N
   }
 
   ############################################################
@@ -151,6 +226,13 @@ def main():
   ############################################################
   # DEVICE CALCULATIONS
   ############################################################
+  residual_device = device_calculations(input_data, layout_arguments)
+  print("Residual Device:", residual_device)
+  ############################################################
+  # COMPARISON
+  ############################################################
+  assert np.allclose(residual_host, residual_device, atol=1e-6), "Results do not match!"
+  print("Results Match!")
   
 
  
