@@ -47,7 +47,6 @@ def hwl_2_oned_colmajor(
         idx = idx + 1
   return A_1d
 
-
 def oned_to_hwl_colmajor(
     height: int,
     width: int,
@@ -255,60 +254,3 @@ def csr_7_pt_stencil(stencil_coeff, height, width, pe_length):
   assert 1 == A_csr.has_sorted_indices, "Error: A is not sorted"
 
   return A_csr
-
-
-import numpy as np
-import matplotlib.pyplot as plt
-
-
-def plot_3d_shapes(arrays, titles=None, colors=None, alphas=None, filename=None):
-    """Visualize multiple 3D arrays using voxels as subplots."""
-    import matplotlib.pyplot as plt
-    import numpy as np
-
-    # Handle single input by converting to a list
-    if not isinstance(arrays, list):
-        arrays = [arrays]
-
-    # Default values
-    num_arrays = len(arrays)
-    titles = titles or [f"Shape {i+1}" for i in range(num_arrays)]
-    colors = colors or ['blue'] * num_arrays
-    alphas = alphas or [0.7] * num_arrays
-
-    # Single plot if only one array is provided
-    if num_arrays == 1:
-        fig = plt.figure(figsize=(8, 8))
-        ax = fig.add_subplot(111, projection='3d')
-        ax.set_title(titles[0])
-        ax.voxels(np.ones(arrays[0].shape, dtype=bool), 
-                  facecolors=colors[0], edgecolor='k', alpha=alphas[0])
-        ax.set_xlabel('Width')
-        ax.set_ylabel('Height')
-        ax.set_zlabel('Depth')
-        plt.show()
-
-    # Subplots if more than one array
-    else:
-        cols = min(num_arrays, 3)   # Limit to 3 columns
-        rows = (num_arrays + cols - 1) // cols  # Calculate number of rows
-        fig, axes = plt.subplots(rows, cols, figsize=(cols * 6, rows * 6), 
-                                 subplot_kw={'projection': '3d'})
-        axes = np.array(axes).reshape(-1)  # Flatten in case of multiple rows
-
-        for i, (array, title, color, alpha) in enumerate(zip(arrays, titles, colors, alphas)):
-            ax = axes[i]
-            ax.set_title(title)
-            ax.voxels(np.ones(array.shape, dtype=bool), 
-                      facecolors=color, edgecolor='k', alpha=alpha)
-            ax.set_xlabel('Width')
-            ax.set_ylabel('Height')
-            ax.set_zlabel('Depth')
-
-        # Hide extra axes if fewer arrays
-        for j in range(i + 1, len(axes)):
-            fig.delaxes(axes[j])
-
-
-    plt.savefig(filename)
-    plt.close()
