@@ -83,15 +83,20 @@ fn initialize() void {
 
 //  General: Ax = aplha. (A * x) + beta.y
 //  answer= 1.(A * x) + 0.y
+// AX = A*x
+fn gemv_using_library() void {
 
-// fn gemv_using_library() void {
+    var alpha: f32 = 1.0;
+    var beta: f32 = 0.0;
+    var is_layout_column_major: bool = false;
+    gemv_mod.sgemv_inner(M, N, alpha, &A, M, &x, beta, &AX, is_layout_column_major);
 
-//     var alpha: f32 = 1.0;
-//     var beta: f32 = 0.0;
-//     gemv_mod.sgemv_outer(LOCAL_OUT_SZ, LOCAL_IN_SZ, alpha, &A, LOCAL_OUT_SZ, &x, beta, &Ax, &ws);
+}
 
-// }
 // Compute gemv
+// input: A, x
+// output: AX
+// AX = A*x
 fn gemv() void {
   for (@range(i16, M)) |i| {
     var tmp: f32 = 0.0;
@@ -112,7 +117,8 @@ fn residual_operator() void {
 // Call initialize and gemv functions
 fn init_and_compute() void {
     initialize();
-    gemv();
+    // gemv();
+    gemv_using_library();
     residual_operator();
 
     // unblock memcpy so that it can send data outside.
