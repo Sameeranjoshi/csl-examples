@@ -111,6 +111,11 @@ fn gemv() void {
 }
 
 fn gemv_using_dsd() void{
+    // TODO: BUG: This produces wrong results if called multiple times.
+    for (@range(i16, M)) |i| {
+        AX[i] = 0.0;
+    }
+    // @fsubs(mem_AX_dsd, mem_AX_dsd, mem_AX_dsd);
     for (@range(i16, N)) |i| {
         @fmacs(mem_AX_dsd, mem_AX_dsd, mem_A_dsd, x[i]);
         mem_A_dsd = @increment_dsd_offset(mem_A_dsd, 1, f32);
@@ -125,8 +130,8 @@ fn residual_operator() void {
 fn compute() void {
     // initialize();
     // gemv();
-    // gemv_using_library();
-    gemv_using_dsd();
+    gemv_using_library();
+    // gemv_using_dsd();
     residual_operator();
 
     // unblock memcpy so that it can send data outside.
