@@ -31,8 +31,11 @@
 
 param pe_cols: i16 ; // width of the core rectangle // 1
 param pe_rows: i16 ; // height of the core rectangle    //1 initially
-// param matrix_rows: i16; // number of rows in the matrix
-// param matrix_cols: i16; // number of columns in the matrix
+param M: i16;   // pe_rows
+param N: i16;   // pe_cols
+comptime {
+    @comptime_assert(M == N, "M and N must be equal at compiletime");
+}
 // comptime {
 //   // Number of matrix rows must be multiple of kernel rectangle height
 //   @comptime_assert(matrix_rows % pe_rows == 0);
@@ -65,6 +68,8 @@ layout {
             const memcpyParams = memcpy.get_params(px);
             var params: comptime_struct = .{
                 .memcpy_params = memcpyParams,
+                .M = M,
+                .N = N,
             };
 
             @set_tile_code(px, py, "kernel_amg.csl", params);

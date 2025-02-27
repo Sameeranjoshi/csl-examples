@@ -34,6 +34,8 @@ class CompileCoreArgs:
     cslc: str
     pe_rows: int
     pe_cols: int
+    M: int
+    N: int
     file_config: str
     elf_dir: str
     fabric_width: int
@@ -82,7 +84,10 @@ def parse_and_get_arguments():
 			compile_data = json.load(json_file)
 	pe_rows = int(compile_data['params']['pe_rows'])
 	pe_cols = int(compile_data['params']['pe_cols'])
-	
+	M = int(compile_data['params']['M'])
+	N = int(compile_data['params']['N'])
+	# do check that M should be equal to N, to be square matrix
+	assert M == N, "M should be equal to N, to be square matrix"
 	code_csl = "./src/layout_amg.csl"
 	if args.driver is not None:
 			cslc = args.driver
@@ -97,7 +102,7 @@ def parse_and_get_arguments():
 
 	
 	layout_arguments = CompileCoreArgs(
-			args, dirname, cslc, pe_cols, pe_rows, code_csl, dirname,
+			args, dirname, cslc, pe_cols, pe_rows, M, N, code_csl, dirname,
 			fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y,  # fabric details
 			args.run_only, args.arch, channels,
 			width_west_buf, width_east_buf
@@ -139,13 +144,23 @@ def device_calculations(input_data, layout_arguments):
   A = input_data["A"]
   x = input_data["x"]
   b = input_data["b"]
-  M = input_data["M"]
-  N = input_data["N"]
   # unpack the layout arguments
   args = layout_arguments.args
   dirname = layout_arguments.dirname
   pe_rows = layout_arguments.pe_rows
   pe_cols = layout_arguments.pe_cols
+  M = np.int32(layout_arguments.M)
+  N = np.int32(layout_arguments.N)
+  
+  # 1. amg setup
+  # 2. all data in levels
+  # for all levels:
+  #   3. x,y to allocate PEs= smart_analysis(of_level)(dynamic technique)
+  #   4. allocate layout PE(x,y)
+  #   5. copy data to PEs
+  #   6. run computation/solve phase
+  #   7. copy data back to host
+    
   
   ############################################################
   # Setup simulator
@@ -202,10 +217,8 @@ def main():
   ############################################################
   # Input data 
   ############################################################
-  matrix_rows = 4
-  matrix_cols = 4
-  M = matrix_rows
-  N = matrix_cols
+  M = np.int32(layout_arguments.M)
+  N = np.int32(layout_arguments.N) # make it explicit 32 bit
   
   A = np.arange(M*N, dtype=np.float32).reshape(M, N)
   x = np.full(shape=N*1, fill_value=1.0, dtype=np.float32)
@@ -222,8 +235,6 @@ def main():
     "A": A,
     "x": x,
     "b": b,
-    "M": M,
-    "N": N
   }
 
   ############################################################
