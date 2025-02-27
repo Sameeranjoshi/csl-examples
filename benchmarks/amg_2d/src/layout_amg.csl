@@ -72,12 +72,12 @@ layout {
     }
 
     // input (true = mutability from host?)
-    // @export_name("b", [*]f32, true);
-    // @export_name("x", [*]f32, true);
-    // @export_name("A", [*]f32, true);
+    @export_name("b", [*]f32, true);
+    @export_name("x", [*]f32, true);
+    @export_name("A", [*]f32, true);
 
     // kernels
-    @export_name("init_and_compute", fn()void);
+    @export_name("compute", fn()void);
 
     // outputs
     @export_name("residual", [*]f32, false);    // host can't modify residual.

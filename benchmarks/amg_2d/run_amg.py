@@ -155,6 +155,9 @@ def device_calculations(input_data, layout_arguments):
 
   # data accessible from host and device.
   symbol_residual = simulator.get_id("residual")
+  symbol_A = simulator.get_id("A")
+  symbol_x = simulator.get_id("x")
+  symbol_b = simulator.get_id("b")
 
   simulator.load()
   simulator.run()
@@ -162,11 +165,16 @@ def device_calculations(input_data, layout_arguments):
   ############################################################
   # H2D
   ############################################################
-  
+  simulator.memcpy_h2d(symbol_x, x, 0, 0, pe_cols, pe_rows, N*1, streaming=False,
+    order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
+  simulator.memcpy_h2d(symbol_A, A.flatten(order='C'), 0, 0, pe_cols, pe_rows, M*N, streaming=False,
+    order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
+  simulator.memcpy_h2d(symbol_b, b, 0, 0, pe_cols, pe_rows, M*1, streaming=False,
+    order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
   ############################################################
   # Kernel
   ############################################################
-  simulator.launch('init_and_compute', nonblock=False)
+  simulator.launch('compute', nonblock=False)
   
   ############################################################
   # D2H
