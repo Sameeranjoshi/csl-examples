@@ -17,6 +17,8 @@
 param memcpy_params: comptime_struct;
 param M: i16;   // pe_rows
 param N: i16;   // pe_cols
+param R_M: i16; // R shape parameters here
+param R_N: i16;
 
 ////////////////////////////////////////
 // DATA(local + global)
@@ -26,29 +28,33 @@ param N: i16;   // pe_cols
 const _MAX_SIZE_A = M*N;
 const _MAX_SIZE_X = N*1;
 const _MAX_SIZE_AX = M*1;
+const _MAX_SIZE_R = R_M*R_N;
 // R shape parameters here
 
+//INPUT
 // 48 kB of global memory contain A, x, b, R
 // Accessible from host.
 var A: [M*N]f32; // A is stored in row-major order
+var R: [R_M*R_N]f32; // R is stored in row-major order
 var x: [N*1]f32;    // var x: [N*1]f32;
 var b: [M*1]f32;    // var b: [M*1]f32;
-// var R: [M*N]f32; // R is stored in row-major order
-// var b_coarse: @zeros([M]f32);
 // var x_coarse: @zeros([N]f32);
 
-// local vars
-var residual =  @constants([M*1]f32, 0.0);   // var residual: [M*1]f32;
+// LOCAL TEMP
 var AX = @zeros([M*1]f32);   // var AX: [M*1]f32;
 
+// OUTPUT
+var residual =  @constants([M*1]f32, 0.0);   // var residual: [M*1]f32;
+var b_coarse = @zeros([R_M*1]f32);
 ////////////////////////////////////////
 // Decide what is visible from outside world.
 ////////////////////////////////////////
 const residual_ptr: [*]f32 = &residual; // Why const = as won't be changed by the host
+const b_coarse_ptr: [*]f32 = &b_coarse;
 var A_ptr: [*]f32 = &A;
 var x_ptr: [*]f32 = &x;
 var b_ptr: [*]f32 = &b;
-
+var R_ptr: [*]f32 = &R;
 ////////////////////////////////////////
 // DSD
 ////////////////////////////////////////
@@ -58,8 +64,10 @@ var b_ptr: [*]f32 = &b;
 var mem_b_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> b[i] });
 var mem_x_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N} -> x[i] });
 var mem_A_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> A[i*N] });
+var mem_R_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M} -> R[i*R_N] });
 // base_address=&A, offset=0, stride=N, extent=M
 var mem_residual_dsd = @get_dsd(mem1d_dsd, .{ .base_address=&residual, .offset=0, .stride=1, .extent=M });
+var mem_b_coarse_dsd = @get_dsd(mem1d_dsd, .{ .base_address=&b_coarse, .offset=0, .stride=1, .extent=R_M });
 var mem_AX_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> AX[i] });
 
 
@@ -77,10 +85,11 @@ fn initialize() void {
     // for loop with range syntax
     // loops over 0, 1, ...., M*N-1
     // idx stores the loop index
-    for (@range(i16, M*N)) |idx| {
-        // @as casts idx from i16 to f32
-        A[idx] = @as(f32, idx);
-    }
+    // for (@range(i16, M*N)) |idx| {
+    //     // @as casts idx from i16 to f32
+    //     A[idx] = @as(f32, idx);
+    // }
+    // print R
 }
 
 //  General: Ax = aplha. (A * x) + beta.y
@@ -126,6 +135,30 @@ fn residual_operator() void {
     @fsubs(mem_residual_dsd, mem_b_dsd, mem_AX_dsd);
 }
 
+fn restriction_operator() void {
+    // TODO: Use DSD for speed.
+  for (@range(i16, R_M)) |i| {
+    var tmp: f32 = 0.0;
+    for (@range(i16, R_N)) |j| {
+      tmp += A[i*R_N + j] * residual[j];
+    }
+    b_coarse[i] = tmp;
+    // y[i] = tmp + b[i];
+  }
+}
+
+fn restriction_operator_using_dsd() void{
+    // TODO: BUG: This produces wrong results if called multiple times.
+    // for (@range(i16, R_M)) |i| {
+    //     AX[i] = 0.0;
+    // }
+    // @fsubs(mem_AX_dsd, mem_AX_dsd, mem_AX_dsd);
+    for (@range(i16, R_N)) |i| {
+        @fmacs(mem_b_coarse_dsd, mem_b_coarse_dsd, mem_R_dsd, residual[i]);
+        mem_R_dsd = @increment_dsd_offset(mem_R_dsd, 1, f32);
+    }
+}
+
 // Call initialize and gemv functions
 fn compute() void {
     // initialize();
@@ -133,6 +166,7 @@ fn compute() void {
     gemv_using_library();
     // gemv_using_dsd();
     residual_operator();
+    restriction_operator_using_dsd();
 
     // unblock memcpy so that it can send data outside.
     sys_mod.unblock_cmd_stream();
@@ -144,6 +178,7 @@ fn compute() void {
 ////////////////////////////////////////
 comptime {
     @export_symbol(A_ptr, "A");
+    @export_symbol(R_ptr, "R");
     @export_symbol(x_ptr, "x");
     @export_symbol(b_ptr, "b");
 }
@@ -154,4 +189,5 @@ comptime {
 comptime {
     // Export symbol pointing to y so it is host-readable
     @export_symbol(residual_ptr, "residual");
+    @export_symbol(b_coarse_ptr, "b_coarse");
 }

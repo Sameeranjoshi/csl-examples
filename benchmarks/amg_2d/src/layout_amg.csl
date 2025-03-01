@@ -31,8 +31,10 @@
 
 param pe_cols: i16 ; // width of the core rectangle // 1
 param pe_rows: i16 ; // height of the core rectangle    //1 initially
-param M: i16;   // pe_rows
-param N: i16;   // pe_cols
+param M: i16;       // A shape parameters here
+param N: i16;   
+param R_M: i16;     // R shape parameters here
+param R_N: i16; 
 comptime {
     @comptime_assert(M == N, "M and N must be equal at compiletime");
 }
@@ -70,6 +72,8 @@ layout {
                 .memcpy_params = memcpyParams,
                 .M = M,
                 .N = N,
+                .R_M = R_M,
+                .R_N = R_N
             };
 
             @set_tile_code(px, py, "kernel_amg.csl", params);
@@ -80,10 +84,12 @@ layout {
     @export_name("b", [*]f32, true);
     @export_name("x", [*]f32, true);
     @export_name("A", [*]f32, true);
+    @export_name("R", [*]f32, true);
 
     // kernels
     @export_name("compute", fn()void);
 
     // outputs
     @export_name("residual", [*]f32, false);    // host can't modify residual.
+    @export_name("b_coarse", [*]f32, false);    // host can't modify b_coarse.
 } // end of layout

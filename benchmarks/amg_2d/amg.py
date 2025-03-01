@@ -28,6 +28,7 @@ from pyamg import smoothed_aggregation_solver, ruge_stuben_solver
 from scipy.sparse import random
 import matplotlib.pyplot as plt
 import math
+import utilities as ut
 
 
 # solve a linear system A * x = b
@@ -115,8 +116,8 @@ def AMG_only_solve(A_csr, b0, x0, tol, max_ite, max_levels, max_coarse, solver):
                 A, P, R = level.A, level.P, level.R
                 x = x_level[i]
                 b = b_level[i]
-                
-                level.presmoother(A, x, b)
+                # level.presmoother(A, x, b)
+                ut.jacobi_dense(A, x, b, omega=get_omega_from_presmoother(setup_config), iterations=get_iterations_from_presmoother(setup_config))
                 r = b - A @ x
                 b_coarse = R @ r
                 
@@ -143,7 +144,8 @@ def AMG_only_solve(A_csr, b0, x0, tol, max_ite, max_levels, max_coarse, solver):
                 x_level[i] += P @ x_level[i+1]  # Prolongation
 
                 # Apply post-smoother
-                ml.levels[i].postsmoother(ml.levels[i].A, x_level[i], b_level[i])
+                # ml.levels[i].postsmoother(ml.levels[i].A, x_level[i], b_level[i])
+                ut.jacobi_dense(ml.levels[i].A, x_level[i], b_level[i], omega=get_omega_from_presmoother(setup_config), iterations=get_iterations_from_presmoother(setup_config))
 
         resi = b_level[0] - ml.levels[0].A @ x_level[0]
         norm_b0 = np.linalg.norm(b0)
@@ -157,7 +159,7 @@ def AMG_only_solve(A_csr, b0, x0, tol, max_ite, max_levels, max_coarse, solver):
 
     rho = np.dot(resi, resi)
     return x_level[0], rho
-        
+
 def print_table_shapes(levels):
     level_data = []
     for idx, level in enumerate(levels):
@@ -266,7 +268,28 @@ def visualize(ml):
     plt.tight_layout()
     plt.savefig("sparse_matrix_visualization.png", dpi=300)
     plt.show()
-   
+
+def get_omega_from_presmoother(smoothed_aggregation_solver_config):
+    # Extract omega from presmoother configuration
+    presmoother_config = smoothed_aggregation_solver_config.get('presmoother', None)
+    if presmoother_config and isinstance(presmoother_config, tuple):
+        presmoother_params = presmoother_config[1]
+        omega = presmoother_params.get('omega', None)
+        return omega 
+    else:
+        print("Presmoother omega not found in configuration")
+        exit(1)
+
+def get_iterations_from_presmoother(smoothed_aggregation_solver_config):
+    # Extract iterations from presmoother configuration
+    presmoother_config = smoothed_aggregation_solver_config.get('presmoother', None)
+    if presmoother_config and isinstance(presmoother_config, tuple):
+        presmoother_params = presmoother_config[1]
+        iterations = presmoother_params.get('iterations', None)
+        return iterations
+    else:
+        print("Presmoother iterations not found in configuration")
+        exit(1)
 #############################################
 def rs_base(A, x, b, max_iter=100, solver='cg'):
     np.random.seed(100)
@@ -371,8 +394,9 @@ def smooth_aggregate_setup_only(A, x, b, solver, max_level=None, max_coarse=None
         'aggregate': ('lloyd', {'ratio': 0.70}),  # Reduce coarsening aggressiveness
         'strength': ('symmetric', {'theta': 0.05}),  # Capture more connections
         'smooth': 'jacobi',
-        'presmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5}),
-        'postsmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5}),
+        # withrho is essential for answers to be correct
+        'presmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5, 'withrho': False}),
+        'postsmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5, 'withrho': False}),  
         'improve_candidates': (('gauss_seidel', {'sweep': 'symmetric', 'iterations': 6}), None),
         'coarse_solver': coarse_solver_callable
     }
@@ -400,8 +424,8 @@ def rs_setup_only(A, x, b, solver, max_level=None, max_coarse=None):
         'strength': ('classical', {'theta': 0.4}),  # Capture more connections
         'CF': ('RS', {'second_pass': True}),  # Standard RS coarsening
         'interpolation': 'classical',  # Slowest interpolation method
-        'presmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5}),
-        'postsmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5}),
+        'presmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5, 'withrho': False}),
+        'postsmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5, 'withrho': False}),
         'coarse_solver': coarse_solver_callable  
     }
     if max_coarse is not None:

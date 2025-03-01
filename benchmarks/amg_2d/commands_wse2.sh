@@ -11,6 +11,7 @@ set -e
 cslc ./src/layout_amg.csl \
 --params=pe_rows:1,pe_cols:1 \
 --param=M:4,N:4 \
+--param=R_M:2,R_N:4 \
 --arch wse2 --fabric-dims=8,3 --fabric-offsets=4,1 \
 --memcpy --channels=1 --max-inlined-iterations=1000000 -o out 
 
