@@ -10,5 +10,5 @@ set -e
 
 
 
-cs_python ./run.py -m=10 -n=10 -k=10 --latestlink out --channels=1 \
---width-west-buf=0 --width-east-buf=0 --zDim=10 --max-ite=80
+cs_python ./run.py -m=33 -n=33 -k=33 --latestlink out --channels=1 \
+--width-west-buf=0 --width-east-buf=0 --zDim=33 --run-only --max-ite=80

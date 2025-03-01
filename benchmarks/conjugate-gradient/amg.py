@@ -80,8 +80,8 @@ def AMG_only_solve(A_csr, b0, x0, tol, max_ite, max_levels, max_coarse, solver):
     ml, setup_config = smooth_aggregate_setup_only(A_csr, x0, b0, solver, max_levels, max_coarse)
     # visualize(ml)
         
-    # print(ml)
-    # print_table_shapes(ml.levels)
+    print(ml)
+    print_table_shapes(ml.levels)
     # print_table_data(ml.levels)
     
     # if only 1 level solve directly
@@ -130,6 +130,9 @@ def AMG_only_solve(A_csr, b0, x0, tol, max_ite, max_levels, max_coarse, solver):
             b_coarsest = b_level[-1]
             x_coarsest = x_level[-1]
             A_coarsest = ml.levels[-1].A
+            print(f"A_coarsest: {A_coarsest.toarray()}")
+            print(f"b_coarsest: {b_coarsest}")
+            print(f"x_coarsest: {x_coarsest}")
             if isinstance(solver, tuple):
                 solver_fn, solver_kwargs = solver
                 sol_result = solver_fn(A_coarsest, b_coarsest, **solver_kwargs)  # Pass additional arguments
@@ -368,12 +371,13 @@ def smooth_aggregate_setup_only(A, x, b, solver, max_level=None, max_coarse=None
     smoothed_aggregation_solver_config = {
         'B': b,
         'symmetry': 'symmetric',
-        'aggregate': ('lloyd', {'ratio': 0.70}),  # Reduce coarsening aggressiveness
-        'strength': ('symmetric', {'theta': 0.05}),  # Capture more connections
+        'aggregate': ('lloyd', {'ratio': 0.40}),  # Reduce coarsening aggressiveness
+        'strength': ('symmetric', {'theta': 0.10}),  # Capture more connections
         'smooth': 'jacobi',
-        'presmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5}),
-        'postsmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5}),
-        'improve_candidates': (('gauss_seidel', {'sweep': 'symmetric', 'iterations': 6}), None),
+        # withrho is essential for answers to be correct
+        'presmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 3, 'withrho': False}),
+        'postsmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 3, 'withrho': False}),  
+        'improve_candidates': (('gauss_seidel', {'sweep': 'symmetric', 'iterations': 3}), None),
         'coarse_solver': coarse_solver_callable
     }
     if max_coarse is not None:
@@ -400,8 +404,8 @@ def rs_setup_only(A, x, b, solver, max_level=None, max_coarse=None):
         'strength': ('classical', {'theta': 0.4}),  # Capture more connections
         'CF': ('RS', {'second_pass': True}),  # Standard RS coarsening
         'interpolation': 'classical',  # Slowest interpolation method
-        'presmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5}),
-        'postsmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5}),
+        'presmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5, 'withrho': False}),
+        'postsmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5, 'withrho': False}),
         'coarse_solver': coarse_solver_callable  
     }
     if max_coarse is not None:

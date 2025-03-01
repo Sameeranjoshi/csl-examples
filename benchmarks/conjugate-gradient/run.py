@@ -499,14 +499,14 @@ def main():
   # CG_from_Cerebras = (conjugateGradient, { "max_ite": max_ite, "tol": relative_tol})
   # x_my_host_CG, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=max_ite, max_levels=20, max_coarse=27, solver=CG_from_Cerebras)      # split into 3 phases
   
-  # x_my_host_scipy_CG, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=max_ite, max_levels=20, max_coarse=27, solver=solver_callable_host)      # split into 3 phases
+  x_my_host_scipy_CG, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=1, max_levels=20, max_coarse=9, solver=solver_callable_host)      # split into 3 phases
   # test(x_my_host_CG, x_my_host_scipy_CG, relative_tol) # test_rs_baseline vs test_rs_baseline
 
   print("##################################################")
   
   # # AMG(CG on device)
-  CG_on_device = (wrapper_solver_device_amg, {"args":args, "dirname":dirname, "max_ite":max_ite, "tol":relative_tol , "stencil_coeff":stencil_coeff, "height":height, "width":width, "zDim":zDim, "layout_arguments": layout_arguments })
-  x_my_device, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=1, max_levels=20, max_coarse=27, solver=CG_on_device)      # split into 3 phases
+  # CG_on_device = (wrapper_solver_device_amg, {"args":args, "dirname":dirname, "max_ite":max_ite, "tol":relative_tol , "stencil_coeff":stencil_coeff, "height":height, "width":width, "zDim":zDim, "layout_arguments": layout_arguments })
+  # x_my_device, _ = amg.AMG_only_solve(A_csr, b0=b_1d, x0=x_1d, tol=relative_tol, max_ite=1, max_levels=20, max_coarse=4, solver=CG_on_device)      # split into 3 phases
   # test(x_my_device, x_my_host_CG, relative_tol) # test_rs_baseline vs test_rs_baseline
   # test(x_my_device, x_my_host_scipy_CG, relative_tol) # test_rs_baseline vs test_rs_baseline
   # print(x_my_device[0:10])
