@@ -87,11 +87,9 @@ layout {
     @export_name("R", [*]f32, true);
 
     // kernels
-    @export_name("compute", fn()void);
-    @export_name("jacobi", fn()void);
+    @export_name("compute", fn(f32, i16)void);
 
     // outputs
-    @export_name("x_smooth", [*]f32, false);    // host can't modify x_smooth.
     @export_name("residual", [*]f32, false);    // host can't modify residual.
     @export_name("b_coarse", [*]f32, false);    // host can't modify b_coarse.
 } // end of layout

@@ -27,6 +27,7 @@ from dataclasses import dataclass
 import json
 from sklearn.datasets import make_sparse_spd_matrix
 import amg as amg 
+import copy
 
 @dataclass
 class CompileCoreArgs:
@@ -162,9 +163,11 @@ def host_calculations(v_cycle_data):
   x_level = v_cycle_data["x_level"]
   b_level = v_cycle_data["b_level"]
 
+  residual_host = []
   A, P, R, x, b = ml.levels[0].A, ml.levels[0].P, ml.levels[0].R, x_level[0], b_level[0]
-  b_coarse_host, x_coarse_host = amg.each_layer_solver(A, b, x, R, ml, setup_config, 0)
-  return b_coarse_host, x_coarse_host
+  b_coarse_host, x_coarse_host = amg.each_layer_solver(A, b, x, R, ml, setup_config, 0, residual_host)
+
+  return b_coarse_host, x_coarse_host, residual_host
 
 def device_calculations(v_cycle_data):
   run_args, logs_dir = parse_args()
@@ -181,6 +184,7 @@ def device_calculations(v_cycle_data):
   ############################################################
   # CREATE DYNAMIC LAYOUT
   ############################################################
+  residual_device_log = []
   A, P, R, x, b = ml.levels[0].A.toarray(), ml.levels[0].P.toarray(), ml.levels[0].R.toarray(), x_level[0], b_level[0]
   [M,N] = A.shape
   [R_M, R_N] = R.shape
@@ -201,7 +205,6 @@ def device_calculations(v_cycle_data):
   symbol_x = simulator.get_id("x")
   symbol_b = simulator.get_id("b")
   symbol_R = simulator.get_id("R")
-  symbol_x_smooth = simulator.get_id("x_smooth")
 
   simulator.load()
   simulator.run()
@@ -220,27 +223,33 @@ def device_calculations(v_cycle_data):
   ############################################################
   # Kernel
   ############################################################
-  simulator.launch('jacobi', nonblock=False)
-  simulator.launch('compute', nonblock=False)
+  omega=amg.get_omega_from_presmoother(setup_config)
+  iterations=amg.get_iterations_from_presmoother(setup_config)    
+  print(f"Solving Layer 0 with omega={omega}, smoothing_iterations={iterations}")
+  
+  simulator.launch('compute', np.float32(omega), np.int16(iterations), nonblock=False)
 
   ############################################################
   # D2H
   ############################################################
-  x_smooth_device = np.zeros([N*1], dtype=np.float32)
-  simulator.memcpy_d2h(x_smooth_device, symbol_x_smooth, 0, 0, 1, 1, N*1, streaming=False,
-    order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
   residual_device = np.zeros([M*1], dtype=np.float32)
   simulator.memcpy_d2h(residual_device, symbol_residual, 0, 0, 1, 1, M*1, streaming=False,
     order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
   b_coarse_device = np.zeros([R_M*1], dtype=np.float32)
   simulator.memcpy_d2h(b_coarse_device, symbol_b_coarse, 0, 0, 1, 1, R_M*1, streaming=False,
     order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
+  x_coarse_device = np.zeros_like(b_coarse_device)
+  
+  ############################################################
+  # some additional logging
+  ############################################################
+  residual_device_log.append(residual_device)
   ############################################################
   # Cleanup
   ############################################################
   simulator.stop()
   logs(run_args, logs_dir)
-  return residual_device, b_coarse_device, x_smooth_device
+  return b_coarse_device, x_coarse_device, residual_device_log
 
 def generate_dynamic_layout(run_args, pe_cols_=1, pe_rows_=1, M_=4, N_=4, R_M_=2, R_N_=4):
     print("Precompile disabled, compiling based on problem size.")
@@ -320,19 +329,24 @@ def main():
     "b_level": b_level,
     "setup_config": setup_config
   }
+  v_cycle_data_host = copy.deepcopy(v_cycle_data)
+  v_cycle_data_device = copy.deepcopy(v_cycle_data) # This is expensive
   print("############################################################")
   print("# HOST CALCULATIONS")
   print("############################################################")
-  b_coarse_host, x_coarse_host = host_calculations(v_cycle_data)
+  b_coarse_host, x_coarse_host, residual_host = host_calculations(v_cycle_data_host)
   print("\tb_coarse Host:", b_coarse_host.ravel())
   print("\tx_coarse Host:", x_coarse_host.ravel())
+  for i, residual in enumerate(residual_host):
+      print(f"\tResidual Host [{i}]:", residual)
   print("############################################################")
   print("# DEVICE CALCULATIONS")
   print("############################################################")
-  residual_device, b_coarse_device, x_smooth_device = device_calculations(v_cycle_data)
-  print("Residual Device:", residual_device.ravel())
-  print("b_coarse Device:", b_coarse_device.ravel())
-  print("x_smooth Device:", x_smooth_device.ravel())
+  b_coarse_device, x_coarse_device, residual_device = device_calculations(v_cycle_data_device)
+  print("\tb_coarse Device:", b_coarse_device.ravel())
+  print("\tx_coarse Device:", x_coarse_device.ravel()) 
+  for i, residual in enumerate(residual_device):
+      print(f"\tResidual Device [{i}]:", residual)   
   print("############################################################")
   print("# COMPARISON")
   print("############################################################")

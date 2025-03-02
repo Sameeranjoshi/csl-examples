@@ -30,17 +30,15 @@ import matplotlib.pyplot as plt
 import math
 import utilities as ut
 
-def each_layer_solver(A, b, x, R, ml, setup_config, level_id):
+def each_layer_solver(A, b, x, R, ml, setup_config, level_id, residual_host):
     print(f"Solving on host layer: {level_id}")
-    
-    print("\tBefore presmoother: ", x)
     # ml.levels[level_id].presmoother(A, x, b)
     ut.jacobi_dense(A, x, b, omega=get_omega_from_presmoother(setup_config), iterations=get_iterations_from_presmoother(setup_config))
-    print(f"\tAfter presmoother: {x}")
-    r = b - A @ x
-    print(f"\tResidual: {r}")
-    b_coarse = R @ r
+    r = b - A @ x   # residual
+    b_coarse = R @ r    # restrict
     x_coarse = np.zeros_like(b_coarse)
+    
+    residual_host.append(r)
     return b_coarse, x_coarse
 
 # solve a linear system A * x = b

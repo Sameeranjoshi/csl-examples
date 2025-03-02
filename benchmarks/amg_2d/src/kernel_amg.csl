@@ -46,13 +46,12 @@ var AX = @zeros([M*1]f32);   // var AX: [M*1]f32;
 // OUTPUT
 var residual =  @constants([M*1]f32, 0.0);   // var residual: [M*1]f32;
 var b_coarse = @zeros([R_M*1]f32);
-var x_smooth = @zeros([N*1]f32);
+
 ////////////////////////////////////////
 // Decide what is visible from outside world.
 ////////////////////////////////////////
 const residual_ptr: [*]f32 = &residual; // Why const = as won't be changed by the host
 const b_coarse_ptr: [*]f32 = &b_coarse;
-const x_smooth_ptr: [*]f32 = &x_smooth;
 var A_ptr: [*]f32 = &A;
 var x_ptr: [*]f32 = &x;
 var b_ptr: [*]f32 = &b;
@@ -70,7 +69,6 @@ var mem_R_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M} -> R[i*R_N] });
 // base_address=&A, offset=0, stride=N, extent=M
 var mem_residual_dsd = @get_dsd(mem1d_dsd, .{ .base_address=&residual, .offset=0, .stride=1, .extent=M });
 var mem_b_coarse_dsd = @get_dsd(mem1d_dsd, .{ .base_address=&b_coarse, .offset=0, .stride=1, .extent=R_M });
-var mem_x_smooth_dsd = @get_dsd(mem1d_dsd, .{ .base_address=&x_smooth, .offset=0, .stride=1, .extent=N });
 var mem_AX_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> AX[i] });
 
 
@@ -79,7 +77,7 @@ var mem_AX_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> AX[i] });
 ////////////////////////////////////////
 const gemv_mod   = @import_module("../libraries/gemv.csl",   .{ .sizeA = _MAX_SIZE_A, .sizeX = _MAX_SIZE_X, .sizeY = _MAX_SIZE_AX });
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
-
+const simprint = @import_module("<simprint>", .{ .enable = true });
 ////////////////////////////////////////
 // Functions
 ////////////////////////////////////////
@@ -162,31 +160,49 @@ fn restriction_operator_using_dsd() void{
     }
 }
 
-fn jacobi() void {
-    // TODO:
-    // for (@range(i16, N)) |i| {
-    //     x_smooth[i] = 0.0;
-    // }
-    // for (@range(i16, N)) |i| {
-    //     var tmp: f32 = 0.0;
-    //     for (@range(i16, N)) |j| {
-    //         if (i != j) {
-    //             tmp += A[i*N + j] * x[j];
-    //         }
-    //     }
-    //     x_smooth[i] = (b[i] - tmp) / A[i*N + i];
-    // }
+// Weighted jacobi iteration
+// formula: x = (1-omega)*x + omega*(b - A*x)/diag(A)
+// Ax is for all values except the diagonal value.
+
+fn jacobi(omega:f32, iterations: i16) void {
+
+    // var omega: f32 = 1.0/3.0;
+    // var iterations: i32 = 5;
+
+    for (@range(i16, iterations)) |iter| {
+        // make copy of x into temp.
+        var tmp = @zeros([N*1]f32);
+        for (@range(i32, N)) |i| {
+            tmp[i] = x[i];
+        }
+
+        for (@range(i16, M)) |i| {
+            var rsum: f32 = 0.0;
+            var diag: f32 = A[i*N + i];
+            for (@range(i16, N)) |j| {
+                if (i != j) {
+                    rsum += A[i*N + j] * tmp[j];
+                }
+            }
+            if (diag != 0.0) {
+                x[i] = (1.0 - omega) * tmp[i] + omega * (b[i] - rsum) / diag;
+            }
+        }
+    }
+
+    sys_mod.unblock_cmd_stream();
 }
 
 
 // Call initialize and gemv functions
-fn compute() void {
+fn compute(omega:f32, iterations: i16) void {
     // initialize();
     // gemv();
+    jacobi(omega, iterations);  // presmoother
     gemv_using_library();
     // gemv_using_dsd();
-    residual_operator();
-    restriction_operator_using_dsd();
+    residual_operator();        // residual
+    restriction_operator_using_dsd();   // restriction
 
     // unblock memcpy so that it can send data outside.
     sys_mod.unblock_cmd_stream();
@@ -205,11 +221,9 @@ comptime {
 comptime {
     // Export function so it is host-callable by RPC mechanism
     @export_symbol(compute);
-    @export_symbol(jacobi);
 }
 comptime {
     // Export symbol pointing to y so it is host-readable
-    @export_symbol(x_smooth_ptr, "x_smooth");    // host can't modify x_smooth.
     @export_symbol(residual_ptr, "residual");
     @export_symbol(b_coarse_ptr, "b_coarse");
 }
