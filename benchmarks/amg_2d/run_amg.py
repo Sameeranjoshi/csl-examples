@@ -144,7 +144,13 @@ def logs(run_args, logs_dir):
     
     # Move all files and directories starting with "sim" to the logs_dir
     for item in Path().glob('sim*'):
-      shutil.move(str(item), str(logs_dir))
+        dest = Path(logs_dir) / item.name
+        if dest.exists():
+            if dest.is_dir():
+                shutil.rmtree(dest)
+            else:
+                dest.unlink()
+        shutil.move(str(item), str(logs_dir))
 
 
     
@@ -195,6 +201,7 @@ def device_calculations(v_cycle_data):
   symbol_x = simulator.get_id("x")
   symbol_b = simulator.get_id("b")
   symbol_R = simulator.get_id("R")
+  symbol_x_smooth = simulator.get_id("x_smooth")
 
   simulator.load()
   simulator.run()
@@ -213,11 +220,15 @@ def device_calculations(v_cycle_data):
   ############################################################
   # Kernel
   ############################################################
+  simulator.launch('jacobi', nonblock=False)
   simulator.launch('compute', nonblock=False)
 
   ############################################################
   # D2H
   ############################################################
+  x_smooth_device = np.zeros([N*1], dtype=np.float32)
+  simulator.memcpy_d2h(x_smooth_device, symbol_x_smooth, 0, 0, 1, 1, N*1, streaming=False,
+    order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
   residual_device = np.zeros([M*1], dtype=np.float32)
   simulator.memcpy_d2h(residual_device, symbol_residual, 0, 0, 1, 1, M*1, streaming=False,
     order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
@@ -229,7 +240,7 @@ def device_calculations(v_cycle_data):
   ############################################################
   simulator.stop()
   logs(run_args, logs_dir)
-  return residual_device, b_coarse_device
+  return residual_device, b_coarse_device, x_smooth_device
 
 def generate_dynamic_layout(run_args, pe_cols_=1, pe_rows_=1, M_=4, N_=4, R_M_=2, R_N_=4):
     print("Precompile disabled, compiling based on problem size.")
@@ -261,8 +272,8 @@ def main():
   print("############################################################")
   print("# INPUT DATA")
   print("############################################################")
-  M = 50
-  N = 50
+  M = 5
+  N = 5
   
   # data
   A0 = np.arange(M*N, dtype=np.float32).reshape(M, N)  # 2D
@@ -293,7 +304,7 @@ def main():
   print("\tPerforming AMG Setup")
   solver_callable_host = amg.scipy_direct_solver
   ml, setup_config = amg.smooth_aggregate_setup_only(input_data["A0"], x=input_data["x0"], b=input_data["b0"], 
-                                                     solver=solver_callable_host, max_level=10, max_coarse=10)
+                                                     solver=solver_callable_host, max_level=10, max_coarse=2)
   print(ml)
   print(amg.print_table_shapes(ml.levels))
   print(amg.print_table_data(ml.levels))
@@ -318,9 +329,10 @@ def main():
   print("############################################################")
   print("# DEVICE CALCULATIONS")
   print("############################################################")
-  residual_device, b_coarse_device = device_calculations(v_cycle_data)
+  residual_device, b_coarse_device, x_smooth_device = device_calculations(v_cycle_data)
   print("Residual Device:", residual_device.ravel())
   print("b_coarse Device:", b_coarse_device.ravel())
+  print("x_smooth Device:", x_smooth_device.ravel())
   print("############################################################")
   print("# COMPARISON")
   print("############################################################")

@@ -33,10 +33,10 @@ import utilities as ut
 def each_layer_solver(A, b, x, R, ml, setup_config, level_id):
     print(f"Solving on host layer: {level_id}")
     
-    # print("\tBefore presmoother: ", x)
+    print("\tBefore presmoother: ", x)
     # ml.levels[level_id].presmoother(A, x, b)
-    # ut.jacobi_dense(A, x, b, omega=get_omega_from_presmoother(setup_config), iterations=get_iterations_from_presmoother(setup_config))
-    # print(f"\tAfter presmoother: {x}")
+    ut.jacobi_dense(A, x, b, omega=get_omega_from_presmoother(setup_config), iterations=get_iterations_from_presmoother(setup_config))
+    print(f"\tAfter presmoother: {x}")
     r = b - A @ x
     print(f"\tResidual: {r}")
     b_coarse = R @ r
@@ -403,8 +403,8 @@ def smooth_aggregate_setup_only(A, x, b, solver, max_level=None, max_coarse=None
     smoothed_aggregation_solver_config = {
         'B': b,
         'symmetry': 'symmetric',
-        'aggregate': ('lloyd', {'ratio': 0.10}),  # Reduce coarsening aggressiveness
-        'strength': ('symmetric', {'theta': 0.05}),  # Capture more connections
+        'aggregate': ('lloyd', {'ratio': 0.001}),  # Reduce coarsening aggressiveness
+        'strength': ('symmetric', {'theta': 0.99}),  # Capture more connections
         'smooth': 'jacobi',
         # withrho is essential for answers to be correct
         'presmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5, 'withrho': False}),
