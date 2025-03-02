@@ -8,15 +8,17 @@ set -e
 # --params=pe_rows:1,pe_cols:1 \
 # --memcpy --channels=1 --width-west-buf=0 --width-east-buf=0 -o=out --max-inlined-iterations=1000000
 
-cslc ./src/layout_amg.csl \
---params=pe_rows:1,pe_cols:1 \
---param=M:4,N:4 \
---param=R_M:2,R_N:4 \
---arch wse2 --fabric-dims=8,3 --fabric-offsets=4,1 \
---memcpy --channels=1 --max-inlined-iterations=1000000 -o out 
+# cslc ./src/layout_amg.csl \
+# --params=pe_rows:1,pe_cols:1 \
+# --param=M:16,N:16 \
+# --param=R_M:2,R_N:4 \
+# --memcpy --channels=1 --width-west-buf=0 --width-east-buf=0 \
+# --max-inlined-iterations=1000000 -o out
 
-cs_python ./run_amg.py --run-only --latestlink out --name out
 
+
+cs_python ./run_amg.py --logsdir logs --elffolder out
+# When using run-only you have to compile first.
 
 # # # # Run it
 # cs_python ./run.py --max-ite=80 --run-only --latestlink out

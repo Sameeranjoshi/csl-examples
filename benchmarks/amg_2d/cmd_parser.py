@@ -16,7 +16,7 @@
 
 """command parser for bandwidthTest
    
-   --latestlink   working directory
+   --logsdir   working directory
    --driver     path to CSL compiler
    --fabric-dims  fabric dimension of a WSE
    --cmaddr       IP address of a WSE
@@ -35,53 +35,28 @@ import argparse
 def parse_args():
   parser = argparse.ArgumentParser()
 
-  parser.add_argument("--name", required=False, default="out",
-                      help="prefix of ELF files")
   parser.add_argument(
-      "--max-ite",
-      default=1, type=int,
-      help="maximum number of iterations of power method")
+      "--elffolder", 
+      required=False, 
+      default="out", help="prefix of ELF files")
   parser.add_argument(
-      "--latestlink",
-      help="folder to contain the log files (default: latest)")
-  parser.add_argument(
-      "-d",
-      "--driver",
-      help="The path to the CSL compiler")
+      "--logsdir",
+      help="folder to contain the log files (default: logs)")
   parser.add_argument(
       "--compile-only",
       help="Compile only", action="store_true")
-  parser.add_argument(
-      "--fabric-dims",
-      help="Fabric dimension, i.e. <W>,<H>")
   parser.add_argument(
       "--cmaddr",
       help="CM address and port, i.e. <IP>:<port>")
   parser.add_argument(
       "--run-only",
       help="Run only", action="store_true")
-  parser.add_argument(
-      "--arch",
-      default="wse2",
-      help="wse2 or wse3. Default is wse2 when not supplied.")
-  parser.add_argument(
-      "--width-west-buf",
-      default=0, type=int,
-      help="width of west buffer")
-  parser.add_argument(
-      "--width-east-buf",
-      default=0, type=int,
-      help="width of east buffer")
-  parser.add_argument(
-      "--channels",
-      default=1, type=int,
-      help="number of I/O channels, between 1 and 16")
   
   args = parser.parse_args()
 
-  logs_dir = "latest"
-  if args.latestlink:
-    logs_dir = args.latestlink
+  logs_dir = "logs"
+  if args.logsdir:
+    logs_dir = args.logsdir
 
   dir_exist = os.path.isdir(logs_dir)
   if dir_exist:

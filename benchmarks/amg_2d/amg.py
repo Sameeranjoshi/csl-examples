@@ -30,6 +30,18 @@ import matplotlib.pyplot as plt
 import math
 import utilities as ut
 
+def each_layer_solver(A, b, x, R, ml, setup_config, level_id):
+    print(f"Solving on host layer: {level_id}")
+    
+    # print("\tBefore presmoother: ", x)
+    # ml.levels[level_id].presmoother(A, x, b)
+    # ut.jacobi_dense(A, x, b, omega=get_omega_from_presmoother(setup_config), iterations=get_iterations_from_presmoother(setup_config))
+    # print(f"\tAfter presmoother: {x}")
+    r = b - A @ x
+    print(f"\tResidual: {r}")
+    b_coarse = R @ r
+    x_coarse = np.zeros_like(b_coarse)
+    return b_coarse, x_coarse
 
 # solve a linear system A * x = b
 # where A is a symmetric positive definite matrix
@@ -391,7 +403,7 @@ def smooth_aggregate_setup_only(A, x, b, solver, max_level=None, max_coarse=None
     smoothed_aggregation_solver_config = {
         'B': b,
         'symmetry': 'symmetric',
-        'aggregate': ('lloyd', {'ratio': 0.70}),  # Reduce coarsening aggressiveness
+        'aggregate': ('lloyd', {'ratio': 0.10}),  # Reduce coarsening aggressiveness
         'strength': ('symmetric', {'theta': 0.05}),  # Capture more connections
         'smooth': 'jacobi',
         # withrho is essential for answers to be correct

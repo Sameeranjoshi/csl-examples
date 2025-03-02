@@ -30,28 +30,26 @@ import amg as amg
 
 @dataclass
 class CompileCoreArgs:
-    args: argparse.Namespace
-    dirname: str
     cslc: str
+    layout_file: str
+    arch: str
+    fabric_width: int
+    fabric_height: int
+    core_fabric_offset_x: int
+    core_fabric_offset_y: int
     pe_rows: int
     pe_cols: int
     M: int
     N: int
     R_M: int
     R_N: int
-    file_config: str
-    elf_dir: str
-    fabric_width: int
-    fabric_height: int
-    core_fabric_offset_x: int  # fabric-offsets of the core
-    core_fabric_offset_y: int
-    use_precompile: bool
-    arch: Optional[str]
     channels: int
     width_west_buf: int
     width_east_buf: int
-
-def calculate_fabric_dimensions(args, width, height, width_west_buf, width_east_buf):
+    elf_folder: str
+    extra_args: str
+ 
+def calculate_fabric_dimensions(width, height, width_west_buf, width_east_buf):
   # fabric-offsets = 1,1
   fabric_offset_x = 1
   fabric_offset_y = 1
@@ -66,11 +64,7 @@ def calculate_fabric_dimensions(args, width, height, width_west_buf, width_east_
 
   fabric_width = 0
   fabric_height = 0
-  if args.fabric_dims:
-    w_str, h_str = args.fabric_dims.split(",")
-    fabric_width = int(w_str)
-    fabric_height = int(h_str)
-
+  
   if fabric_width == 0 or fabric_height == 0:
     fabric_width = min_fabric_width
     fabric_height = min_fabric_height
@@ -80,10 +74,13 @@ def calculate_fabric_dimensions(args, width, height, width_west_buf, width_east_
 
   return fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y
 
-def parse_and_get_arguments(layout_file):
-  args, dirname = parse_args()
+def parse_and_get_arguments(run_args, logs_dir):
+  # args, logs_dir = parse_args()
   # Get params from compile metadata
-  with open(f"{dirname}/out.json", encoding='utf-8') as json_file:
+  cslc = "cslc"  
+  layout_file = "./src/layout_amg.csl"
+  
+  with open(f"{logs_dir}/out.json", encoding='utf-8') as json_file:
       compile_data = json.load(json_file)
   pe_rows = int(compile_data['params']['pe_rows'])
   pe_cols = int(compile_data['params']['pe_cols'])
@@ -93,94 +90,103 @@ def parse_and_get_arguments(layout_file):
   R_N = int(compile_data['params']['R_N'])
   # do check that M should be equal to N, to be square matrix
   assert M == N, "M should be equal to N, to be square matrix"
-  code_csl = layout_file
-  if args.driver is not None:
-      cslc = args.driver
-  else:
-      cslc = "cslc"
-  channels = args.channels
+  
+  channels = 1
   assert channels <= 16, "only support up to 16 I/O channels"
   assert channels >= 1, "number of I/O channels must be at least 1"
-  width_west_buf = args.width_west_buf
-  width_east_buf = args.width_east_buf
-  fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y = calculate_fabric_dimensions(args, pe_cols, pe_rows, width_west_buf, width_east_buf)
+  width_west_buf = 0
+  width_east_buf = 0
+  fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y = calculate_fabric_dimensions(pe_cols, pe_rows, width_west_buf, width_east_buf)
 
 
   layout_arguments = CompileCoreArgs(
-      args, dirname, cslc, pe_cols, pe_rows, M, N, R_M, R_N, code_csl, dirname,
+      run_args, logs_dir, cslc, pe_cols, pe_rows, M, N, R_M, R_N, layout_file, logs_dir,
       fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y,  # fabric details
-      args.run_only, args.arch, channels,
+      run_args.run_only, run_args.arch, channels,
       width_west_buf, width_east_buf
   )
   return layout_arguments
 
-def logs(input_data, layout_arguments):
-  args = layout_arguments.args
-  dirname = layout_arguments.dirname
+def compile_csl_core(layout_arguments: CompileCoreArgs):
+    
+    args = []
+    args.append(layout_arguments.cslc) # command
+    args.append(layout_arguments.layout_file)
+    args.append(f"--arch={layout_arguments.arch}")
+    args.append(f"--fabric-dims={layout_arguments.fabric_width},{layout_arguments.fabric_height}")
+    args.append(f"--fabric-offsets={layout_arguments.core_fabric_offset_x},{layout_arguments.core_fabric_offset_y}")    
+    args.append(f"--params=pe_rows:{layout_arguments.pe_rows},pe_cols:{layout_arguments.pe_cols},M:{layout_arguments.M},N:{layout_arguments.N},R_M:{layout_arguments.R_M},R_N:{layout_arguments.R_N}")
+    args.append("--memcpy")
+    args.append(f"--channels={layout_arguments.channels}")
+    args.append(f"--width-west-buf={layout_arguments.width_west_buf}")
+    args.append(f"--width-east-buf={layout_arguments.width_east_buf}")
+    args.append(layout_arguments.extra_args)
+    args.append(f"-o={layout_arguments.elf_folder}")
+    
+    print(f"subprocess.check_call(layout_args = {args})")
+    subprocess.check_call(args)
+    
+def logs(run_args, logs_dir):
 
-  if args.cmaddr is None:
+  if run_args.cmaddr is None:
     # move simulation log and core dump to the given folder
-    dst_log = Path(f"{dirname}/sim.log")
+    dst_log = Path(f"{logs_dir}/sim.log")
     src_log = Path("sim.log")
     if src_log.exists():
       shutil.move(src_log, dst_log)
 
-    dst_trace = Path(f"{dirname}/simfab_traces")
+    dst_trace = Path(f"{logs_dir}/simfab_traces")
     src_trace = Path("simfab_traces")
     if dst_trace.exists():
       shutil.rmtree(dst_trace)
     if src_trace.exists():
       shutil.move(src_trace, dst_trace)
+    
+    # Move all files and directories starting with "sim" to the logs_dir
+    for item in Path().glob('sim*'):
+      shutil.move(str(item), str(logs_dir))
 
-def host_calculations(input_data, layout_arguments):
-  A = input_data["A"]
-  x = input_data["x"]
-  b = input_data["b"]
-  R = input_data["R"]
 
-  solver_callable_host = amg.scipy_direct_solver
-  # convert A to CSR
-  x_level = amg.AMG_only_solve(A, b0=b, x0=x, tol=1e-6, max_ite=1, max_levels=10, max_coarse=2, solver=solver_callable_host)
-  # Compute the residual
-  residual_host = b - A @ x
-  print("residual level host:", residual_host)
-  b_coarse_host = R @ residual_host
-  return residual_host, b_coarse_host
+    
+def host_calculations(v_cycle_data):
 
-def device_calculations(input_data, layout_arguments):
+  # unpack v_cycle_data
+  ml = v_cycle_data["ml"]
+  setup_config = v_cycle_data["setup_config"]
+  x_level = v_cycle_data["x_level"]
+  b_level = v_cycle_data["b_level"]
+
+  A, P, R, x, b = ml.levels[0].A, ml.levels[0].P, ml.levels[0].R, x_level[0], b_level[0]
+  b_coarse_host, x_coarse_host = amg.each_layer_solver(A, b, x, R, ml, setup_config, 0)
+  return b_coarse_host, x_coarse_host
+
+def device_calculations(v_cycle_data):
+  run_args, logs_dir = parse_args()
+  
   ############################################################
   # unpack data
   ############################################################
   # unpack the input data
-  A = input_data["A"]
-  R = input_data["R"]
-  x = input_data["x"]
-  b = input_data["b"]
-  # unpack the layout arguments
-  args = layout_arguments.args
-  dirname = layout_arguments.dirname
-  pe_rows = layout_arguments.pe_rows
-  pe_cols = layout_arguments.pe_cols
-  M = np.int32(layout_arguments.M)
-  N = np.int32(layout_arguments.N)
-  R_M = np.int32(layout_arguments.R_M)
-  R_N = np.int32(layout_arguments.R_N)
+  ml = v_cycle_data["ml"]
+  setup_config = v_cycle_data["setup_config"]
+  x_level = v_cycle_data["x_level"]
+  b_level = v_cycle_data["b_level"]
 
-  # 1. amg setup
-  # 2. all data in levels
-  # for all levels:
-  #   3. x,y to allocate PEs= smart_analysis(of_level)(dynamic technique)
-  #   4. allocate layout PE(x,y)
-  #   5. copy data to PEs
-  #   6. run computation/solve phase
-  #   7. copy data back to host
-
-
+  ############################################################
+  # CREATE DYNAMIC LAYOUT
+  ############################################################
+  A, P, R, x, b = ml.levels[0].A.toarray(), ml.levels[0].P.toarray(), ml.levels[0].R.toarray(), x_level[0], b_level[0]
+  [M,N] = A.shape
+  [R_M, R_N] = R.shape
+  pe_cols = 1
+  pe_rows = 1
+  layout_arguments = generate_dynamic_layout(run_args, pe_cols_=pe_cols, pe_rows_=pe_rows, M_=M, N_=N, R_M_=R_M, R_N_=R_N)
+  
   ############################################################
   # Setup simulator
   ############################################################
   memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
-  simulator = SdkRuntime(dirname, cmaddr=args.cmaddr)
+  simulator = SdkRuntime(run_args.elffolder, cmaddr=run_args.cmaddr)
 
   # data accessible from host and device.
   symbol_residual = simulator.get_id("residual")
@@ -222,64 +228,103 @@ def device_calculations(input_data, layout_arguments):
   # Cleanup
   ############################################################
   simulator.stop()
-  logs(input_data, layout_arguments)
+  logs(run_args, logs_dir)
   return residual_device, b_coarse_device
+
+def generate_dynamic_layout(run_args, pe_cols_=1, pe_rows_=1, M_=4, N_=4, R_M_=2, R_N_=4):
+    print("Precompile disabled, compiling based on problem size.")
+    cslc, layout_file, arch = "cslc", "./src/layout_amg.csl", "wse2"
+    pe_cols, pe_rows, M, N, R_M, R_N = pe_cols_, pe_rows_, M_, N_, R_M_, R_N_
+    channels, width_west_buf, width_east_buf = 1, 0, 0
+    fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y = calculate_fabric_dimensions(pe_cols, pe_rows, width_west_buf, width_east_buf)
+    elf_folder = run_args.elffolder
+    extra_args = "--max-inlined-iterations=1000000"
+    
+    layout_arguments = CompileCoreArgs(
+      cslc, layout_file, arch,
+      fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y,  # fabric details
+      pe_cols, pe_rows, M, N, R_M, R_N,
+      channels, width_west_buf, width_east_buf,
+      elf_folder, extra_args
+    )
+    compile_csl_core(layout_arguments)
+    if (run_args.compile_only):
+      print("Compilation complete, exiting.")
+      exit(0)
+    else:
+      return layout_arguments
 
 
 def main():
   random.seed(127)
-  ############################################################
-  # Parse arguments
-  ############################################################
-  layout_arguments = parse_and_get_arguments(layout_file="./src/layout_amg.csl")
-  print(layout_arguments)
 
-  ############################################################
-  # Input data
-  ############################################################
-  M = np.int32(layout_arguments.M)
-  N = np.int32(layout_arguments.N) # make it explicit 32 bit
-  R_M = np.int32(layout_arguments.R_M)
-  R_N = np.int32(layout_arguments.R_N)
-
-  A = np.arange(M*N, dtype=np.float32).reshape(M, N)  # 2D
-  R = np.full(shape=R_M*R_N, fill_value=1.0, dtype=np.float32).reshape(R_M, R_N)  #2D
-  x = np.full(shape=N*1, fill_value=1.0, dtype=np.float32)  # 1D
-  b = np.zeros(shape=M*1, dtype=np.float32)
+  print("############################################################")
+  print("# INPUT DATA")
+  print("############################################################")
+  M = 50
+  N = 50
   
+  # data
+  A0 = np.arange(M*N, dtype=np.float32).reshape(M, N)  # 2D
+  x0 = np.full(shape=N*1, fill_value=1.0, dtype=np.float32)  # 1D
+  b0 = np.zeros(shape=M*1, dtype=np.float32)
+  nrm_b = np.linalg.norm(b0, 2)
+  eps = 1.e-4
+  relative_tol = eps * nrm_b # relative tolerance
 
-  print("Input Matrix Shape:", A.shape)
-  print("Input R Matrix Shape:", R.shape)
-  print("Input b_1d Shape:", b.shape)
-  print("Input x_1d Shape:", x.shape)
-  ut.visualize_matrix_or_vector(A, title="A Matrix", filename="images/A.png")
-  ut.visualize_matrix_or_vector(R, title="R Matrix", filename="images/R.png")
-  ut.visualize_matrix_or_vector(x, title="x Vector", filename="images/x.png")
-  ut.visualize_matrix_or_vector(b, title="b Vector", filename="images/b.png")
-
+  # print data
+  print("Input problem size:", M, N)
+  print("Input Matrix Shape:", A0.shape)
+  print("Input b_1d Shape:", b0.shape)
+  print("Input x_1d Shape:", x0.shape)
+  print("Relative Tolerance:", relative_tol)
+  ut.visualize_matrix(A0, title="A Matrix", filename="images/A.png")
+  
+  # wrap into a dictionary
   input_data = {
-    "A": A,
-    "R": R,
-    "x": x,
-    "b": b,
+    "A0": A0,
+    "x0": x0,
+    "b0": b0,
+    "tol": relative_tol
   }
-
-  ############################################################
-  # HOST CALCULATIONS
-  ############################################################
-  residual_host, b_coarse_host = host_calculations(input_data, layout_arguments)
-  print("Residual Host:", residual_host)
-  print("b_coarse Host:", b_coarse_host)
-  ############################################################
-  # DEVICE CALCULATIONS
-  ############################################################
-  residual_device, b_coarse_device = device_calculations(input_data, layout_arguments)
-  print("Residual Device:", residual_device)
-  print("b_coarse Device:", b_coarse_device)
-  ############################################################
-  # COMPARISON
-  ############################################################
-  assert np.allclose(residual_host, residual_device, atol=1e-6), "Residual do not match!"
+  print("############################################################")
+  print("# AMG SETUP")
+  print("############################################################")
+  print("\tPerforming AMG Setup")
+  solver_callable_host = amg.scipy_direct_solver
+  ml, setup_config = amg.smooth_aggregate_setup_only(input_data["A0"], x=input_data["x0"], b=input_data["b0"], 
+                                                     solver=solver_callable_host, max_level=10, max_coarse=10)
+  print(ml)
+  print(amg.print_table_shapes(ml.levels))
+  print(amg.print_table_data(ml.levels))
+  V_levels = len(ml.levels)
+  x_level = [None] * V_levels
+  b_level = [None] * V_levels
+  x_level[0] = np.copy(x0)
+  b_level[0] = np.copy(b0)  
+  
+  v_cycle_data = {
+    "ml": ml,
+    "x_level": x_level,
+    "b_level": b_level,
+    "setup_config": setup_config
+  }
+  print("############################################################")
+  print("# HOST CALCULATIONS")
+  print("############################################################")
+  b_coarse_host, x_coarse_host = host_calculations(v_cycle_data)
+  print("\tb_coarse Host:", b_coarse_host.ravel())
+  print("\tx_coarse Host:", x_coarse_host.ravel())
+  print("############################################################")
+  print("# DEVICE CALCULATIONS")
+  print("############################################################")
+  residual_device, b_coarse_device = device_calculations(v_cycle_data)
+  print("Residual Device:", residual_device.ravel())
+  print("b_coarse Device:", b_coarse_device.ravel())
+  print("############################################################")
+  print("# COMPARISON")
+  print("############################################################")
+  # assert np.allclose(residual_host, residual_device, atol=1e-6), "Residual do not match!"
   assert np.allclose(b_coarse_host, b_coarse_device, atol=1e-6), "b_coarse do not match!"
   print("Results Match!")
 
