@@ -373,25 +373,25 @@ def main():
   print("############################################################")
   print("# HOST CALCULATIONS")
   print("############################################################")
-  b_coarsest, x_coarsest, residual_host = host_calculations(v_cycle_data_host)
+  b_coarsest_host, x_coarsest_host, residual_host = host_calculations(v_cycle_data_host)
   print("HOST CALCULATIONS DONE")
-  print("\tb_coarsest Host:", b_coarsest.ravel())
-  print("\tx_coarsest Host:", x_coarsest.ravel())
+  print("\tb_coarsest Host:", b_coarsest_host.ravel())
+  print("\tx_coarsest Host:", x_coarsest_host.ravel())
   for i, residual in enumerate(residual_host):
       print(f"\tResidual Host [{i}]:", residual)
   print("############################################################")
   print("# DEVICE CALCULATIONS")
   print("############################################################")
-  # b_coarse_device, x_coarse_device, residual_device = device_calculations(v_cycle_data_device)
-  # print("\tb_coarse Device:", b_coarse_device.ravel())
-  # print("\tx_coarse Device:", x_coarse_device.ravel()) 
-  # for i, residual in enumerate(residual_device):
-  #     print(f"\tResidual Device [{i}]:", residual)   
+  b_coarsest_device, x_coarsest_device, residual_device = device_calculations(v_cycle_data_device)
+  print("\tb_coarse Device:", b_coarsest_device.ravel())
+  print("\tx_coarse Device:", x_coarsest_device.ravel()) 
+  for i, residual in enumerate(residual_device):
+      print(f"\tResidual Device [{i}]:", residual)   
   print("############################################################")
   print("# COMPARISON")
   print("############################################################")
   # assert np.allclose(residual_host, residual_device, atol=1e-6), "Residual do not match!"
-  assert np.allclose(b_coarsest, b_coarse_device, atol=1e-6), "b_coarse do not match!"
+  assert np.allclose(b_coarsest_host, b_coarsest_device, atol=1e-6), "b_coarse do not match!"
   print("Results Match!")
 
 
