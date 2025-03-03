@@ -30,17 +30,53 @@ import matplotlib.pyplot as plt
 import math
 import utilities as ut
 
-def each_layer_solver(A, b, x, R, ml, setup_config, level_id, residual_host):
+def each_layer_solver(level, x_level, b_level, ml, setup_config, level_id, residual_host):
     print(f"Solving on host layer: {level_id}")
+    A, R = level.A, level.R
+    x = x_level[level_id]
+    b = b_level[level_id]
+    
     # ml.levels[level_id].presmoother(A, x, b)
-    ut.jacobi_dense(A, x, b, omega=get_omega_from_presmoother(setup_config), iterations=get_iterations_from_presmoother(setup_config))
+    ut.jacobi_csr(A, x, b, omega=get_omega_from_presmoother(setup_config), iterations=get_iterations_from_presmoother(setup_config))
     r = b - A @ x   # residual
     b_coarse = R @ r    # restrict
     x_coarse = np.zeros_like(b_coarse)
     
-    residual_host.append(r)
+    
+    residual_host.append(np.dot(r,r))
     return b_coarse, x_coarse
 
+# only V cycle, iterative version
+def AMG_test(ml, setup_config, x_level, b_level, solver, max_level=10, max_coarse=2, max_ite=1):    
+    # if only 1 level solve directly
+    if not ml.levels:
+        raise RuntimeError("AMG setup failed: No levels generated.")
+
+    level_data_clone = []
+    coarse_data = []
+
+    for _ in range(max_ite):  # Run V-cycle up to max_iter or until convergence
+        # solve phase layer by layer.
+        for i, level in enumerate(ml.levels[:-1]):
+            A, P, R = level.A, level.P, level.R
+            x = x_level[i]
+            b = b_level[i]
+
+            level.presmoother(A, x, b)
+            r = b - A @ x
+            b_coarse = R @ r
+            x_coarse = np.zeros_like(b_coarse)
+            
+            b_level[i + 1] = b_coarse  # Directly store in the next level
+            x_level[i + 1] = x_coarse
+            
+        b_coarsest = b_level[-1]
+        x_coarsest = x_level[-1]
+        A_coarsest = ml.levels[-1].A
+
+        debugprint(ml.levels, b_level, x_level)
+
+    return b_coarsest, x_coarsest, A_coarsest
 # solve a linear system A * x = b
 # where A is a symmetric positive definite matrix
 # The AMG algorithm is from pyamg, https://github.com/pyamg/pyamg
@@ -222,6 +258,7 @@ def print_table_data(levels):
         # Convert first 5 elements of B to a readable format
         B_str = np.array2string(b[0:5].flatten(), separator=', ')
 
+
         level_data.append({
             "Level": idx,
             "A[0:5]": A_str,
@@ -236,10 +273,10 @@ def debugprint(levels, b_level, x_level):
         A, b = level.A, level.B
         level_data_clone.append({
             "level": i,
-            "A": A.toarray()[0,0:5],
-            "B_original": b[0:5].flatten(),
-            "b_computed": b_level[i][0:5].flatten(),
-            "x_computed": x_level[i][0:5].flatten()
+            "A": A.toarray()[0,0:10],
+            "B_original": b[0:10].flatten(),
+            "b_computed": b_level[i][0:10].flatten(),
+            "x_computed": x_level[i][0:10].flatten()
         })
     print(tabulate(level_data_clone, headers="keys", tablefmt="grid"))  
 
@@ -401,8 +438,8 @@ def smooth_aggregate_setup_only(A, x, b, solver, max_level=None, max_coarse=None
     smoothed_aggregation_solver_config = {
         'B': b,
         'symmetry': 'symmetric',
-        'aggregate': ('lloyd', {'ratio': 0.001}),  # Reduce coarsening aggressiveness
-        'strength': ('symmetric', {'theta': 0.99}),  # Capture more connections
+        'aggregate': ('lloyd', {'ratio': 0.10}),  # Reduce coarsening aggressiveness
+        'strength': ('symmetric', {'theta': 0.10}),  # Capture more connections
         'smooth': 'jacobi',
         # withrho is essential for answers to be correct
         'presmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5, 'withrho': False}),

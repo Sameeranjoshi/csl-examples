@@ -163,11 +163,47 @@ def host_calculations(v_cycle_data):
   x_level = v_cycle_data["x_level"]
   b_level = v_cycle_data["b_level"]
 
+  ############################################################
+  # Perform V-Cycle
+  ############################################################
   residual_host = []
-  A, P, R, x, b = ml.levels[0].A, ml.levels[0].P, ml.levels[0].R, x_level[0], b_level[0]
-  b_coarse_host, x_coarse_host = amg.each_layer_solver(A, b, x, R, ml, setup_config, 0, residual_host)
+  
+  #### Reference testing
+  # TODO: REMOVE THIS AS EXPENSIVE
+  b_level_copy = copy.deepcopy(b_level)
+  x_level_copy = copy.deepcopy(x_level)
+  ml_copy = copy.deepcopy(ml)
+  setup_config_copy = copy.deepcopy(setup_config)
+  solver_callable_host = amg.scipy_direct_solver
+  ref_b_coarsest, ref_x_coarsest, ref_A_coarsest = amg.AMG_test(ml_copy, setup_config_copy, x_level_copy, b_level_copy, max_level=10, max_coarse=2, max_ite=1, solver=solver_callable_host)
+    
+  
+  ## 
+  if len(ml.levels) == 0:
+    raise RuntimeError("No levels in the multilevel hierarchy")
+    exit(1)
 
-  return b_coarse_host, x_coarse_host, residual_host
+  # V down
+  for i, level in enumerate(ml.levels[:-1]):
+    level = ml.levels[i]  # current level
+    b_coarse_layer, x_coarse_layer = amg.each_layer_solver(level, x_level, b_level, ml, setup_config, i, residual_host)
+    b_level[i + 1] = b_coarse_layer  # Directly store in the next level
+    x_level[i + 1] = x_coarse_layer  # Directly store in the next level
+
+  # V coarse
+  b_coarsest = b_level[-1]
+  x_coarsest = x_level[-1]
+  A_coarsest = ml.levels[-1].A
+  amg.debugprint(ml.levels, b_level, x_level)
+  
+  
+  # check ref* and x_coarsest
+  assert np.allclose(ref_b_coarsest, b_coarsest, rtol=1e-5), "ref_b_coarsest do not match!"
+  assert np.allclose(ref_x_coarsest, x_coarsest, rtol=1e-5), "ref_x_coarsest do not match!"
+  assert np.allclose(A_coarsest.toarray(), ref_A_coarsest.toarray(), rtol=1e-6), "A_coarsest do not match!"
+  print("Success: b_coarsest, x_coarsest, A_coarsest match with reference")
+  
+  return b_coarsest, x_coarsest, residual_host
 
 def device_calculations(v_cycle_data):
   run_args, logs_dir = parse_args()
@@ -281,13 +317,14 @@ def main():
   print("############################################################")
   print("# INPUT DATA")
   print("############################################################")
-  M = 5
-  N = 5
+  M = 50
+  N = 50
   
   # data
   A0 = np.arange(M*N, dtype=np.float32).reshape(M, N)  # 2D
   x0 = np.full(shape=N*1, fill_value=1.0, dtype=np.float32)  # 1D
-  b0 = np.zeros(shape=M*1, dtype=np.float32)
+  # b0 = np.zeros(shape=M*1, dtype=np.float32)
+  b0 = np.full(shape=M*1, fill_value=3.0,dtype=np.float32)
   nrm_b = np.linalg.norm(b0, 2)
   eps = 1.e-4
   relative_tol = eps * nrm_b # relative tolerance
@@ -316,13 +353,15 @@ def main():
                                                      solver=solver_callable_host, max_level=10, max_coarse=2)
   print(ml)
   print(amg.print_table_shapes(ml.levels))
-  print(amg.print_table_data(ml.levels))
+  
   V_levels = len(ml.levels)
   x_level = [None] * V_levels
   b_level = [None] * V_levels
   x_level[0] = np.copy(x0)
   b_level[0] = np.copy(b0)  
-  
+  for i in range(V_levels - 1): # We know this
+    x_level[i+1] = np.zeros((ml.levels[i].R.shape[0], 1), dtype=np.float32)
+    
   v_cycle_data = {
     "ml": ml,
     "x_level": x_level,
@@ -334,24 +373,25 @@ def main():
   print("############################################################")
   print("# HOST CALCULATIONS")
   print("############################################################")
-  b_coarse_host, x_coarse_host, residual_host = host_calculations(v_cycle_data_host)
-  print("\tb_coarse Host:", b_coarse_host.ravel())
-  print("\tx_coarse Host:", x_coarse_host.ravel())
+  b_coarsest, x_coarsest, residual_host = host_calculations(v_cycle_data_host)
+  print("HOST CALCULATIONS DONE")
+  print("\tb_coarsest Host:", b_coarsest.ravel())
+  print("\tx_coarsest Host:", x_coarsest.ravel())
   for i, residual in enumerate(residual_host):
       print(f"\tResidual Host [{i}]:", residual)
   print("############################################################")
   print("# DEVICE CALCULATIONS")
   print("############################################################")
-  b_coarse_device, x_coarse_device, residual_device = device_calculations(v_cycle_data_device)
-  print("\tb_coarse Device:", b_coarse_device.ravel())
-  print("\tx_coarse Device:", x_coarse_device.ravel()) 
-  for i, residual in enumerate(residual_device):
-      print(f"\tResidual Device [{i}]:", residual)   
+  # b_coarse_device, x_coarse_device, residual_device = device_calculations(v_cycle_data_device)
+  # print("\tb_coarse Device:", b_coarse_device.ravel())
+  # print("\tx_coarse Device:", x_coarse_device.ravel()) 
+  # for i, residual in enumerate(residual_device):
+  #     print(f"\tResidual Device [{i}]:", residual)   
   print("############################################################")
   print("# COMPARISON")
   print("############################################################")
   # assert np.allclose(residual_host, residual_device, atol=1e-6), "Residual do not match!"
-  assert np.allclose(b_coarse_host, b_coarse_device, atol=1e-6), "b_coarse do not match!"
+  assert np.allclose(b_coarsest, b_coarse_device, atol=1e-6), "b_coarse do not match!"
   print("Results Match!")
 
 
