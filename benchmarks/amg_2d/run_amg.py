@@ -121,6 +121,7 @@ def compile_csl_core(layout_arguments: CompileCoreArgs):
     args.append(f"--channels={layout_arguments.channels}")
     args.append(f"--width-west-buf={layout_arguments.width_west_buf}")
     args.append(f"--width-east-buf={layout_arguments.width_east_buf}")
+    args.append("--verbose")
     args.append(layout_arguments.extra_args)
     args.append(f"-o={layout_arguments.elf_folder}")
     
@@ -217,23 +218,29 @@ def device_calculations(v_cycle_data):
   x_level = v_cycle_data["x_level"]
   b_level = v_cycle_data["b_level"]
 
+  level_index = 0
   ############################################################
   # CREATE DYNAMIC LAYOUT
   ############################################################
   residual_device_log = []
-  A, P, R, x, b = ml.levels[0].A.toarray(), ml.levels[0].P.toarray(), ml.levels[0].R.toarray(), x_level[0], b_level[0]
+  A, P, R, x, b = ml.levels[level_index].A.toarray(), ml.levels[level_index].P.toarray(), ml.levels[level_index].R.toarray(), x_level[level_index], b_level[level_index]
   [M,N] = A.shape
   [R_M, R_N] = R.shape
-  pe_cols = 1
+  pe_cols = len(ml.levels)  # spread across each layer.
   pe_rows = 1
   layout_arguments = generate_dynamic_layout(run_args, pe_cols_=pe_cols, pe_rows_=pe_rows, M_=M, N_=N, R_M_=R_M, R_N_=R_N)
   
   ############################################################
   # Setup simulator
   ############################################################
-  memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
   simulator = SdkRuntime(run_args.elffolder, cmaddr=run_args.cmaddr)
-
+  simulator.load()
+  simulator.run()
+  
+  ############################################################
+  # VARIABLES
+  ############################################################
+  memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
   # data accessible from host and device.
   symbol_residual = simulator.get_id("residual")
   symbol_b_coarse = simulator.get_id("b_coarse")
@@ -242,64 +249,100 @@ def device_calculations(v_cycle_data):
   symbol_b = simulator.get_id("b")
   symbol_R = simulator.get_id("R")
 
-  simulator.load()
-  simulator.run()
+  while(level_index < len(ml.levels) - 1):
+    print(f"Solving Layer {level_index}:")
+    
+    ############################################################
+    # GET LAYER DATA
+    ############################################################
+    A, P, R, x, b = ml.levels[level_index].A.toarray(), ml.levels[level_index].P.toarray(), ml.levels[level_index].R.toarray(), x_level[level_index], b_level[level_index]
+    [M,N] = A.shape
+    [R_M, R_N] = R.shape
+    pe_cols = 1
+    pe_rows = 1
 
-  ############################################################
-  # H2D
-  ############################################################
-  simulator.memcpy_h2d(symbol_x, x, 0, 0, pe_cols, pe_rows, N*1, streaming=False,
-    order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
-  simulator.memcpy_h2d(symbol_A, A.flatten(order='C'), 0, 0, pe_cols, pe_rows, M*N, streaming=False,
-    order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
-  simulator.memcpy_h2d(symbol_R, R.flatten(order='C'), 0, 0, pe_cols, pe_rows, R_M*R_N, streaming=False,
-    order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
-  simulator.memcpy_h2d(symbol_b, b, 0, 0, pe_cols, pe_rows, M*1, streaming=False,
-    order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
-  ############################################################
-  # Kernel
-  ############################################################
-  omega=amg.get_omega_from_presmoother(setup_config)
-  iterations=amg.get_iterations_from_presmoother(setup_config)    
-  print(f"Solving Layer 0 with omega={omega}, smoothing_iterations={iterations}")
-  
-  simulator.launch('compute', np.float32(omega), np.int16(iterations), nonblock=False)
+    ############################################################
+    # H2D
+    print(f"\t1. Copying data to device")
+    ############################################################
+    simulator.memcpy_h2d(symbol_x, x, 0, 0, pe_cols, pe_rows, N*1, streaming=False,
+      order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
+    simulator.memcpy_h2d(symbol_A, A.flatten(order='C'), 0, 0, pe_cols, pe_rows, M*N, streaming=False,
+      order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
+    simulator.memcpy_h2d(symbol_R, R.flatten(order='C'), 0, 0, pe_cols, pe_rows, R_M*R_N, streaming=False,
+      order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
+    simulator.memcpy_h2d(symbol_b, b, 0, 0, pe_cols, pe_rows, M*1, streaming=False,
+      order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
+    ############################################################
+    # Kernel
+    ############################################################
+    omega=amg.get_omega_from_presmoother(setup_config)
+    iterations=amg.get_iterations_from_presmoother(setup_config)    
+    print(f"\t2. Solving Layer {level_index} with omega={omega}, smoothing_iterations={iterations}")
+    
+    simulator.launch('compute', np.float32(omega), np.int16(iterations), nonblock=False)
 
-  ############################################################
-  # D2H
-  ############################################################
-  residual_device = np.zeros([M*1], dtype=np.float32)
-  simulator.memcpy_d2h(residual_device, symbol_residual, 0, 0, 1, 1, M*1, streaming=False,
-    order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
-  b_coarse_device = np.zeros([R_M*1], dtype=np.float32)
-  simulator.memcpy_d2h(b_coarse_device, symbol_b_coarse, 0, 0, 1, 1, R_M*1, streaming=False,
-    order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
-  x_coarse_device = np.zeros_like(b_coarse_device)
-  
-  ############################################################
-  # some additional logging
-  ############################################################
-  residual_device_log.append(residual_device)
+    ############################################################
+    # D2H
+    print(f"\t3. Copying results to host")
+    ############################################################
+    residual_device = np.zeros([M*1], dtype=np.float32)
+    simulator.memcpy_d2h(residual_device, symbol_residual, 0, 0, 1, 1, M*1, streaming=False,
+      order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
+    b_coarse_device = np.zeros([R_M*1], dtype=np.float32)
+    simulator.memcpy_d2h(b_coarse_device, symbol_b_coarse, 0, 0, 1, 1, R_M*1, streaming=False,
+      order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
+    x_coarse_device = np.zeros_like(b_coarse_device)
+    # copy x from device to host
+    x_temp = np.zeros([N*1], dtype=np.float32)
+    simulator.memcpy_d2h(x_temp, symbol_x, 0, 0, pe_cols, pe_rows, N*1, streaming=False,
+      order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
+    print(f"level {level_index} x_smooth: ", x_temp)
+    x_level[level_index] = x_temp
+    
+    
+    ############################################################
+    # UPDATE DATA
+    ############################################################
+    b_level[level_index + 1] = b_coarse_device  # Directly store in the next level
+    x_level[level_index + 1] = x_coarse_device
+    ############################################################
+    # some additional logging
+    ############################################################
+    print(f"\t4. Calculating residual")
+    rho = np.dot(residual_device, residual_device)
+    residual_device_log.append(rho)
+    
+    logs(run_args, logs_dir)  
+    level_index += 1  #loop induction var
+      
   ############################################################
   # Cleanup
   ############################################################
   simulator.stop()
-  logs(run_args, logs_dir)
-  return b_coarse_device, x_coarse_device, residual_device_log
+ 
+         
+  b_coarsest_device = b_level[-1]
+  x_coarsest_device = x_level[-1]
+  A_coarsest_device = ml.levels[-1].A.toarray()
+  amg.debugprint(ml.levels, b_level, x_level)
+  return b_coarsest_device, x_coarsest_device, residual_device_log
 
 def generate_dynamic_layout(run_args, pe_cols_=1, pe_rows_=1, M_=4, N_=4, R_M_=2, R_N_=4):
     print("Precompile disabled, compiling based on problem size.")
+    # Mostly doesn't change
     cslc, layout_file, arch = "cslc", "./src/layout_amg.csl", "wse2"
-    pe_cols, pe_rows, M, N, R_M, R_N = pe_cols_, pe_rows_, M_, N_, R_M_, R_N_
-    channels, width_west_buf, width_east_buf = 1, 0, 0
-    fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y = calculate_fabric_dimensions(pe_cols, pe_rows, width_west_buf, width_east_buf)
-    elf_folder = run_args.elffolder
     extra_args = "--max-inlined-iterations=1000000"
+    elf_folder = run_args.elffolder
+    # Can Change based on problem size.
+    channels, width_west_buf, width_east_buf = 1, 0, 0        
+    pe_cols, pe_rows, M, N, R_M, R_N = pe_cols_, pe_rows_, M_, N_, R_M_, R_N_
+    fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y = calculate_fabric_dimensions(pe_cols, pe_rows, width_west_buf, width_east_buf)
     
     layout_arguments = CompileCoreArgs(
       cslc, layout_file, arch,
       fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y,  # fabric details
-      pe_cols, pe_rows, M, N, R_M, R_N,
+      pe_rows, pe_cols, M, N, R_M, R_N,
       channels, width_west_buf, width_east_buf,
       elf_folder, extra_args
     )
@@ -383,15 +426,16 @@ def main():
   print("# DEVICE CALCULATIONS")
   print("############################################################")
   b_coarsest_device, x_coarsest_device, residual_device = device_calculations(v_cycle_data_device)
-  print("\tb_coarse Device:", b_coarsest_device.ravel())
-  print("\tx_coarse Device:", x_coarsest_device.ravel()) 
+  print("\nDEVICE CALCULATIONS DONE")
+  print("\tb_coarsest Device:", b_coarsest_device.ravel())
+  print("\tx_coarsest Device:", x_coarsest_device.ravel()) 
   for i, residual in enumerate(residual_device):
       print(f"\tResidual Device [{i}]:", residual)   
   print("############################################################")
   print("# COMPARISON")
   print("############################################################")
   # assert np.allclose(residual_host, residual_device, atol=1e-6), "Residual do not match!"
-  assert np.allclose(b_coarsest_host, b_coarsest_device, atol=1e-6), "b_coarse do not match!"
+  assert np.allclose(b_coarsest_host, b_coarsest_device, atol=1e-6), "b_coarsest of host and device do not match!"
   print("Results Match!")
 
 

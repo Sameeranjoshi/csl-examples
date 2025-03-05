@@ -90,7 +90,15 @@ fn initialize() void {
     //     // @as casts idx from i16 to f32
     //     A[idx] = @as(f32, idx);
     // }
-    // print R
+    // print x and b
+    simprint.print_string("\n\n\n\nLAYER X AND B");
+    for (x) |val, i| {
+            simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
+    }
+    for (b) |val, i| {
+            simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
+    }        
+    simprint.print_string("\n");
 }
 
 //  General: Ax = aplha. (A * x) + beta.y
@@ -141,7 +149,7 @@ fn restriction_operator() void {
   for (@range(i16, R_M)) |i| {
     var tmp: f32 = 0.0;
     for (@range(i16, R_N)) |j| {
-      tmp += A[i*R_N + j] * residual[j];
+      tmp += R[i*R_N + j] * residual[j];
     }
     b_coarse[i] = tmp;
     // y[i] = tmp + b[i];
@@ -196,7 +204,7 @@ fn jacobi(omega:f32, iterations: i16) void {
 
 // Call initialize and gemv functions
 fn compute(omega:f32, iterations: i16) void {
-    // initialize();
+    initialize();
     // gemv();
     jacobi(omega, iterations);  // presmoother
     gemv_using_library();
@@ -204,6 +212,9 @@ fn compute(omega:f32, iterations: i16) void {
     residual_operator();        // residual
     restriction_operator_using_dsd();   // restriction
 
+    for (x) |val, i| {
+            simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
+    }
     // unblock memcpy so that it can send data outside.
     sys_mod.unblock_cmd_stream();
 }

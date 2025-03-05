@@ -1,0 +1,200 @@
+diff --git a/benchmarks/amg_2d/src/kernel_amg.csl b/benchmarks/amg_2d/src/kernel_amg.csl
+index 60d82c1..707c869 100644
+--- a/benchmarks/amg_2d/src/kernel_amg.csl
++++ b/benchmarks/amg_2d/src/kernel_amg.csl
+@@ -42,6 +42,12 @@ var b: [M*1]f32;    // var b: [M*1]f32;
+ 
+ // LOCAL TEMP
+ var AX = @zeros([M*1]f32);   // var AX: [M*1]f32;
++var tmp = @zeros([N*1]f32); // ALLOCATE MAX tmp
++var M_current_local: i16 = 0;
++var N_current_local: i16 = 0;
++var R_M_current_local: i16 = 0;
++var R_N_current_local: i16 = 0;
++
+ 
+ // OUTPUT
+ var residual =  @constants([M*1]f32, 0.0);   // var residual: [M*1]f32;
+@@ -62,14 +68,15 @@ var R_ptr: [*]f32 = &R;
+ 
+ // General : memory_address=base_address+offset+stride×induction_variable
+ // base_address, offset, stride, extent
+-var mem_b_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> b[i] });
+-var mem_x_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N} -> x[i] });
+-var mem_A_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> A[i*N] });
+-var mem_R_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M} -> R[i*R_N] });
++var mem_b_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> b[i] });
++var mem_x_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> x[i] });
++var mem_A_dsd = @get_dsd(mem1d_dsd, .{ .base_address=&A, .offset=0, .stride=1, .extent=1 });
++var mem_R_dsd = @get_dsd(mem1d_dsd, .{ .base_address=&R, .offset=0, .stride=1, .extent=1 });
+ // base_address=&A, offset=0, stride=N, extent=M
+-var mem_residual_dsd = @get_dsd(mem1d_dsd, .{ .base_address=&residual, .offset=0, .stride=1, .extent=M });
+-var mem_b_coarse_dsd = @get_dsd(mem1d_dsd, .{ .base_address=&b_coarse, .offset=0, .stride=1, .extent=R_M });
+-var mem_AX_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> AX[i] });
++var mem_residual_dsd = @get_dsd(mem1d_dsd, .{ .base_address=&residual, .offset=0, .stride=1, .extent=1 });
++var mem_b_coarse_dsd = @get_dsd(mem1d_dsd, .{ .base_address=&b_coarse, .offset=0, .stride=1, .extent=1 });
++var mem_AX_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> AX[i] });
++var mem_tmp_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> tmp[i] });
+ 
+ 
+ ////////////////////////////////////////
+@@ -82,34 +89,53 @@ const simprint = @import_module("<simprint>", .{ .enable = true });
+ // Functions
+ ////////////////////////////////////////
+ // Initialize matrix and vectors
+-fn initialize() void {
+-    // for loop with range syntax
+-    // loops over 0, 1, ...., M*N-1
+-    // idx stores the loop index
+-    // for (@range(i16, M*N)) |idx| {
+-    //     // @as casts idx from i16 to f32
+-    //     A[idx] = @as(f32, idx);
++fn initialize(M_current:i16, N_current:i16, R_M_current:i16, R_N_current:i16) void {
++    // change the sizes of all based on input param M, N, R_M, R_N
++    mem_b_dsd = @set_dsd_length(mem_b_dsd, @bitcast(u16,M_current));
++    mem_x_dsd = @set_dsd_length(mem_x_dsd, @bitcast(u16,N_current));
++    mem_residual_dsd = @set_dsd_length(mem_residual_dsd, @bitcast(u16,M_current));
++    mem_b_coarse_dsd = @set_dsd_length(mem_b_coarse_dsd, @bitcast(u16,R_M_current));
++    mem_AX_dsd = @set_dsd_length(mem_AX_dsd, @bitcast(u16,M_current));
++
++    mem_A_dsd = @set_dsd_length(mem_A_dsd, @bitcast(u16,M_current));
++    mem_R_dsd = @set_dsd_length(mem_R_dsd, @bitcast(u16,R_M_current));
++    mem_AX_dsd = @set_dsd_length(mem_AX_dsd, @bitcast(u16,M_current));
++
++    mem_R_dsd = @set_dsd_stride(mem_R_dsd, @as(i8,R_N_current));
++    mem_A_dsd = @set_dsd_stride(mem_A_dsd, @as(i8,N_current));
++    
++
++    M_current_local = M_current;
++    N_current_local = N_current;
++    R_M_current_local = R_M_current;
++    R_N_current_local = R_N_current;
++
++    // print local values
++    simprint.print_string("LAYER M AND N");
++    simprint.fmt_with_coords("M = {d}, N = {d}", .{ @as(u16, M_current_local), @as(u16, N_current_local) });
++    simprint.print_string("\nLAYER R_M AND R_N");
++    simprint.fmt_with_coords("R_M = {d}, R_N = {d}", .{ @as(u16, R_M_current_local), @as(u16, R_N_current_local) });
++    
++
++
++    // simprint.print_string("\n\n\n\nLAYER X AND B");
++    // for (x) |val, i| {
++    //         simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
+     // }
+-    // print x and b
+-    simprint.print_string("\n\n\n\nLAYER X AND B");
+-    for (x) |val, i| {
+-            simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
+-    }
+-    for (b) |val, i| {
+-            simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
+-    }        
++    // for (b) |val, i| {
++    //         simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
++    // }        
+     simprint.print_string("\n");
+ }
+ 
+ //  General: Ax = aplha. (A * x) + beta.y
+ //  answer= 1.(A * x) + 0.y
+ // AX = A*x
+-fn gemv_using_library() void {
++fn gemv_using_library(is_layout_column_major:bool) void {
+ 
+     var alpha: f32 = 1.0;
+     var beta: f32 = 0.0;
+-    var is_layout_column_major: bool = false;
+-    gemv_mod.sgemv_inner(M, N, alpha, &A, M, &x, beta, &AX, is_layout_column_major);
++    gemv_mod.sgemv_inner(M_current_local, N_current_local, alpha, &A, M_current_local, &x, beta, &AX, is_layout_column_major);
+ 
+ }
+ 
+@@ -146,7 +172,7 @@ fn residual_operator() void {
+ 
+ fn restriction_operator() void {
+     // TODO: Use DSD for speed.
+-  for (@range(i16, R_M)) |i| {
++  for (@range(i16, R_M_current_local)) |i| {
+     var tmp: f32 = 0.0;
+     for (@range(i16, R_N)) |j| {
+       tmp += R[i*R_N + j] * residual[j];
+@@ -162,7 +188,7 @@ fn restriction_operator_using_dsd() void{
+     //     AX[i] = 0.0;
+     // }
+     // @fsubs(mem_AX_dsd, mem_AX_dsd, mem_AX_dsd);
+-    for (@range(i16, R_N)) |i| {
++    for (@range(i16, R_N_current_local)) |i| {
+         @fmacs(mem_b_coarse_dsd, mem_b_coarse_dsd, mem_R_dsd, residual[i]);
+         mem_R_dsd = @increment_dsd_offset(mem_R_dsd, 1, f32);
+     }
+@@ -172,24 +198,31 @@ fn restriction_operator_using_dsd() void{
+ // formula: x = (1-omega)*x + omega*(b - A*x)/diag(A)
+ // Ax is for all values except the diagonal value.
+ 
+-fn jacobi(omega:f32, iterations: i16) void {
++fn jacobi(M_current_local:i16, N_current_local:i16, R_M_current_local:i16, R_N_current_local:i16, omega:f32, iterations: i16) void {
+ 
++    // print local values
++    simprint.fmt_with_coords("INSIDE JACOBI: M = {d}, N = {d}", .{ @as(u16, M_current_local), @as(u16, N_current_local) });
+     // var omega: f32 = 1.0/3.0;
+     // var iterations: i32 = 5;
++   
++
+ 
+     for (@range(i16, iterations)) |iter| {
+         // make copy of x into temp.
+-        var tmp = @zeros([N*1]f32);
+-        for (@range(i32, N)) |i| {
+-            tmp[i] = x[i];
++        // var tmp = @zeros([N_current_local*1]f32);
++        mem_tmp_dsd = @set_dsd_length(mem_tmp_dsd, @bitcast(u16,N_current_local));
++        @fsubs(mem_tmp_dsd, mem_tmp_dsd, mem_tmp_dsd);
++        @fadds(mem_tmp_dsd, mem_tmp_dsd, mem_x_dsd);
++        // pruint A
++        for (A) |val, i| {
++            simprint.fmt_with_coords("A[{d}] = {f}", .{ @as(u16,i), val });
+         }
+-
+-        for (@range(i16, M)) |i| {
++        for (@range(i16, M_current_local)) |i| {
+             var rsum: f32 = 0.0;
+-            var diag: f32 = A[i*N + i];
+-            for (@range(i16, N)) |j| {
++            var diag: f32 = A[i*N_current_local + i];
++            for (@range(i16, N_current_local)) |j| {
+                 if (i != j) {
+-                    rsum += A[i*N + j] * tmp[j];
++                    rsum += A[i*N_current_local + j] * tmp[j];
+                 }
+             }
+             if (diag != 0.0) {
+@@ -203,17 +236,18 @@ fn jacobi(omega:f32, iterations: i16) void {
+ 
+ 
+ // Call initialize and gemv functions
+-fn compute(omega:f32, iterations: i16) void {
+-    initialize();
++fn compute(M_current:i16, N_current:i16, R_M_current:i16, R_N_current:i16, omega:f32, iterations: i16) void {
++    initialize(M_current, N_current, R_M_current, R_N_current);
+     // gemv();
+-    jacobi(omega, iterations);  // presmoother
+-    gemv_using_library();
+-    // gemv_using_dsd();
+-    residual_operator();        // residual
+-    restriction_operator_using_dsd();   // restriction
+-
+-    for (x) |val, i| {
+-            simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
++    jacobi(M_current, N_current, R_M_current, R_N_current, omega, iterations);  // presmoother
++    // var is_layout_column_major: bool = false;
++    // gemv_using_library(is_layout_column_major);
++    // // gemv_using_dsd();
++    // residual_operator();        // residual
++    // restriction_operator_using_dsd();   // restriction
++
++    for (@range(i16, N_current_local)) |i| {   
++            simprint.fmt_with_coords("x_smooth[{d}] = {f}", .{ @as(u16, i) , x[i] });
+     }
+     // unblock memcpy so that it can send data outside.
+     sys_mod.unblock_cmd_stream();
