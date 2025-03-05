@@ -13,67 +13,52 @@
 // limitations under the License.
 
 
-// color map: memcpy + allreduce + stencil
-//
-// color  var   color  var        color  var              color  var
-//   0   C0       9                18    EN_REDUCE_2       27   reserved (memcpy)
-//   1   C1      10                19    EN_REDUCE_3       28   reserved (memcpy)
-//   2   C2      11                20    EN_REDUCE_4       29   reserved (memcpy)
-//   3   C3      12                21    reserved (memcpy) 30   reserved (memcpy)
-//   4   C4      13                22    reserved (memcpy) 31   reserved
-//   5   C5      14  EN_STENCIL_1  23    reserved (memcpy) 32
-//   6   C6      15  EN_STENCIL_2  24                      33
-//   7   C7      16  EN_STENCIL_3  25                      34
-//   8   C8      17  EN_REDUCE_1   26                      35
-//
+// fixed parameters
+param total_pe_cols: i16 ; // width of the core rectangle // 1
+param total_pe_rows: i16 ; // height of the core rectangle    //1 initially
+param total_levels: i16; // number of levels in the AMG hierarchy
 
 
+// list dynamic/array?
+param layer_M_0: i16;       // A shape parameters here
+param layer_N_0: i16;   
+param layer_R_M_0: i16;     // R shape parameters here
+param layer_R_N_0: i16; 
+param layer_start_x_0: i16; // start x of the layer
+param layer_start_y_0: i16; // start y of the layer
+param layer_pe_cols_0: i16; // number of PEs in x direction
+param layer_pe_rows_0: i16; // number of PEs in y direction
+param layer_index_0: i16; // index of the layer
 
-param pe_cols: i16 ; // width of the core rectangle // 1
-param pe_rows: i16 ; // height of the core rectangle    //1 initially
-param M: i16;       // A shape parameters here
-param N: i16;   
-param R_M: i16;     // R shape parameters here
-param R_N: i16; 
-comptime {
-    @comptime_assert(M == N, "M and N must be equal at compiletime");
-}
-// comptime {
-//   // Number of matrix rows must be multiple of kernel rectangle height
-//   @comptime_assert(matrix_rows % pe_rows == 0);
-//   // Number of matrix cols must be multiple of kernel rectangle width
-//   @comptime_assert(matrix_cols % pe_cols == 0);
-// }
-// Local matrix dimensions
-// const local_rows: i16 = matrix_rows / pe_rows; // Number of rows per PE
-// const local_cols: i16 = matrix_cols / pe_cols; // Number of columns per PE
-// const local_rows: i16 = matrix_rows;
-// const local_cols: i16 = matrix_cols;    // TODO: change me back to division
+// same for others based on levels/total_levels.
+// param M_1: i16;       // A shape parameters here
+// param N_1: i16;
+// ... list continues for all levels
 
 const memcpy = @import_module( "<memcpy/get_params>", .{
-    .width = pe_cols,
-    .height = pe_rows
+    .width = total_pe_cols,
+    .height = total_pe_rows
     });
 
 layout {
     // step 1: configure the rectangle which does not include halo
-    @set_rectangle( pe_cols, pe_rows );
+    @set_rectangle( total_pe_cols, total_pe_rows );
 
     // step 2: compile csl code for a set of PEx.y and generate out_x_y.elf
     //   format: @set_tile_code(x, y, code.csl, param_binding);
 
-    var py: i16 = 0;
-    while(py < pe_rows) : (py +=1) {
-        var px: i16 = 0;
-        while(px < pe_cols) : (px +=1) {
+    // Map each layer
+    for (@range(i16, layer_start_y_0, layer_pe_rows_0,1)) |py| {
+        for (@range(i16, layer_start_x_0, layer_pe_cols_0,1)) |px| {
 
             const memcpyParams = memcpy.get_params(px);
             var params: comptime_struct = .{
                 .memcpy_params = memcpyParams,
-                .M = M,
-                .N = N,
-                .R_M = R_M,
-                .R_N = R_N
+                .M = layer_M_0,
+                .N = layer_N_0,
+                .R_M = layer_R_M_0,
+                .R_N = layer_R_N_0
+                // .layer_index = layer_index_0,    // Maybe?
             };
 
             @set_tile_code(px, py, "kernel_amg.csl", params);
