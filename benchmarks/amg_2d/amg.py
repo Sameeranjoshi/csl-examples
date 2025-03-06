@@ -274,7 +274,7 @@ def debugprint(levels, b_level, x_level):
         level_data_clone.append({
             "level": i,
             "A": A.toarray()[0,0:10],
-            "B_original": b[0:10].flatten(),
+            # "B_original": b[0:10].flatten(), // What values are these?
             "b_computed": b_level[i][0:10].flatten(),
             "x_computed": x_level[i][0:10].flatten()
         })

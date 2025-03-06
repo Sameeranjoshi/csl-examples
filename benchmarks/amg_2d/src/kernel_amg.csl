@@ -81,24 +81,35 @@ var mem_AX_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> AX[i] });
 ////////////////////////////////////////
 const gemv_mod   = @import_module("../libraries/gemv.csl",   .{ .sizeA = _MAX_SIZE_A, .sizeX = _MAX_SIZE_X, .sizeY = _MAX_SIZE_AX });
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
-const simprint = @import_module("<simprint>", .{ .enable = true });
+const simprint = @import_module("<simprint>", .{ .enable = false });
+const layout_module = @import_module("<layout>");
+
 ////////////////////////////////////////
 // Functions
 ////////////////////////////////////////
 // Initialize matrix and vectors
-fn initialize() void {
-    // for loop with range syntax
-    // loops over 0, 1, ...., M*N-1
-    // idx stores the loop index
-    // for (@range(i16, M*N)) |idx| {
-    //     // @as casts idx from i16 to f32
-    //     A[idx] = @as(f32, idx);
-    // }
-    // print x and b
+fn initialize(current_level:i16) void {
 
-    simprint.fmt_with_coords("In layer = {d}", .{ @as(u32, layer_index) });
-    simprint.fmt("M = {d}, N = {d}, R_M = {d}, R_N = {d}, px_start = {d}, py_start = {d}, layer_width = {d}, layer_height = {d}", 
-                 .{ @as(u32, M), @as(u32, N), @as(u32, R_M), @as(u32, R_N), @as(u32, px_start), @as(u32, py_start), @as(u32, layer_width), @as(u32, layer_height) });
+    if (current_level == layer_index){
+        simprint.fmt_with_coords("In layer = {d} INITIALIZE", .{ @as(u32, layer_index) });
+        simprint.fmt("M = {d}, N = {d}, R_M = {d}, R_N = {d}, px_start = {d}, py_start = {d}, layer_width = {d}, layer_height = {d}", 
+                    .{ @as(u32, M), @as(u32, N), @as(u32, R_M), @as(u32, R_N), @as(u32, px_start), @as(u32, py_start), @as(u32, layer_width), @as(u32, layer_height) });        
+        // print the data on this tile
+        for (x) |val, i| {
+            simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
+        }
+        for (b) |val, i| {
+            simprint.fmt_with_coords("b[{d}] = {f}", .{ i, val });
+        }
+        // print A
+        for (A) |val, i| {
+            simprint.fmt_with_coords("A[{d}] = {f}", .{ i, val });
+        }
+        // print R
+        for (R) |val, i| {
+            simprint.fmt_with_coords("R[{d}] = {f}", .{ i, val });
+        }
+    }
     simprint.print_string("\n");
 
 }
@@ -158,6 +169,7 @@ fn restriction_operator() void {
   }
 }
 
+// TODO: FIX BUG THEN USE IT.
 fn restriction_operator_using_dsd() void{
     // TODO: BUG: This produces wrong results if called multiple times.
     // for (@range(i16, R_M)) |i| {
@@ -205,30 +217,17 @@ fn jacobi(omega:f32, iterations: i16) void {
 
 
 // Call initialize and gemv functions
-fn compute(omega:f32, iterations: i16) void {
-    initialize();
+fn compute(omega:f32, iterations: i16, current_level:i16) void {
+    initialize(current_level);
     // gemv();
     jacobi(omega, iterations);  // presmoother
-    // gemv_using_library();
-    gemv();
-    // // gemv_using_dsd();
+    gemv_using_library();
+    // gemv();
+    // // // gemv_using_dsd();
     residual_operator();        // residual
-    restriction_operator_using_dsd();   // restriction
+    // restriction_operator_using_dsd();   // restriction
+    restriction_operator();
 
-    for (x) |val, i| {
-            simprint.fmt_with_coords("x_smooth[{d}] = {f}", .{ i, val });
-    }
-    //ax
-    for (AX) |val, i| {
-            simprint.fmt_with_coords("AX[{d}] = {f}", .{ i, val });
-    }
-    for (residual) |val, i| {
-            simprint.fmt_with_coords("residual[{d}] = {f}", .{ i, val });
-    }
-    for (b_coarse) |val, i| {
-            simprint.fmt_with_coords("b_coarse[{d}] = {f}", .{ i, val });
-    }
-    simprint.print_string("\n");
     // unblock memcpy so that it can send data outside.
     sys_mod.unblock_cmd_stream();
 }
