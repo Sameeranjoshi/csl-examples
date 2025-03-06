@@ -227,8 +227,8 @@ def device_calculations(v_cycle_data):
   ############################################################
   residual_device_log = []
 
-  layer_coordinates_map = s_and_p_500      
-  layer_param_map, layer_coordinates_map = generate_dynamic_layout(run_args, ml, layer_coordinates_map, filename="images/s_and_p_500.png")
+  layer_coordinates_map = amg_2_layers
+  layer_param_map, layer_coordinates_map = generate_dynamic_layout(run_args, ml, layer_coordinates_map, filename="images/amg_2_layers.png")
 
   ############################################################
   # Setup simulator
@@ -259,8 +259,6 @@ def device_calculations(v_cycle_data):
     A, P, R, x, b = ml.levels[level_index].A.toarray(), ml.levels[level_index].P.toarray(), ml.levels[level_index].R.toarray(), x_level[level_index], b_level[level_index]
     [M,N] = A.shape
     [R_M, R_N] = R.shape
-    pe_cols = 1
-    pe_rows = 1
     px, py, w, h = layer_coordinates_map[level_index]['layer_start_x'], layer_coordinates_map[level_index]['layer_start_y'], layer_coordinates_map[level_index]['layer_pe_cols'], layer_coordinates_map[level_index]['layer_pe_rows']
     
     print(f"data before passing to layer {level_index}:")
@@ -289,7 +287,7 @@ def device_calculations(v_cycle_data):
     iterations=amg.get_iterations_from_presmoother(setup_config)    
     print(f"\t2. Solving Layer {level_index} with omega={omega}, smoothing_iterations={iterations}")
     
-    simulator.launch('compute', np.float32(omega), np.int16(iterations), nonblock=False)
+    simulator.launch('compute', np.float32(omega), np.int16(iterations), np.int16(level_index), nonblock=False)
 
     ############################################################
     # D2H
@@ -306,8 +304,7 @@ def device_calculations(v_cycle_data):
     x_temp = np.zeros([N*1], dtype=np.float32)
     simulator.memcpy_d2h(x_temp, symbol_x, px, py, w, h, N*1, streaming=False,
       order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
-    print(f"level {level_index} x_smooth: ", x_temp)
-    x_level[level_index] = x_temp
+    x_level[level_index] = x_temp # change current x to x_smooth on host, as it's updated inplace on device.
     
     
     ############################################################
@@ -324,7 +321,8 @@ def device_calculations(v_cycle_data):
     
     logs(run_args, logs_dir)  
     level_index += 1  #loop induction var
-      
+  
+    
   ############################################################
   # Cleanup
   ############################################################
