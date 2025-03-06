@@ -19,7 +19,7 @@ param total_pe_rows: i16 ; // height of the core rectangle    //1 initially
 param total_levels: i16; // number of levels in the AMG hierarchy
 
 
-// list dynamic/array?
+// LAYER 0(Other way - This can be @import_comptime_value)
 param layer_M_0: i16;       // A shape parameters here
 param layer_N_0: i16;   
 param layer_R_M_0: i16;     // R shape parameters here
@@ -30,40 +30,114 @@ param layer_pe_cols_0: i16; // number of PEs in x direction
 param layer_pe_rows_0: i16; // number of PEs in y direction
 param layer_index_0: i16; // index of the layer
 
+// LAYER 1
+param layer_M_1: i16;       // A shape parameters here
+param layer_N_1: i16;
+param layer_R_M_1: i16;     // R shape parameters here
+param layer_R_N_1: i16;
+param layer_start_x_1: i16; // start x of the layer
+param layer_start_y_1: i16; // start y of the layer
+param layer_pe_cols_1: i16; // number of PEs in x direction
+param layer_pe_rows_1: i16; // number of PEs in y direction
+param layer_index_1: i16; // index of the layer
+
+// LAYER 2
+// ... continue for total_levels
 // same for others based on levels/total_levels.
 // param M_1: i16;       // A shape parameters here
 // param N_1: i16;
 // ... list continues for all levels
 
+const first = [9]i16 { layer_M_0, layer_N_0, layer_R_M_0, layer_R_N_0, layer_start_x_0, layer_start_y_0, layer_pe_cols_0, layer_pe_rows_0, layer_index_0 };
+const second = [9]i16 { layer_M_1, layer_N_1, layer_R_M_1, layer_R_N_1, layer_start_x_1, layer_start_y_1, layer_pe_cols_1, layer_pe_rows_1, layer_index_1 };
+// continue for all levels
+
+
 const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = total_pe_cols,
     .height = total_pe_rows
     });
+const simprint = @import_module("<simprint>");
+
+
 
 layout {
     // step 1: configure the rectangle which does not include halo
     @set_rectangle( total_pe_cols, total_pe_rows );
 
+    var pe_has_code = @zeros([total_pe_rows*total_pe_cols]i16);
+
     // step 2: compile csl code for a set of PEx.y and generate out_x_y.elf
     //   format: @set_tile_code(x, y, code.csl, param_binding);
 
-    // Map each layer
-    for (@range(i16, layer_start_y_0, layer_pe_rows_0,1)) |py| {
-        for (@range(i16, layer_start_x_0, layer_pe_cols_0,1)) |px| {
+    var idx: i16 = 0;
+    while(idx < total_levels) : (idx += 1) {
+        var currentlayer:[9]i16 = switch(idx) { // This can be @import_comptime_value
+            0 => first,
+            1 => second,
+            else => @comptime_assert("Invalid layer data or no layer found while layout generation")
+        };
 
-            const memcpyParams = memcpy.get_params(px);
-            var params: comptime_struct = .{
-                .memcpy_params = memcpyParams,
-                .M = layer_M_0,
-                .N = layer_N_0,
-                .R_M = layer_R_M_0,
-                .R_N = layer_R_N_0
-                // .layer_index = layer_index_0,    // Maybe?
-            };
+        var M = currentlayer[0];
+        var N = currentlayer[1];
+        var R_M = currentlayer[2];
+        var R_N = currentlayer[3];
+        var px_start = currentlayer[4];
+        var py_start = currentlayer[5];
+        var layer_width = currentlayer[6];
+        var layer_height = currentlayer[7];
+        var layer_index = currentlayer[8];
 
-            @set_tile_code(px, py, "kernel_amg.csl", params);
+        var px_end = px_start + layer_width;
+        var py_end = py_start + layer_height;
+
+
+        var px: i16 = px_start;
+        while (px < px_end) : (px += 1) {
+            var py: i16 = py_start;  // Reset py for each new px
+            const memcpy_params = memcpy.get_params(px);
+
+            while (py < py_end) : (py += 1) {
+                var params: comptime_struct = .{
+                    .memcpy_params = memcpy_params,
+                    .M = M,
+                    .N = N,
+                    .R_M = R_M,
+                    .R_N = R_N,
+                    .layer_index = layer_index,
+                    .px_start = px_start,
+                    .py_start = py_start,
+                    .layer_width = layer_width,
+                    .layer_height = layer_height,
+                };
+//////////////////////////////  BUG? PX AND PY and wrong/interchanged  ///////////////////////////////////////
+//////////////////////////////  KERNELS  ///////////////////////////////////////
+//////////////////////////////  KERNELS  ///////////////////////////////////////
+                @set_tile_code(px, py, "kernel_amg.csl", params);
+                // @set_tile_code(px, py, "empty.csl", .{ .memcpy_params = memcpy_params });
+//////////////////////////////  KERNELS  ///////////////////////////////////////
+//////////////////////////////  KERNELS  ///////////////////////////////////////
+//////////////////////////////  KERNELS  ///////////////////////////////////////                
+                var oned_index:i16 = py + px * total_pe_rows;
+                // var oned_index:i16 = px * total_pe_rows + py
+                pe_has_code[oned_index] = 1;
+            }
         }
     }
+    // OK now layers are mapped, fill unoccupied PEs with empty.csl
+    var px: i16 = 0;
+    while (px < total_pe_cols) : (px += 1) {
+        var py: i16 = 0;
+        while (py < total_pe_rows) : (py += 1) {
+            // var oned_index:i16 = py + px * total_pe_cols;
+            var oned_index:i16 = py + px * total_pe_rows;
+            if (pe_has_code[oned_index] == 0) {
+                const memcpy_params = memcpy.get_params(px);
+                @set_tile_code(px, py, "empty.csl", .{ .memcpy_params = memcpy_params });
+            }
+        }
+    }
+
 
     // input (true = mutability from host?)
     @export_name("b", [*]f32, true);

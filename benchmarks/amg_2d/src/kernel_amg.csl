@@ -19,7 +19,11 @@ param M: i16;   // pe_rows
 param N: i16;   // pe_cols
 param R_M: i16; // R shape parameters here
 param R_N: i16;
-
+param layer_index: i16; // index of the layer
+param px_start: i16; // start x of the layer
+param py_start: i16; // start y of the layer
+param layer_width: i16; // number of PEs in x direction
+param layer_height: i16; // number of PEs in y direction
 ////////////////////////////////////////
 // DATA(local + global)
 ////////////////////////////////////////
@@ -91,14 +95,12 @@ fn initialize() void {
     //     A[idx] = @as(f32, idx);
     // }
     // print x and b
-    simprint.print_string("\n\n\n\nLAYER X AND B");
-    for (x) |val, i| {
-            simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
-    }
-    for (b) |val, i| {
-            simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
-    }        
+
+    simprint.fmt_with_coords("In layer = {d}", .{ @as(u32, layer_index) });
+    simprint.fmt("M = {d}, N = {d}, R_M = {d}, R_N = {d}, px_start = {d}, py_start = {d}, layer_width = {d}, layer_height = {d}", 
+                 .{ @as(u32, M), @as(u32, N), @as(u32, R_M), @as(u32, R_N), @as(u32, px_start), @as(u32, py_start), @as(u32, layer_width), @as(u32, layer_height) });
     simprint.print_string("\n");
+
 }
 
 //  General: Ax = aplha. (A * x) + beta.y
@@ -198,7 +200,7 @@ fn jacobi(omega:f32, iterations: i16) void {
         }
     }
 
-    sys_mod.unblock_cmd_stream();
+    // sys_mod.unblock_cmd_stream();
 }
 
 
@@ -207,14 +209,26 @@ fn compute(omega:f32, iterations: i16) void {
     initialize();
     // gemv();
     jacobi(omega, iterations);  // presmoother
-    gemv_using_library();
-    // gemv_using_dsd();
+    // gemv_using_library();
+    gemv();
+    // // gemv_using_dsd();
     residual_operator();        // residual
     restriction_operator_using_dsd();   // restriction
 
     for (x) |val, i| {
-            simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
+            simprint.fmt_with_coords("x_smooth[{d}] = {f}", .{ i, val });
     }
+    //ax
+    for (AX) |val, i| {
+            simprint.fmt_with_coords("AX[{d}] = {f}", .{ i, val });
+    }
+    for (residual) |val, i| {
+            simprint.fmt_with_coords("residual[{d}] = {f}", .{ i, val });
+    }
+    for (b_coarse) |val, i| {
+            simprint.fmt_with_coords("b_coarse[{d}] = {f}", .{ i, val });
+    }
+    simprint.print_string("\n");
     // unblock memcpy so that it can send data outside.
     sys_mod.unblock_cmd_stream();
 }

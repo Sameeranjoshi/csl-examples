@@ -29,6 +29,8 @@ from sklearn.datasets import make_sparse_spd_matrix
 import amg as amg 
 import copy
 
+from mapper_layouts.different_layouts import *
+
 @dataclass
 class CompileCoreArgs:
     cslc: str
@@ -223,9 +225,11 @@ def device_calculations(v_cycle_data):
   ############################################################
   # CREATE DYNAMIC LAYOUT
   ############################################################
-  residual_device_log = [] 
-  layer_param_map, layer_coordinates_map = generate_dynamic_layout(run_args, ml, x_level, b_level, setup_config)
-  
+  residual_device_log = []
+
+  layer_coordinates_map = s_and_p_500      
+  layer_param_map, layer_coordinates_map = generate_dynamic_layout(run_args, ml, layer_coordinates_map, filename="images/s_and_p_500.png")
+
   ############################################################
   # Setup simulator
   ############################################################
@@ -257,18 +261,26 @@ def device_calculations(v_cycle_data):
     [R_M, R_N] = R.shape
     pe_cols = 1
     pe_rows = 1
-
+    px, py, w, h = layer_coordinates_map[level_index]['layer_start_x'], layer_coordinates_map[level_index]['layer_start_y'], layer_coordinates_map[level_index]['layer_pe_cols'], layer_coordinates_map[level_index]['layer_pe_rows']
+    
+    print(f"data before passing to layer {level_index}:")
+    print(f"A: {A.shape}")
+    print(f"R: {R.shape}")
+    print(f"x: {x.shape}")
+    print(f"b: {b.shape}")
+    print(f"px: {px}, py: {py}, w: {w}, h: {h}")
+    
     ############################################################
     # H2D
     print(f"\t1. Copying data to device")
     ############################################################
-    simulator.memcpy_h2d(symbol_x, x, 0, 0, pe_cols, pe_rows, N*1, streaming=False,
+    simulator.memcpy_h2d(symbol_x, x, px, py, w, h, N*1, streaming=False,
       order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
-    simulator.memcpy_h2d(symbol_A, A.flatten(order='C'), 0, 0, pe_cols, pe_rows, M*N, streaming=False,
+    simulator.memcpy_h2d(symbol_A, A.flatten(order='C'), px, py, w, h, M*N, streaming=False,
       order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
-    simulator.memcpy_h2d(symbol_R, R.flatten(order='C'), 0, 0, pe_cols, pe_rows, R_M*R_N, streaming=False,
+    simulator.memcpy_h2d(symbol_R, R.flatten(order='C'), px, py, w, h, R_M*R_N, streaming=False,
       order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
-    simulator.memcpy_h2d(symbol_b, b, 0, 0, pe_cols, pe_rows, M*1, streaming=False,
+    simulator.memcpy_h2d(symbol_b, b, px, py, w, h, M*1, streaming=False,
       order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
     ############################################################
     # Kernel
@@ -284,15 +296,15 @@ def device_calculations(v_cycle_data):
     print(f"\t3. Copying results to host")
     ############################################################
     residual_device = np.zeros([M*1], dtype=np.float32)
-    simulator.memcpy_d2h(residual_device, symbol_residual, 0, 0, 1, 1, M*1, streaming=False,
+    simulator.memcpy_d2h(residual_device, symbol_residual, px, py, w, h, M*1, streaming=False,
       order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
     b_coarse_device = np.zeros([R_M*1], dtype=np.float32)
-    simulator.memcpy_d2h(b_coarse_device, symbol_b_coarse, 0, 0, 1, 1, R_M*1, streaming=False,
+    simulator.memcpy_d2h(b_coarse_device, symbol_b_coarse, px, py, w, h, R_M*1, streaming=False,
       order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
     x_coarse_device = np.zeros_like(b_coarse_device)
     # copy x from device to host
     x_temp = np.zeros([N*1], dtype=np.float32)
-    simulator.memcpy_d2h(x_temp, symbol_x, 0, 0, pe_cols, pe_rows, N*1, streaming=False,
+    simulator.memcpy_d2h(x_temp, symbol_x, px, py, w, h, N*1, streaming=False,
       order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
     print(f"level {level_index} x_smooth: ", x_temp)
     x_level[level_index] = x_temp
@@ -325,6 +337,25 @@ def device_calculations(v_cycle_data):
   amg.debugprint(ml.levels, b_level, x_level)
   return b_coarsest_device, x_coarsest_device, residual_device_log
 
+def find_total_pes_used(layer_coordinates_map):
+    """
+    Selects the best total PE column and row calculation method 
+    with the simplest logic.
+    """
+
+    # Compute max and sum of layer PE counts
+    sum_pe_cols = sum(layer['layer_pe_cols'] for layer in layer_coordinates_map.values())
+    sum_pe_rows = sum(layer['layer_pe_rows'] for layer in layer_coordinates_map.values())
+    max_pe_cols = max(layer['layer_start_x'] + layer['layer_pe_cols'] for layer in layer_coordinates_map.values())  
+    max_pe_rows = max(layer['layer_start_y'] + layer['layer_pe_rows'] for layer in layer_coordinates_map.values())  
+
+    if abs(sum_pe_cols - max_pe_cols) < abs(sum_pe_rows - max_pe_rows):
+        return sum_pe_cols, max_pe_rows  # sum, max (Row-wise stacking)
+    elif abs(sum_pe_rows - max_pe_rows) < abs(sum_pe_cols - max_pe_cols):
+        return max_pe_cols, sum_pe_rows  # max, sum (Column-wise stacking)
+    else:
+        return sum_pe_cols, sum_pe_rows  # Safe fallback
+      
 def run_command(command):
     try:
         result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -332,7 +363,7 @@ def run_command(command):
         print("Layout compiled successfully.")
     except subprocess.CalledProcessError as e:
         print("Error occurred:", e.stderr)
-        
+
 def generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_cols, total_levels, generated_layout_file, run_args):
     # Mostly doesn't change
     cslc, layout_file, arch = "cslc", generated_layout_file , "wse2"
@@ -341,7 +372,7 @@ def generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_col
     # Can Change based on problem size.
     channels, width_west_buf, width_east_buf = 1, 0, 0
     fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y = calculate_fabric_dimensions(total_pe_cols, total_pe_rows, width_west_buf, width_east_buf)
-      
+
     base_command = f"cslc {layout_file} --arch={arch} --fabric-dims={fabric_width},{fabric_height} --fabric-offsets={core_fabric_offset_x},{core_fabric_offset_y} \\\n"
     # Extract global parameters
     global_params = f"--params=total_pe_rows:{total_pe_rows},total_pe_cols:{total_pe_cols},total_levels:{total_levels} \\\n"
@@ -361,32 +392,57 @@ def generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_col
     all_layer_params = " ".join(layer_params_list)
 
     # Other fixed parameters
-    fixed_params = f"--memcpy --channels={channels} --width-west-buf={width_west_buf} --width-east-buf={width_east_buf} --verbose {extra_args} -o {elf_folder}"
+    fixed_params = f"--memcpy --channels={channels} --width-west-buf={width_west_buf} --width-east-buf={width_east_buf} {extra_args} -o {elf_folder}"
 
     # Construct the final command
     final_command = f"{base_command} " \
                     f"{global_params} " \
                     f"{all_layer_params} " \
                     f"{fixed_params}"
-    return final_command
+                    
+    # create a data structure to store fabric details and return it.
+    fabric_dimensions = [fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y]
+    return final_command, fabric_dimensions
  
-def create_layer_param_map(ml):
+def create_layer_param_map(ml, layer_coordinates_input=None):
   # create a dictionary to store the metadata of each layer
   layer_params_map = {}
-  layer_coordinates_map = {}  # much smaller map.
+  layer_coordinates_map = {}  # much smaller map.(User defined or auto-generated)
   layer_data_shapes_map = {}
+  total_levels = len(ml.levels) - 1
   
-  for level_index in range(len(ml.levels)-1):  # not the coarsest level
+  # default mapping.
+  if layer_coordinates_input is None:
+    print("Layer coordinates not provided, using default linear placement across columns.")
+    layer_coordinates_input = {
+      i: {
+        "layer_start_x": i,  # default linear placement to right/px
+        "layer_start_y": 0,
+        "layer_pe_cols": 1,  # spread across columns
+        "layer_pe_rows": 1,
+        } for i in range(total_levels)
+    }
+    
+  for i in layer_coordinates_input.keys():
+    layer_coordinates_map[i] = layer_coordinates_input[i]
+    # if i not in range(total_levels):
+    #   raise ValueError(f"It looks like layer {i} provided is not in input problem layers(most likely more coordinates than AMG Levels size.)")
+
+  # error checks
+  for i in range(len(layer_coordinates_input)):
+    if layer_coordinates_input[i]['layer_start_x'] < 0:
+      raise ValueError(f"Layer {i} should have positive x coordinate.")
+    if layer_coordinates_input[i]['layer_start_y'] < 0:
+      raise ValueError(f"Layer {i} should have positive y coordinate.")
+    # update the map.
+    
+
+  # AMG problem specific layers.
+  for level_index in range(total_levels):  # not the coarsest level
     A, R = ml.levels[level_index].A.toarray(), ml.levels[level_index].R.toarray()
     [M,N] = A.shape
     [R_M, R_N] = R.shape
     
-    layer_coordinates = {
-      "layer_start_x": level_index,  # start x and y of the layer
-      "layer_start_y": 0,
-      "layer_pe_cols": 1,  # spread across columns
-      "layer_pe_rows": 1,
-    }
     layer_data_shapes = {
       "layer_M": M,
       "layer_N": N,
@@ -397,35 +453,36 @@ def create_layer_param_map(ml):
         # problem data.
         "layer_data_shapes": layer_data_shapes,  # map of shapes of data
         # layer coordinates
-        "layer_coordinates": layer_coordinates,  # map of coordinates
+        "layer_coordinates": layer_coordinates_map[level_index],  # map of coordinates
         # layer kernel to run(e.g. L1_kernel.csl, L2_kernel.csl, ...)
         #"layer_kernel": "kernel_amg.csl", # kernel to run on this layer
         "layer_index": level_index,  # layer index
     }
-    layer_key = level_index
-    layer_params_map[layer_key] = layer_params
-    layer_coordinates_map[level_index] = layer_coordinates
+    layer_params_map[level_index] = layer_params
     layer_data_shapes_map[level_index] = layer_data_shapes
     
   return layer_params_map, layer_coordinates_map
 
-def generate_dynamic_layout(run_args, ml, x_level, b_level, setup_config):
+def generate_dynamic_layout(run_args, ml, layer_coordinates_map:Optional[dict]=None, filename="images/layer_mapping.png"):
+  # This is a function to generate dynamic layout based on the problem size.
   
   # global data regardless of layers.
-  total_levels = len(ml.levels)
-  total_pe_cols = 1  # spread across columns.
-  total_pe_rows = 1
+  tot_level_minus_one = len(ml.levels) - 1
   
   # This is problem specific.
-  layer_param_map, layer_coordinates_map = create_layer_param_map(ml)  
-  print(json.dumps(layer_param_map, indent=2))
-  print(json.dumps(layer_coordinates_map, indent=2))
-  # generated_layout_file = ut.generate_layout_file_from_template(layer_param_map, run_args, total_pe_cols, total_pe_rows, total_levels)
+  layer_param_map, layer_coordinates_map = create_layer_param_map(ml, layer_coordinates_map)
+  total_pe_cols, total_pe_rows = find_total_pes_used(layer_coordinates_map)
+  
+  # generated_layout_file = ut.generate_layout_file_from_template(layer_param_map, run_args, total_pe_cols, total_pe_rows, tot_level_minus_one)
   generated_layout_file = "./src/layout_amg.csl"
   
   print("Precompile disabled, compiling based on problem size.")
-  layout_command = generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_cols, total_levels, generated_layout_file, run_args)
-  print("Compiling layout with :\n", layout_command)
+  layout_command, fabric_dimensions = generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_cols, tot_level_minus_one, generated_layout_file, run_args)
+  ut.visualize_layout_with_empty(fabric_dimensions, layer_coordinates_map, layer_param_map, total_pe_cols, total_pe_rows, filename)
+  print("############################################################")
+  print("Generating blueprint layout with :\n")
+  print(layout_command)
+  print("############################################################")
   run_command(layout_command)
     
   if (run_args.compile_only):

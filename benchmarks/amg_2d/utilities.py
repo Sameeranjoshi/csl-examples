@@ -3,7 +3,8 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 import pyamg
 import matplotlib.pyplot as plt
-
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 import os
 import numpy as np
 
@@ -309,3 +310,86 @@ def jacobi_csr(A_Csr, x, b, omega=1.0/3.0, iterations=1):
             if diag != 0.0:
                 x[i] = (1 - omega) * temp[i] + omega * (b[i] - rsum) / diag
     return x
+
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import numpy as np
+
+def visualize_layout_with_empty(fabric_dimensions, layer_coordinates_map, layer_params_map, total_pe_cols, total_pe_rows, filename="fabric_layout_with_empty.png"):
+    """
+    Visualizes the layout of layers on a fabric grid and marks empty spaces inside @set_rectangle(total_pe_cols, total_pe_rows).
+    - Adjusts figure size dynamically to fit all layers properly.
+    - Resizes PE units if the layout exceeds a threshold size.
+    """
+
+    fabric_width, fabric_height, offset_x, offset_y = fabric_dimensions
+    
+    base_size = 0.5  # Adjust this value for better visualization
+    fig_width = max(10, total_pe_cols * base_size)
+    fig_height = max(6, total_pe_rows * base_size)
+
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+
+    ax.set_xlim(0, fabric_width)   # X increases right → PE Columns
+    ax.set_ylim(fabric_height, 0)  # Y increases downward → PE Rows
+
+    total_colors = len(layer_coordinates_map)
+    colors = plt.cm.get_cmap('tab20', total_colors).colors
+    
+    # Track occupied PEs in a 2D grid
+    occupied_grid = np.zeros((fabric_height, fabric_width), dtype=bool)
+
+    # Draw layers with width & height
+    for layer_index, coords in layer_coordinates_map.items():
+        start_x = coords["layer_start_x"] + offset_x
+        start_y = coords["layer_start_y"] + offset_y
+        width = coords["layer_pe_cols"]
+        height = coords["layer_pe_rows"]
+
+        # Mark occupied area
+        occupied_grid[start_y:start_y+height, start_x:start_x+width] = True
+
+        # Get data shapes
+        is_layer_in_amg = layer_params_map.get(layer_index, None)
+        if is_layer_in_amg is not None:
+            data_shapes = is_layer_in_amg["layer_data_shapes"]
+            shape_text = f"A({data_shapes['layer_M']}x{data_shapes['layer_N']})"
+        else:
+            shape_text = "A(0x0)"
+
+        # Create rectangle for the layer
+        rect = patches.Rectangle((start_x, start_y), width, height, 
+                                 linewidth=2, edgecolor='black', facecolor=colors[layer_index % len(colors)], alpha=0.6)
+        ax.add_patch(rect)
+
+        # Add text inside the layer for data shape
+        ax.text(start_x + width / 2, start_y + height / 2, f"L{layer_index+1}\n{shape_text}", 
+                fontsize=10, ha='center', va='center', fontweight='bold', color='black')
+
+        # Add width & height labels at the edges
+        ax.text(start_x + width / 2, start_y - 0.3, f"{width}", 
+                fontsize=9, ha='center', va='bottom', fontweight='bold', color='black')
+
+        ax.text(start_x - 0.3, start_y + height / 2, f"{height}", 
+                fontsize=9, ha='right', va='center', fontweight='bold', color='black')
+
+
+    for y in range(offset_y, offset_y + total_pe_rows):
+        for x in range(offset_x, offset_x + total_pe_cols):
+            if not occupied_grid[y, x]:  # If this PE is not occupied
+                empty_rect = patches.Rectangle((x, y), 1, 1, 
+                                               linewidth=0.5, edgecolor='gray', linestyle='dashed', 
+                                               facecolor='lightgray', alpha=0.3)
+                ax.add_patch(empty_rect)
+                ax.text(x + 0.5, y + 0.5, "Empty", 
+                        fontsize=6, ha='center', va='center', color='gray')
+
+    ax.set_xticks(range(0, fabric_width + 1, 1))  # PE Columns
+    ax.set_yticks(range(0, fabric_height + 1, 1)) # PE Rows
+    ax.grid(True, linestyle='--', linewidth=0.5)
+    ax.set_title(f"Fabric Layout with Empty Regions Inside @set_rectangle({total_pe_cols}, {total_pe_rows})")
+    ax.set_xlabel("PE Columns")
+    ax.set_ylabel("PE Rows")
+
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.show()
