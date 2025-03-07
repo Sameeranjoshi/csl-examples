@@ -30,9 +30,11 @@ import matplotlib.pyplot as plt
 import math
 import utilities as ut
 
-def each_layer_solver_down(level, x_level, b_level, ml, setup_config, level_id, residual_host):
+def each_layer_solver_down(level, x_level, b_level, ml, setup_config, level_id):
     print(f"Solving DOWN on host layer: {level_id}")
     A, R = level.A, level.R
+    print("A format, A dtype:", A.format, A.dtype)
+    print("R format, R dtype:", R.format, R.dtype)
     x = x_level[level_id]
     b = b_level[level_id]
     
@@ -41,22 +43,20 @@ def each_layer_solver_down(level, x_level, b_level, ml, setup_config, level_id, 
     r = b - A @ x   # residual
     b_coarse = R @ r    # restrict
     x_coarse = np.zeros_like(b_coarse)
-    
-    
-    residual_host.append(np.dot(r,r))
+
     return b_coarse, x_coarse
 
-def each_layer_solver_up(level, x_level, b_level, ml, setup_config, level_id, residual_host, x_lower_level):
+def each_layer_solver_up(level, x_level, b_level, ml, setup_config, level_id, x_lower_level):
     print(f"Solving UP on host layer: {level_id}")
     A, P = level.A, level.P
+    print("A format UP, A dtype:", A.format, A.dtype)
+    print("P format UP, P dtype:", P.format, P.dtype)
     x = x_level[level_id]
     b = b_level[level_id]
 
     x += P @ x_lower_level  # Prolongation
     ut.jacobi_csr(A, x, b, omega=get_omega_from_postsmoother(setup_config), iterations=get_iterations_from_postsmoother(setup_config))
     
-    r = b - A @ x
-    residual_host.append(np.dot(r,r))
     return x    
 
 # only V cycle, iterative version
@@ -76,6 +76,7 @@ def AMG_test(ml, setup_config, x_level, b_level, solver, max_level=10, max_coars
             b = b_level[i]
 
             level.presmoother(A, x, b)
+            # ut.jacobi_csr(ml.levels[i].A, x_level[i], b_level[i], omega=get_omega_from_postsmoother(setup_config), iterations=get_iterations_from_postsmoother(setup_config))            
             r = b - A @ x
             b_coarse = R @ r
             x_coarse = np.zeros_like(b_coarse)
@@ -427,15 +428,15 @@ def scipy_direct_solver(A, b):
     return x
 
 # TODO: Fix the atol and issues like those.
-def scipy_iterative_solver(A, b, x, atol, max_ite):
-    x, converged = spla.cg(A, b, x0=x, atol=atol, maxiter=max_ite)
+def scipy_iterative_solver(A, b, x):
+    x, converged = spla.cg(A, b, x0=x)
     if converged > 0:
         print("spla.cg from scipy_iterative_solver did not converge, maybe use more iterations or reduce tolerance.")
     
     # calculate residual
     r = b - A.dot(x)
     rho = np.dot(r, r)
-    return x, rho
+    return x
 
 #############################################
 def rs_modified(A, x, b, max_ite, relative_tol, solver, max_level=None, max_coarse=None):
@@ -515,10 +516,6 @@ def smooth_aggregate_setup_only(A, x, b, solver, max_level=None, max_coarse=None
     # https://github.com/pyamg/pyamg/issues/350
     ml = smoothed_aggregation_solver(A, **smoothed_aggregation_solver_config)
 
-    # print_table_data(ml.levels)
-    # print(ml)
-    # print_table_shapes(ml.levels)
-    
     return ml, smoothed_aggregation_solver_config
 
 def rs_setup_only(A, x, b, solver, max_level=None, max_coarse=None):

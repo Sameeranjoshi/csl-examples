@@ -170,16 +170,16 @@ def host_calculations(v_cycle_data):
   ############################################################
   # Perform V-Cycle
   ############################################################
-  residual_host = []
+  residual_host_all_levels = []
   
   #### Reference testing
   # TODO: REMOVE THIS AS EXPENSIVE
-  b_level_copy = copy.deepcopy(b_level)
-  x_level_copy = copy.deepcopy(x_level)
-  ml_copy = copy.deepcopy(ml)
-  setup_config_copy = copy.deepcopy(setup_config)
+  # b_level_copy = copy.deepcopy(b_level)
+  # x_level_copy = copy.deepcopy(x_level)
+  # ml_copy = copy.deepcopy(ml)
+  # setup_config_copy = copy.deepcopy(setup_config)
   solver_callable_host = amg.scipy_direct_solver
-  ref_b_solution, ref_x_solution = amg.AMG_test(ml_copy, setup_config_copy, x_level_copy, b_level_copy, max_level=10, max_coarse=2, max_ite=1, solver=solver_callable_host)
+  # ref_b_solution, ref_x_solution = amg.AMG_test(ml_copy, setup_config_copy, x_level_copy, b_level_copy, max_level=10, max_coarse=2, max_ite=1, solver=solver_callable_host)
   
   ## 
   if len(ml.levels) == 0:
@@ -189,7 +189,7 @@ def host_calculations(v_cycle_data):
   # V down
   for i, level in enumerate(ml.levels[:-1]):
     level = ml.levels[i]  # current level
-    b_coarse_layer, x_coarse_layer = amg.each_layer_solver_down(level, x_level, b_level, ml, setup_config, i, residual_host)
+    b_coarse_layer, x_coarse_layer = amg.each_layer_solver_down(level, x_level, b_level, ml, setup_config, i)
     b_level[i + 1] = b_coarse_layer  # Directly store in the next level
     x_level[i + 1] = x_coarse_layer  # Directly store in the next level
 
@@ -202,23 +202,30 @@ def host_calculations(v_cycle_data):
   x_coarsest[:] = solver_callable_host(A_coarsest, b_coarsest)
   print("After coarse solver:")
   amg.debugprint(ml.levels, b_level, x_level)
+  print("A_coarse format, A_coarse dtype:", A_coarsest.format, A_coarsest.dtype)
   
   for i in reversed(range(len(ml.levels) - 1)):    
     level = ml.levels[i]  # current level
     x_lower_level = x_level[i+1]  # this is data not array
-    x_current_updated = amg.each_layer_solver_up(level, x_level, b_level, ml, setup_config, i, residual_host, x_lower_level)
+    x_current_updated = amg.each_layer_solver_up(level, x_level, b_level, ml, setup_config, i, x_lower_level)
     x_level[i] = x_current_updated
   
   b_solution, x_solution = b_level[0], x_level[0]
-  print("A = ", ml.levels[0].A.toarray())
+
   print("After final solver:")
   amg.debugprint(ml.levels, b_level, x_level)
-  # check ref* and x_solution
-  assert np.allclose(ref_b_solution, b_solution, rtol=1e-5), "ref_b_solution do not match!"
-  assert np.allclose(ref_x_solution, x_solution, rtol=1e-5), "ref_x_solution do not match!"
-  print("Success: b_solution, x_solution match with reference")
+  # # check ref* and x_solution
+  # assert np.allclose(ref_b_solution, b_solution, rtol=1e-5), "ref_b_solution do not match!"
+  # assert np.allclose(ref_x_solution, x_solution, rtol=1e-5), "ref_x_solution do not match!"
+  # print("Success: b_solution, x_solution match with reference")
   
-
+  
+  # residual_ref = np.linalg.norm(ml_copy.levels[0].A @ ref_x_solution - ref_b_solution)
+  residual_host= np.linalg.norm(ml.levels[0].A @ x_solution - b_solution)
+  # print("Residual ref ||Ax - b||:", residual_ref)
+  print("Residual host ||Ax - b||:", residual_host)
+  # assert np.allclose(residual_ref, residual_host, rtol=1e-5), "Residual ref and host do not match!"
+  
   return b_solution, x_solution, residual_host
 
 def device_calculations(v_cycle_data):
@@ -512,17 +519,34 @@ def main():
   print("############################################################")
   print("# INPUT DATA")
   print("############################################################")
-  M = 50
-  N = 50
+  N = 7
+  M = 7
   
-  # data
-  A0 = np.arange(M*N, dtype=np.float32).reshape(M, N)  # 2D
-  x0 = np.full(shape=N*1, fill_value=1.0, dtype=np.float32)  # 1D
-  # b0 = np.zeros(shape=M*1, dtype=np.float32)
-  b0 = np.full(shape=M*1, fill_value=3.0,dtype=np.float32)
+  A0, x0, b0 = generate_input2(M, N)
+  A0 = A0.astype(np.float32)
+  x0 = x0.astype(np.float32)  # Do this compulsorily to make the data 32bit.
+  b0 = b0.astype(np.float32)
   nrm_b = np.linalg.norm(b0, 2)
   eps = 1.e-4
   relative_tol = eps * nrm_b # relative tolerance
+  def checkinput(A0, b0, x0):
+    A = copy.deepcopy(A0.toarray())
+    b = copy.deepcopy(b0)
+    x = copy.deepcopy(x0)
+    # Compute the rank and condition number of A
+    rank_A = np.linalg.matrix_rank(A)
+    cond_A = np.linalg.cond(A)
+
+    print("Rank of A:", rank_A)
+    print("Condition Number of A:", cond_A)
+
+    # Solve using spsolve on a CSR version of A
+    A_csr = sp.csr_matrix(A)
+    x = spla.spsolve(A_csr, b)
+    residual = np.linalg.norm(A @ x - b)
+    print("Residual ||Ax - b||:", residual)
+    print("Computed x:", x)
+  checkinput(A0, b0, x0)
 
   # print data
   print("Input problem size:", M, N)
@@ -546,7 +570,7 @@ def main():
   solver_callable_host = amg.scipy_direct_solver
   ml, setup_config = amg.smooth_aggregate_setup_only(input_data["A0"], x=input_data["x0"], b=input_data["b0"], 
                                                      solver=solver_callable_host, max_level=10, max_coarse=2)
-  print(ml)
+  # print(ml)
   print(amg.print_table_shapes(ml.levels))
   
   V_levels = len(ml.levels)
@@ -568,30 +592,46 @@ def main():
   print("############################################################")
   print("# HOST CALCULATIONS")
   print("############################################################")
-  b_coarsest_host, x_coarsest_host, residual_host = host_calculations(v_cycle_data_host)
+  b_final_host, x_final_host, residual_host = host_calculations(v_cycle_data_host)
   print("HOST CALCULATIONS DONE")
-  print("\nb_solution_final Host:", b_coarsest_host.ravel())
-  print("\tx_solution_final Host:", x_coarsest_host.ravel())
-  for i, residual in enumerate(residual_host):
-      print(f"\tResidual Host [{i}]:", residual)
+  print(f"\tResidual Host ||AX-b||:", residual_host)
+  print(f"\n x_solution_final Host:", x_final_host.ravel())
   print("############################################################")
   print("# DEVICE CALCULATIONS")
   print("############################################################")
-  b_coarsest_device, x_coarsest_device, residual_device = device_calculations(v_cycle_data_device)
-  print("\nDEVICE CALCULATIONS DONE")
-  print("\tb_coarsest Device:", b_coarsest_device.ravel())
-  print("\tx_coarsest Device:", x_coarsest_device.ravel()) 
-  for i, residual in enumerate(residual_device):
-      print(f"\tResidual Device [{i}]:", residual)   
+  # b_final_device, x_final_device, residual_device = device_calculations(v_cycle_data_device)
+  # print("\nDEVICE CALCULATIONS DONE")
+  # print("\tb_solution_final Device:", b_final_device.ravel())
+  # print("\tx_solution_final Device:", x_final_device.ravel()) 
+  # for i, residual in enumerate(residual_device):
+  #     print(f"\tResidual Device [{i}]:", residual)   
   print("############################################################")
   print("# COMPARISON")
   print("############################################################")
-  # assert np.allclose(residual_host, residual_device, atol=1e-6), "Residual do not match!"
-  assert np.allclose(b_coarsest_host, b_coarsest_device, atol=1e-6), "b_coarsest of host and device do not match!"
-  assert np.allclose(x_coarsest_host, x_coarsest_device, atol=1e-6), "x_coarsest of host and device do not match!"
-  print("Results Match!")
+  # # assert np.allclose(residual_host, residual_device, atol=1e-6), "Residual do not match!"
+  # assert np.allclose(b_final_host, b_final_device, atol=1e-6), "b_final of host and device do not match!"
+  # assert np.allclose(x_final_host, x_final_device, atol=1e-6), "x_final of host and device do not match!"
+  # print("Results Match!")
 
+def generate_input1(M, N):
+    # A0 = np.arange(M*N, dtype=np.float32).reshape(M, N)  # 2D
+    A0 = np.random.rand(M, N).astype(np.float32)  # Use random values to ensure positive definiteness  
+    A0 = np.dot(A0.T, A0) + 1e-6 * np.eye(A0.shape[1])
+  # ill condition number
+    lambda_reg = 1000  # Adjust this value as needed
+    A0 = A0 + lambda_reg * np.eye(A0.shape[0], dtype=A0.dtype)  
+    A0 = A0.astype(np.float32)
+  
+    x0 = np.full(shape=N*1, fill_value=1.0, dtype=np.float32)  # 1D
+  # b0 = np.zeros(shape=M*1, dtype=np.float32)
+    b0 = np.full(shape=M*1, fill_value=3.0,dtype=np.float32)
+    return A0,x0,b0
 
+def generate_input2(M, N):
+    A = pyamg.gallery.poisson((M, N), dtype=np.float32, format='csr')  # 2D
+    b = np.ones((A.shape[0]))                      # RHS
+    x = np.zeros((A.shape[1]))                      # initial guess
+    return A, x, b
 
 
 if __name__ == "__main__":

@@ -281,8 +281,8 @@ def jacobi_csr(A_Csr, x, b, omega=1.0/3.0, iterations=1):
     x : ndarray
         Updated solution vector.
     """
-    if not sp.isspmatrix_csr(A_Csr):
-        A_Csr = A_Csr.tocsr()
+    # if not sp.isspmatrix_csr(A_Csr):
+    #     A_Csr = A_Csr.tocsr()
         
     for _ in range(iterations):
         # Create a temporary vector to hold the previous values of x
