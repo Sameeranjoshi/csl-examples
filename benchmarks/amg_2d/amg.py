@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 import math
 import utilities as ut
 
-def each_layer_solver(level, x_level, b_level, ml, setup_config, level_id, residual_host):
+def each_layer_solver_down(level, x_level, b_level, ml, setup_config, level_id, residual_host):
     print(f"Solving on host layer: {level_id}")
     A, R = level.A, level.R
     x = x_level[level_id]
@@ -73,7 +73,15 @@ def AMG_test(ml, setup_config, x_level, b_level, solver, max_level=10, max_coars
         b_coarsest = b_level[-1]
         x_coarsest = x_level[-1]
         A_coarsest = ml.levels[-1].A
-
+        print("Before coarse solver:")
+        debugprint(ml.levels, b_level, x_level)
+        if isinstance(solver, tuple):
+            solver_fn, solver_kwargs = solver
+            sol_result = solver_fn(A_coarsest, b_coarsest, **solver_kwargs)  # Pass additional arguments
+            x_coarsest[:] = sol_result[0] if isinstance(sol_result, tuple) else sol_result
+        else:
+            x_coarsest[:] = solver(A_coarsest, b_coarsest)  # Call without extra kwargs
+        print("After coarse solver:")
         debugprint(ml.levels, b_level, x_level)
 
     return b_coarsest, x_coarsest, A_coarsest

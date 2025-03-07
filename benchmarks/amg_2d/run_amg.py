@@ -190,7 +190,7 @@ def host_calculations(v_cycle_data):
   # V down
   for i, level in enumerate(ml.levels[:-1]):
     level = ml.levels[i]  # current level
-    b_coarse_layer, x_coarse_layer = amg.each_layer_solver(level, x_level, b_level, ml, setup_config, i, residual_host)
+    b_coarse_layer, x_coarse_layer = amg.each_layer_solver_down(level, x_level, b_level, ml, setup_config, i, residual_host)
     b_level[i + 1] = b_coarse_layer  # Directly store in the next level
     x_level[i + 1] = x_coarse_layer  # Directly store in the next level
 
@@ -198,6 +198,10 @@ def host_calculations(v_cycle_data):
   b_coarsest = b_level[-1]
   x_coarsest = x_level[-1]
   A_coarsest = ml.levels[-1].A
+  print("Before coarse solver:")
+  amg.debugprint(ml.levels, b_level, x_level)
+  x_coarsest[:] = solver_callable_host(A_coarsest, b_coarsest)
+  print("After coarse solver:")
   amg.debugprint(ml.levels, b_level, x_level)
   
   
@@ -322,17 +326,21 @@ def device_calculations(v_cycle_data):
     logs(run_args, logs_dir)  
     level_index += 1  #loop induction var
   
-    
+  # V coarse
+  b_coarsest_device = b_level[-1]
+  x_coarsest_device = x_level[-1]
+  A_coarsest_device = ml.levels[-1].A
+  print("Before coarse solver:")
+  amg.debugprint(ml.levels, b_level, x_level)
+  solver_callable_host = amg.scipy_direct_solver
+  x_coarsest_device[:] = solver_callable_host(A_coarsest_device, b_coarsest_device)
+  print("After coarse solver:")
+  amg.debugprint(ml.levels, b_level, x_level)
   ############################################################
   # Cleanup
   ############################################################
   simulator.stop()
  
-         
-  b_coarsest_device = b_level[-1]
-  x_coarsest_device = x_level[-1]
-  A_coarsest_device = ml.levels[-1].A.toarray()
-  amg.debugprint(ml.levels, b_level, x_level)
   return b_coarsest_device, x_coarsest_device, residual_device_log
 
 def find_total_pes_used(layer_coordinates_map):
@@ -572,6 +580,7 @@ def main():
   print("############################################################")
   # assert np.allclose(residual_host, residual_device, atol=1e-6), "Residual do not match!"
   assert np.allclose(b_coarsest_host, b_coarsest_device, atol=1e-6), "b_coarsest of host and device do not match!"
+  assert np.allclose(x_coarsest_host, x_coarsest_device, atol=1e-6), "x_coarsest of host and device do not match!"
   print("Results Match!")
 
 
