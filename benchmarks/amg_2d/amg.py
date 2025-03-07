@@ -31,7 +31,7 @@ import math
 import utilities as ut
 
 def each_layer_solver_down(level, x_level, b_level, ml, setup_config, level_id, residual_host):
-    print(f"Solving on host layer: {level_id}")
+    print(f"Solving DOWN on host layer: {level_id}")
     A, R = level.A, level.R
     x = x_level[level_id]
     b = b_level[level_id]
@@ -45,6 +45,19 @@ def each_layer_solver_down(level, x_level, b_level, ml, setup_config, level_id, 
     
     residual_host.append(np.dot(r,r))
     return b_coarse, x_coarse
+
+def each_layer_solver_up(level, x_level, b_level, ml, setup_config, level_id, residual_host, x_lower_level):
+    print(f"Solving UP on host layer: {level_id}")
+    A, P = level.A, level.P
+    x = x_level[level_id]
+    b = b_level[level_id]
+
+    x += P @ x_lower_level  # Prolongation
+    ut.jacobi_csr(A, x, b, omega=get_omega_from_postsmoother(setup_config), iterations=get_iterations_from_postsmoother(setup_config))
+    
+    r = b - A @ x
+    residual_host.append(np.dot(r,r))
+    return x    
 
 # only V cycle, iterative version
 def AMG_test(ml, setup_config, x_level, b_level, solver, max_level=10, max_coarse=2, max_ite=1):    
@@ -83,8 +96,22 @@ def AMG_test(ml, setup_config, x_level, b_level, solver, max_level=10, max_coars
             x_coarsest[:] = solver(A_coarsest, b_coarsest)  # Call without extra kwargs
         print("After coarse solver:")
         debugprint(ml.levels, b_level, x_level)
+    
+        # Solve up
+        for i in reversed(range(len(ml.levels) - 1)):            
+            P = ml.levels[i].P
+            x_level[i] += P @ x_level[i+1]  # Prolongation
 
-    return b_coarsest, x_coarsest, A_coarsest
+            # Apply post-smoother
+            # ml.levels[i].postsmoother(ml.levels[i].A, x_level[i], b_level[i])
+            ut.jacobi_csr(ml.levels[i].A, x_level[i], b_level[i], omega=get_omega_from_postsmoother(setup_config), iterations=get_iterations_from_postsmoother(setup_config))
+    
+    
+    print("After REF final solver:")
+    debugprint(ml.levels, b_level, x_level)
+    # return b_coarsest, x_coarsest, A_coarsest # coarse check
+    return b_level[0], x_level[0]
+    
 # solve a linear system A * x = b
 # where A is a symmetric positive definite matrix
 # The AMG algorithm is from pyamg, https://github.com/pyamg/pyamg
@@ -323,7 +350,29 @@ def visualize(ml):
     plt.tight_layout()
     plt.savefig("sparse_matrix_visualization.png", dpi=300)
     plt.show()
+    
+def get_omega_from_postsmoother(smoothed_aggregation_solver_config):
+    # Extract omega from postsmoother configuration
+    postsmoother_config = smoothed_aggregation_solver_config.get('postsmoother', None)
+    if postsmoother_config and isinstance(postsmoother_config, tuple):
+        postsmoother_params = postsmoother_config[1]
+        omega = postsmoother_params.get('omega', None)
+        return omega 
+    else:
+        print("Postsmoother omega not found in configuration")
+        exit(1)
 
+def get_iterations_from_postsmoother(smoothed_aggregation_solver_config):
+    # Extract iterations from postsmoother configuration
+    postsmoother_config = smoothed_aggregation_solver_config.get('postsmoother', None)
+    if postsmoother_config and isinstance(postsmoother_config, tuple):
+        postsmoother_params = postsmoother_config[1]
+        iterations = postsmoother_params.get('iterations', None)
+        return iterations
+    else:
+        print("Postsmoother iterations not found in configuration")
+        exit(1)
+        
 def get_omega_from_presmoother(smoothed_aggregation_solver_config):
     # Extract omega from presmoother configuration
     presmoother_config = smoothed_aggregation_solver_config.get('presmoother', None)

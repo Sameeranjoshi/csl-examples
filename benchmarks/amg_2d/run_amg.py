@@ -179,8 +179,7 @@ def host_calculations(v_cycle_data):
   ml_copy = copy.deepcopy(ml)
   setup_config_copy = copy.deepcopy(setup_config)
   solver_callable_host = amg.scipy_direct_solver
-  ref_b_coarsest, ref_x_coarsest, ref_A_coarsest = amg.AMG_test(ml_copy, setup_config_copy, x_level_copy, b_level_copy, max_level=10, max_coarse=2, max_ite=1, solver=solver_callable_host)
-    
+  ref_b_solution, ref_x_solution = amg.AMG_test(ml_copy, setup_config_copy, x_level_copy, b_level_copy, max_level=10, max_coarse=2, max_ite=1, solver=solver_callable_host)
   
   ## 
   if len(ml.levels) == 0:
@@ -204,14 +203,23 @@ def host_calculations(v_cycle_data):
   print("After coarse solver:")
   amg.debugprint(ml.levels, b_level, x_level)
   
+  for i in reversed(range(len(ml.levels) - 1)):    
+    level = ml.levels[i]  # current level
+    x_lower_level = x_level[i+1]  # this is data not array
+    x_current_updated = amg.each_layer_solver_up(level, x_level, b_level, ml, setup_config, i, residual_host, x_lower_level)
+    x_level[i] = x_current_updated
   
-  # check ref* and x_coarsest
-  assert np.allclose(ref_b_coarsest, b_coarsest, rtol=1e-5), "ref_b_coarsest do not match!"
-  assert np.allclose(ref_x_coarsest, x_coarsest, rtol=1e-5), "ref_x_coarsest do not match!"
-  assert np.allclose(A_coarsest.toarray(), ref_A_coarsest.toarray(), rtol=1e-6), "A_coarsest do not match!"
-  print("Success: b_coarsest, x_coarsest, A_coarsest match with reference")
+  b_solution, x_solution = b_level[0], x_level[0]
+  print("A = ", ml.levels[0].A.toarray())
+  print("After final solver:")
+  amg.debugprint(ml.levels, b_level, x_level)
+  # check ref* and x_solution
+  assert np.allclose(ref_b_solution, b_solution, rtol=1e-5), "ref_b_solution do not match!"
+  assert np.allclose(ref_x_solution, x_solution, rtol=1e-5), "ref_x_solution do not match!"
+  print("Success: b_solution, x_solution match with reference")
   
-  return b_coarsest, x_coarsest, residual_host
+
+  return b_solution, x_solution, residual_host
 
 def device_calculations(v_cycle_data):
   run_args, logs_dir = parse_args()
@@ -562,8 +570,8 @@ def main():
   print("############################################################")
   b_coarsest_host, x_coarsest_host, residual_host = host_calculations(v_cycle_data_host)
   print("HOST CALCULATIONS DONE")
-  print("\tb_coarsest Host:", b_coarsest_host.ravel())
-  print("\tx_coarsest Host:", x_coarsest_host.ravel())
+  print("\nb_solution_final Host:", b_coarsest_host.ravel())
+  print("\tx_solution_final Host:", x_coarsest_host.ravel())
   for i, residual in enumerate(residual_host):
       print(f"\tResidual Host [{i}]:", residual)
   print("############################################################")
