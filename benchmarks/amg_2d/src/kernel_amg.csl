@@ -40,26 +40,32 @@ const _MAX_SIZE_R = R_M*R_N;
 // Accessible from host.
 var A: [M*N]f32; // A is stored in row-major order
 var R: [R_M*R_N]f32; // R is stored in row-major order
+var P: [R_N*R_M]f32; // P is stored in row-major order
 var x: [N*1]f32;    // var x: [N*1]f32;
 var b: [M*1]f32;    // var b: [M*1]f32;
-// var x_coarse: @zeros([N]f32);
+
 
 // LOCAL TEMP
 var AX = @zeros([M*1]f32);   // var AX: [M*1]f32;
+var PX = @zeros([R_N*1]f32); // var PX: [R_M*1]f32;
 
 // OUTPUT
 var residual =  @constants([M*1]f32, 0.0);   // var residual: [M*1]f32;
 var b_coarse = @zeros([R_M*1]f32);
+var x_coarse = @zeros([R_M*1]f32);
+
 
 ////////////////////////////////////////
 // Decide what is visible from outside world.
 ////////////////////////////////////////
 const residual_ptr: [*]f32 = &residual; // Why const = as won't be changed by the host
 const b_coarse_ptr: [*]f32 = &b_coarse;
+const x_coarse_ptr: [*]f32 = &x_coarse;
 var A_ptr: [*]f32 = &A;
 var x_ptr: [*]f32 = &x;
 var b_ptr: [*]f32 = &b;
 var R_ptr: [*]f32 = &R;
+var P_ptr: [*]f32 = &P;
 ////////////////////////////////////////
 // DSD
 ////////////////////////////////////////
@@ -215,21 +221,55 @@ fn jacobi(omega:f32, iterations: i16) void {
     // sys_mod.unblock_cmd_stream();
 }
 
+// V-cycle upward phase implementation
+fn v_cycle_up(omega: f32, post_smooth_iterations: i16, current_level: i16) void {
+    if (current_level == layer_index) {
+        simprint.fmt_with_coords("In layer = {d} V_CYCLE_UP", .{ @as(u32, layer_index) });
+        
+        // Step 1: Prolongation operator (P * x_coarse)
+        // P is [R_N x R_M] matrix, R_N = fine grid size, R_M = coarse grid size
+        // x_coarse is [R_M x 1] vector
+        // x is [R_N x 1] vector
+        for (@range(i16, R_N)) |i| {
+            var tmp: f32 = 0.0;
+            for (@range(i16, R_M)) |j| {
+                // P[i*R_M + j] accesses element (i,j) in P matrix
+                tmp += P[i*R_M + j] * x_coarse[j];
+            }
+            x[i] += tmp;  // Add correction to existing solution
+        }
+
+        // Step 2: Post-smoothing using existing Jacobi
+        jacobi(omega, post_smooth_iterations);
+
+        // Debug prints
+        simprint.fmt("After V-cycle up on level {d}", .{@as(u32, current_level)});
+        for (x) |val, i| {
+            simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
+        }
+        
+    }
+    // Unblock memcpy so that it can send data outside
+    sys_mod.unblock_cmd_stream();        
+}
 
 // Call initialize and gemv functions
 fn compute(omega:f32, iterations: i16, current_level:i16) void {
-    initialize(current_level);
-    // gemv();
-    jacobi(omega, iterations);  // presmoother
-    gemv_using_library();
-    // gemv();
-    // // // gemv_using_dsd();
-    residual_operator();        // residual
-    // restriction_operator_using_dsd();   // restriction
-    restriction_operator();
-
+    if (current_level == layer_index) {
+        simprint.fmt_with_coords("In layer = {d} V_CYCLE_DOWN", .{ @as(u32, layer_index) });    
+        initialize(current_level);
+        // gemv();
+        jacobi(omega, iterations);  // presmoother
+        gemv_using_library();
+        // gemv();
+        // // // gemv_using_dsd();
+        residual_operator();        // residual
+        // restriction_operator_using_dsd();   // restriction
+        restriction_operator();   
+    }
     // unblock memcpy so that it can send data outside.
     sys_mod.unblock_cmd_stream();
+
 }
 
 
@@ -239,15 +279,18 @@ fn compute(omega:f32, iterations: i16, current_level:i16) void {
 comptime {
     @export_symbol(A_ptr, "A");
     @export_symbol(R_ptr, "R");
+    @export_symbol(P_ptr, "P");
     @export_symbol(x_ptr, "x");
     @export_symbol(b_ptr, "b");
 }
 comptime {
     // Export function so it is host-callable by RPC mechanism
     @export_symbol(compute);
+    @export_symbol(v_cycle_up);
 }
 comptime {
     // Export symbol pointing to y so it is host-readable
     @export_symbol(residual_ptr, "residual");
     @export_symbol(b_coarse_ptr, "b_coarse");
+    @export_symbol(x_coarse_ptr, "x_coarse");
 }

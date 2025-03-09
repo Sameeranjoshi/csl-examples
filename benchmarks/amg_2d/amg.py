@@ -31,10 +31,10 @@ import math
 import utilities as ut
 
 def each_layer_solver_down(level, x_level, b_level, ml, setup_config, level_id):
-    print(f"Solving DOWN on host layer: {level_id}")
+    print(f"Solving down on host layer: {level_id}")
     A, R = level.A, level.R
-    print("A format, A dtype:", A.format, A.dtype)
-    print("R format, R dtype:", R.format, R.dtype)
+    # print("A format, A dtype:", A.format, A.dtype)
+    # print("R format, R dtype:", R.format, R.dtype)
     x = x_level[level_id]
     b = b_level[level_id]
     
@@ -47,10 +47,10 @@ def each_layer_solver_down(level, x_level, b_level, ml, setup_config, level_id):
     return b_coarse, x_coarse
 
 def each_layer_solver_up(level, x_level, b_level, ml, setup_config, level_id, x_lower_level):
-    print(f"Solving UP on host layer: {level_id}")
+    print(f"Solving up on host layer: {level_id}")
     A, P = level.A, level.P
-    print("A format UP, A dtype:", A.format, A.dtype)
-    print("P format UP, P dtype:", P.format, P.dtype)
+    # print("A format UP, A dtype:", A.format, A.dtype)
+    # print("P format UP, P dtype:", P.format, P.dtype)
     x = x_level[level_id]
     b = b_level[level_id]
 
@@ -87,8 +87,6 @@ def AMG_test(ml, setup_config, x_level, b_level, solver, max_level=10, max_coars
         b_coarsest = b_level[-1]
         x_coarsest = x_level[-1]
         A_coarsest = ml.levels[-1].A
-        print("Before coarse solver:")
-        debugprint(ml.levels, b_level, x_level)
         if isinstance(solver, tuple):
             solver_fn, solver_kwargs = solver
             sol_result = solver_fn(A_coarsest, b_coarsest, **solver_kwargs)  # Pass additional arguments
@@ -110,7 +108,6 @@ def AMG_test(ml, setup_config, x_level, b_level, solver, max_level=10, max_coars
     
     print("After REF final solver:")
     debugprint(ml.levels, b_level, x_level)
-    # return b_coarsest, x_coarsest, A_coarsest # coarse check
     return b_level[0], x_level[0]
     
 # solve a linear system A * x = b
@@ -199,14 +196,14 @@ def AMG_only_solve(A_csr, b0, x0, tol, max_ite, max_levels, max_coarse, solver):
                 x = x_level[i]
                 b = b_level[i]
                 # level.presmoother(A, x, b)
-                ut.jacobi_dense(A, x, b, omega=get_omega_from_presmoother(setup_config), iterations=get_iterations_from_presmoother(setup_config))
+                ut.jacobi_csr(A, x, b, omega=get_omega_from_presmoother(setup_config), iterations=get_iterations_from_presmoother(setup_config))
                 r = b - A @ x
                 b_coarse = R @ r
                 
                 b_level[i + 1] = b_coarse  # Directly store in the next level
                 x_coarse = np.zeros_like(b_coarse)
                 x_level[i + 1] = x_coarse
-                
+        
             # print after solve down.
             # debugprint(ml.levels, b_level, x_level)
             # solve coarse
@@ -219,7 +216,7 @@ def AMG_only_solve(A_csr, b0, x0, tol, max_ite, max_levels, max_coarse, solver):
                 x_coarsest[:] = sol_result[0] if isinstance(sol_result, tuple) else sol_result
             else:
                 x_coarsest[:] = solver(A_coarsest, b_coarsest)  # Call without extra kwargs
-            
+        
             # Solve up
             for i in reversed(range(len(ml.levels) - 1)):
                 P = ml.levels[i].P
@@ -227,16 +224,12 @@ def AMG_only_solve(A_csr, b0, x0, tol, max_ite, max_levels, max_coarse, solver):
 
                 # Apply post-smoother
                 # ml.levels[i].postsmoother(ml.levels[i].A, x_level[i], b_level[i])
-                ut.jacobi_dense(ml.levels[i].A, x_level[i], b_level[i], omega=get_omega_from_presmoother(setup_config), iterations=get_iterations_from_presmoother(setup_config))
+                ut.jacobi_csr(ml.levels[i].A, x_level[i], b_level[i], omega=get_omega_from_presmoother(setup_config), iterations=get_iterations_from_presmoother(setup_config))
 
         resi = b_level[0] - ml.levels[0].A @ x_level[0]
-        norm_b0 = np.linalg.norm(b0)
-        relative_residual = np.linalg.norm(resi) / norm_b0  # Relative residual
-        
+        relative_residual = np.linalg.norm(resi)
         if relative_residual < tol:
-            print(f"Relative residual: {relative_residual}")
-            print(f"Tolerance: {tol}")
-            print(f"Converged at iteration {i}")
+            print(f"Inside custom-solve: Relative residual: {relative_residual}, Tolerance: {tol}, Converged at iteration {_}")
             break
 
     rho = np.dot(resi, resi)

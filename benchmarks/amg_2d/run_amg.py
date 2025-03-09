@@ -28,6 +28,7 @@ import json
 from sklearn.datasets import make_sparse_spd_matrix
 import amg as amg 
 import copy
+import warnings
 
 from mapper_layouts.different_layouts import *
 
@@ -170,18 +171,8 @@ def host_calculations(v_cycle_data):
   ############################################################
   # Perform V-Cycle
   ############################################################
-  residual_host_all_levels = []
-  
-  #### Reference testing
-  # TODO: REMOVE THIS AS EXPENSIVE
-  # b_level_copy = copy.deepcopy(b_level)
-  # x_level_copy = copy.deepcopy(x_level)
-  # ml_copy = copy.deepcopy(ml)
-  # setup_config_copy = copy.deepcopy(setup_config)
   solver_callable_host = amg.scipy_direct_solver
-  # ref_b_solution, ref_x_solution = amg.AMG_test(ml_copy, setup_config_copy, x_level_copy, b_level_copy, max_level=10, max_coarse=2, max_ite=1, solver=solver_callable_host)
   
-  ## 
   if len(ml.levels) == 0:
     raise RuntimeError("No levels in the multilevel hierarchy")
     exit(1)
@@ -194,15 +185,16 @@ def host_calculations(v_cycle_data):
     x_level[i + 1] = x_coarse_layer  # Directly store in the next level
 
   # V coarse
+  print("Solving coarse on host")
   b_coarsest = b_level[-1]
   x_coarsest = x_level[-1]
   A_coarsest = ml.levels[-1].A
-  print("Before coarse solver:")
-  amg.debugprint(ml.levels, b_level, x_level)
+  # print("Before coarse solver:")
+  # amg.debugprint(ml.levels, b_level, x_level)
   x_coarsest[:] = solver_callable_host(A_coarsest, b_coarsest)
-  print("After coarse solver:")
-  amg.debugprint(ml.levels, b_level, x_level)
-  print("A_coarse format, A_coarse dtype:", A_coarsest.format, A_coarsest.dtype)
+  # print("After coarse solver:")
+  # amg.debugprint(ml.levels, b_level, x_level)
+  # print("A_coarse format, A_coarse dtype:", A_coarsest.format, A_coarsest.dtype)
   
   for i in reversed(range(len(ml.levels) - 1)):    
     level = ml.levels[i]  # current level
@@ -214,17 +206,8 @@ def host_calculations(v_cycle_data):
 
   print("After final solver:")
   amg.debugprint(ml.levels, b_level, x_level)
-  # # check ref* and x_solution
-  # assert np.allclose(ref_b_solution, b_solution, rtol=1e-5), "ref_b_solution do not match!"
-  # assert np.allclose(ref_x_solution, x_solution, rtol=1e-5), "ref_x_solution do not match!"
-  # print("Success: b_solution, x_solution match with reference")
-  
-  
-  # residual_ref = np.linalg.norm(ml_copy.levels[0].A @ ref_x_solution - ref_b_solution)
+
   residual_host= np.linalg.norm(ml.levels[0].A @ x_solution - b_solution)
-  # print("Residual ref ||Ax - b||:", residual_ref)
-  print("Residual host ||Ax - b||:", residual_host)
-  # assert np.allclose(residual_ref, residual_host, rtol=1e-5), "Residual ref and host do not match!"
   
   return b_solution, x_solution, residual_host
 
@@ -244,8 +227,7 @@ def device_calculations(v_cycle_data):
   ############################################################
   # CREATE DYNAMIC LAYOUT
   ############################################################
-  residual_device_log = []
-
+  
   layer_coordinates_map = amg_2_layers
   layer_param_map, layer_coordinates_map = generate_dynamic_layout(run_args, ml, layer_coordinates_map, filename="images/amg_2_layers.png")
 
@@ -261,13 +243,21 @@ def device_calculations(v_cycle_data):
   ############################################################
   memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
   # data accessible from host and device.
-  symbol_residual = simulator.get_id("residual")
   symbol_b_coarse = simulator.get_id("b_coarse")
   symbol_A = simulator.get_id("A")
   symbol_x = simulator.get_id("x")
   symbol_b = simulator.get_id("b")
   symbol_R = simulator.get_id("R")
+  symbol_x_coarse = simulator.get_id("x_coarse")
+  symbol_P = simulator.get_id("P")
 
+  ############################################################
+  # AMG V-CYCLE
+  ############################################################
+  
+  ############################################################
+  # DOWNWARD V-CYCLE
+  ############################################################
   level_index = 0
   while(level_index < len(ml.levels) - 1):  # not the coarsest level
     print(f"Solving Layer {level_index}:")
@@ -312,51 +302,111 @@ def device_calculations(v_cycle_data):
     # D2H
     print(f"\t3. Copying results to host")
     ############################################################
-    residual_device = np.zeros([M*1], dtype=np.float32)
-    simulator.memcpy_d2h(residual_device, symbol_residual, px, py, w, h, M*1, streaming=False,
-      order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
     b_coarse_device = np.zeros([R_M*1], dtype=np.float32)
     simulator.memcpy_d2h(b_coarse_device, symbol_b_coarse, px, py, w, h, R_M*1, streaming=False,
       order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
     x_coarse_device = np.zeros_like(b_coarse_device)
-    # copy x from device to host
-    x_temp = np.zeros([N*1], dtype=np.float32)
-    simulator.memcpy_d2h(x_temp, symbol_x, px, py, w, h, N*1, streaming=False,
+    x_smooth = np.zeros([N*1], dtype=np.float32)
+    simulator.memcpy_d2h(x_smooth, symbol_x, px, py, w, h, N*1, streaming=False,
       order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
-    x_level[level_index] = x_temp # change current x to x_smooth on host, as it's updated inplace on device.
-    
     
     ############################################################
     # UPDATE DATA
     ############################################################
+    x_level[level_index] = x_smooth # change current x to x_smooth on host, as it's updated inplace on device.
     b_level[level_index + 1] = b_coarse_device  # Directly store in the next level
     x_level[level_index + 1] = x_coarse_device
     ############################################################
     # some additional logging
     ############################################################
-    print(f"\t4. Calculating residual")
-    rho = np.dot(residual_device, residual_device)
-    residual_device_log.append(rho)
     
     logs(run_args, logs_dir)  
     level_index += 1  #loop induction var
   
-  # V coarse
+  ############################################################
+  # COARSE SOLVE
+  ############################################################
   b_coarsest_device = b_level[-1]
   x_coarsest_device = x_level[-1]
   A_coarsest_device = ml.levels[-1].A
-  print("Before coarse solver:")
-  amg.debugprint(ml.levels, b_level, x_level)
+  # print("Before coarse solver:")
+  # amg.debugprint(ml.levels, b_level, x_level)
   solver_callable_host = amg.scipy_direct_solver
   x_coarsest_device[:] = solver_callable_host(A_coarsest_device, b_coarsest_device)
   print("After coarse solver:")
   amg.debugprint(ml.levels, b_level, x_level)
+  
   ############################################################
-  # Cleanup
+  # UPWARD V-CYCLE
+  ############################################################
+  # Start from second-to-last level since coarsest level was already solved
+  for level_index in reversed(range(len(ml.levels) - 1)):
+    print(f"Solving Layer {level_index} UPWARD")
+    
+    ############################################################
+    # GET LAYER DATA
+    ############################################################    
+    A, P, R, x, b = ml.levels[level_index].A.toarray(), ml.levels[level_index].P.toarray(), ml.levels[level_index].R.toarray(), x_level[level_index], b_level[level_index]
+    x_coarse = x_level[level_index + 1]
+    [M,N] = A.shape
+    [R_M, R_N] = R.shape
+    px, py, w, h = layer_coordinates_map[level_index]['layer_start_x'], layer_coordinates_map[level_index]['layer_start_y'], layer_coordinates_map[level_index]['layer_pe_cols'], layer_coordinates_map[level_index]['layer_pe_rows']
+    
+    print(f"data before passing to layer {level_index}:")
+    print(f"P: {P.shape}")
+    print(f"x: {x.shape}")
+    print(f"b: {b.shape}")
+    print(f"x_coarse: {x_coarse.shape}")
+    print(f"px: {px}, py: {py}, w: {w}, h: {h}")    
+    ############################################################
+    # H2D
+    print(f"\t1. Copying data to device")
+    ############################################################
+    # P is R_N x R_M matrix (transpose of R), so total elements should be R_N*R_M
+    simulator.memcpy_h2d(symbol_P, P.flatten(order='C'), px, py, w, h, R_N*R_M, streaming=False,
+      order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)        
+    simulator.memcpy_h2d(symbol_x_coarse, x_coarse, px, py, w, h, R_M*1, streaming=False,
+      order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
+    ############################################################
+    # COMPUTE
+    print(f"\t2. V-Cycle Up")
+    ############################################################
+    omega=amg.get_omega_from_postsmoother(setup_config)
+    iterations=amg.get_iterations_from_postsmoother(setup_config)
+    simulator.launch('v_cycle_up', np.float32(omega), np.int16(iterations), np.int16(level_index), nonblock=False)
+    
+    ############################################################
+    # D2H
+    print(f"\t3. Copying results to host")
+    ############################################################
+    x_post_smooth = np.zeros([N*1], dtype=np.float32)
+    simulator.memcpy_d2h(x_post_smooth, symbol_x, px, py, w, h, N*1, streaming=False,
+      order=MemcpyOrder.ROW_MAJOR, data_type=memcpy_dtype, nonblock=False)
+    
+    ############################################################
+    # UPDATE DATA
+    ############################################################
+    x_level[level_index] = x_post_smooth
+    
+    ############################################################
+    # CLEANUP & LOGGING
+    ############################################################
+    logs(run_args, logs_dir)
+  
+  ############################################################
+  # Cleanup simulator
   ############################################################
   simulator.stop()
  
-  return b_coarsest_device, x_coarsest_device, residual_device_log
+  ############################################################
+  # Final results
+  ############################################################
+  b_solution_device, x_solution_device = b_level[0], x_level[0]
+  print("After final solver:")
+  amg.debugprint(ml.levels, b_level, x_level)
+  
+  residual_device= np.linalg.norm(ml.levels[0].A @ x_solution_device - b_solution_device)
+  return b_solution_device, x_solution_device, residual_device
 
 def find_total_pes_used(layer_coordinates_map):
     """
@@ -526,10 +576,12 @@ def main():
   A0 = A0.astype(np.float32)
   x0 = x0.astype(np.float32)  # Do this compulsorily to make the data 32bit.
   b0 = b0.astype(np.float32)
+  
   nrm_b = np.linalg.norm(b0, 2)
-  eps = 1.e-4
+  eps = 1.e-7
   relative_tol = eps * nrm_b # relative tolerance
-  def checkinput(A0, b0, x0):
+  
+  def checkinput(A0, b0, x0, relative_tol):
     A = copy.deepcopy(A0.toarray())
     b = copy.deepcopy(b0)
     x = copy.deepcopy(x0)
@@ -542,17 +594,70 @@ def main():
 
     # Solve using spsolve on a CSR version of A
     A_csr = sp.csr_matrix(A)
-    x = spla.spsolve(A_csr, b)
-    residual = np.linalg.norm(A @ x - b)
-    print("Residual ||Ax - b||:", residual)
-    print("Computed x:", x)
-  checkinput(A0, b0, x0)
+    x_spsolve = spla.spsolve(A_csr, b)
+    residual = np.linalg.norm(A @ x_spsolve - b)
+    
+
+    # Separate iteration counters
+    pyamg_iter = 0
+    pyamg_sa_iter = 0
+    cg_iter = 0
+    def iteration_callback_pyamg(xk):
+        nonlocal pyamg_iter
+        pyamg_iter += 1
+    
+    def iteration_callback_pyamg_sa(xk):
+        nonlocal pyamg_sa_iter
+        pyamg_sa_iter += 1
+
+    def iteration_callback_cg(xk):
+        nonlocal cg_iter
+        cg_iter += 1
+        
+    # setup and solve using pyamg.
+    ml_pyamg = pyamg.ruge_stuben_solver(A_csr)
+    xpyamg = ml_pyamg.solve(b, tol=relative_tol, maxiter=100, callback=iteration_callback_pyamg)
+    residualpyamg = np.linalg.norm(A @ xpyamg - b)
+
+    
+    iteration_count = 0
+    # solve using smoothed_aggregation_solver from pyamg
+    ml_pyamg_SA = pyamg.smoothed_aggregation_solver(A_csr)
+    xpyamg_SA = ml_pyamg_SA.solve(b, tol=relative_tol, maxiter=300, callback=iteration_callback_pyamg_sa)
+    residualpyamg_SA = np.linalg.norm(A @ xpyamg_SA - b)
+    
+    
+    # custom smoothed_aggregate_solver with config from amg.py
+    solver_callable_host = amg.scipy_direct_solver
+    ml_custom, setup_config = amg.smooth_aggregate_setup_only(A_csr, x, b, solver=solver_callable_host, max_level=10, max_coarse=2)
+    x_custom = ml_custom.solve(b, x0=x, tol=relative_tol, maxiter=300)
+    residualcustom = np.linalg.norm(A @ x_custom - b)
+    
+    # custom old amg solver
+    x_otheramg, _ = amg.AMG_only_solve(A_csr, b0=b, x0=x, tol=relative_tol, max_ite=300, max_levels=10, max_coarse=2, solver=solver_callable_host)      # split into 3 phases
+    residual_otheramg = np.linalg.norm(A @ x_otheramg - b)
+    
+    # do a cg solver from scipy spla.
+    iteration_count = 0
+    x_cg, info = spla.cg(A_csr, b, x0=x, tol=relative_tol, maxiter=300, callback=iteration_callback_cg)
+    residual_cg = np.linalg.norm(A @ x_cg - b)
+
+    # **Print Iteration Counts & Residuals**
+    print("Residual SPSolve||Ax - b||:", residual)
+    print(f"Residual pyamg RS ||Ax - b||: {residualpyamg} , iterations {pyamg_iter}")
+    print(f"Residual pyamg_SA setup-base=solve-base ||Ax - b||: {residualpyamg_SA} , iterations {pyamg_sa_iter}")
+    print(f"Residual setup-custom=solve-base||Ax - b||: {residualcustom}")
+    print(f"Residual setup-custom=solve-custom ||Ax - b||: {residual_otheramg}")
+    print(f"Residual scipy.cg ||Ax - b||: {residual_cg}, Iterations: {cg_iter}")
+        
+  checkinput(A0, b0, x0, relative_tol)
 
   # print data
   print("Input problem size:", M, N)
   print("Input Matrix Shape:", A0.shape)
   print("Input b_1d Shape:", b0.shape)
   print("Input x_1d Shape:", x0.shape)
+  print("Norm of b:", nrm_b)
   print("Relative Tolerance:", relative_tol)
   ut.visualize_matrix(A0, title="A Matrix", filename="images/A.png")
   
@@ -595,23 +700,21 @@ def main():
   b_final_host, x_final_host, residual_host = host_calculations(v_cycle_data_host)
   print("HOST CALCULATIONS DONE")
   print(f"\tResidual Host ||AX-b||:", residual_host)
-  print(f"\n x_solution_final Host:", x_final_host.ravel())
+  # print(f"\n x_solution_final Host:", x_final_host.ravel())
   print("############################################################")
   print("# DEVICE CALCULATIONS")
   print("############################################################")
-  # b_final_device, x_final_device, residual_device = device_calculations(v_cycle_data_device)
-  # print("\nDEVICE CALCULATIONS DONE")
-  # print("\tb_solution_final Device:", b_final_device.ravel())
-  # print("\tx_solution_final Device:", x_final_device.ravel()) 
-  # for i, residual in enumerate(residual_device):
-  #     print(f"\tResidual Device [{i}]:", residual)   
+  b_final_device, x_final_device, residual_device = device_calculations(v_cycle_data_device)
+  print("\nDEVICE CALCULATIONS DONE")
+  print(f"\tResidual Device ||AX-b||:", residual_device)
+  # print(f"\t x_solution_final Device:", x_final_device.ravel()) 
   print("############################################################")
   print("# COMPARISON")
   print("############################################################")
-  # # assert np.allclose(residual_host, residual_device, atol=1e-6), "Residual do not match!"
-  # assert np.allclose(b_final_host, b_final_device, atol=1e-6), "b_final of host and device do not match!"
-  # assert np.allclose(x_final_host, x_final_device, atol=1e-6), "x_final of host and device do not match!"
-  # print("Results Match!")
+  # assert np.allclose(residual_host, residual_device, atol=1e-6), "Residual do not match!"
+  assert np.allclose(b_final_host, b_final_device, atol=1e-6), "b_final of host and device do not match!"
+  assert np.allclose(x_final_host, x_final_device, atol=1e-6), "x_final of host and device do not match!"
+  print("Results Match!")
 
 def generate_input1(M, N):
     # A0 = np.arange(M*N, dtype=np.float32).reshape(M, N)  # 2D
