@@ -31,7 +31,7 @@ import math
 import utilities as ut
 
 def each_layer_solver_down(level, x_level, b_level, ml, setup_config, level_id):
-    print(f"Solving down on host layer: {level_id}")
+    # print(f"Solving down on host layer: {level_id}")
     A, R = level.A, level.R
     # print("A format, A dtype:", A.format, A.dtype)
     # print("R format, R dtype:", R.format, R.dtype)
@@ -47,7 +47,7 @@ def each_layer_solver_down(level, x_level, b_level, ml, setup_config, level_id):
     return b_coarse, x_coarse
 
 def each_layer_solver_up(level, x_level, b_level, ml, setup_config, level_id, x_lower_level):
-    print(f"Solving up on host layer: {level_id}")
+    # print(f"Solving up on host layer: {level_id}")
     A, P = level.A, level.P
     # print("A format UP, A dtype:", A.format, A.dtype)
     # print("P format UP, P dtype:", P.format, P.dtype)
@@ -75,8 +75,8 @@ def AMG_test(ml, setup_config, x_level, b_level, solver, max_level=10, max_coars
             x = x_level[i]
             b = b_level[i]
 
-            level.presmoother(A, x, b)
-            # ut.jacobi_csr(ml.levels[i].A, x_level[i], b_level[i], omega=get_omega_from_postsmoother(setup_config), iterations=get_iterations_from_postsmoother(setup_config))            
+            # level.presmoother(A, x, b)
+            ut.jacobi_csr(A, x, b, omega=get_omega_from_postsmoother(setup_config), iterations=get_iterations_from_postsmoother(setup_config))            
             r = b - A @ x
             b_coarse = R @ r
             x_coarse = np.zeros_like(b_coarse)
