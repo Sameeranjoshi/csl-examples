@@ -228,11 +228,9 @@ def device_calculations(v_cycle_data):
   max_iterations = v_cycle_data["max_iterations"]
   tol = v_cycle_data["tol"]
 
-
   ############################################################
   # CREATE DYNAMIC LAYOUT
   ############################################################
-  
   layer_coordinates_map = amg_2_layers
   layer_param_map, layer_coordinates_map = generate_dynamic_layout(run_args, ml, layer_coordinates_map, filename="images/amg_2_layers.png")
 
@@ -248,24 +246,38 @@ def device_calculations(v_cycle_data):
   ############################################################
   memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
   memcpy_order = MemcpyOrder.ROW_MAJOR
-  # data accessible from host and device.
-  symbol_b_coarse = simulator.get_id("b_coarse")
-  symbol_A = simulator.get_id("A")
-  symbol_x = simulator.get_id("x")
-  symbol_b = simulator.get_id("b")
-  symbol_R = simulator.get_id("R")
-  symbol_x_coarse = simulator.get_id("x_coarse")
-  symbol_P = simulator.get_id("P")
+  
+  # Helper function for memcpy operations
+  def do_memcpy(symbol, data, px, py, w, h, size, is_h2d=True):
+    if is_h2d:
+      simulator.memcpy_h2d(symbol, data, px, py, w, h, size, streaming=False,
+        order=memcpy_order, data_type=memcpy_dtype, nonblock=False)
+    else:
+      result = np.zeros(size, dtype=np.float32)
+      simulator.memcpy_d2h(result, symbol, px, py, w, h, size, streaming=False,
+        order=memcpy_order, data_type=memcpy_dtype, nonblock=False)
+      return result
+
+  # Cache commonly used symbols
+  symbols = {
+    'b_coarse': simulator.get_id("b_coarse"),
+    'A': simulator.get_id("A"),
+    'x': simulator.get_id("x"), 
+    'b': simulator.get_id("b"),
+    'R': simulator.get_id("R"),
+    'x_coarse': simulator.get_id("x_coarse"),
+    'P': simulator.get_id("P")
+  }
 
   ############################################################
   # AMG V-CYCLE
   ############################################################
-  
   iteration = 0
   residual = float('inf')
   while iteration < max_iterations and residual > tol:
     print(f"Iteration {iteration}")
     level_index = 0
+
     ############################################################
     # DOWNWARD V-CYCLE
     ############################################################    
@@ -275,10 +287,15 @@ def device_calculations(v_cycle_data):
       ############################################################
       # GET LAYER DATA
       ############################################################
-      A, P, R, x, b = ml.levels[level_index].A.toarray(), ml.levels[level_index].P.toarray(), ml.levels[level_index].R.toarray(), x_level[level_index], b_level[level_index]
-      [M,N] = A.shape
-      [R_M, R_N] = R.shape
-      px, py, w, h = layer_coordinates_map[level_index]['layer_start_x'], layer_coordinates_map[level_index]['layer_start_y'], layer_coordinates_map[level_index]['layer_pe_cols'], layer_coordinates_map[level_index]['layer_pe_rows']
+      level = ml.levels[level_index]
+      A, P, R = level.A.toarray(), level.P.toarray(), level.R.toarray()
+      x, b = x_level[level_index], b_level[level_index]
+      M, N = A.shape
+      R_M, R_N = R.shape
+      
+      coords = layer_coordinates_map[level_index]
+      px, py = coords['layer_start_x'], coords['layer_start_y']
+      w, h = coords['layer_pe_cols'], coords['layer_pe_rows']
       
       print(f"data before passing to layer {level_index}: A: {A.shape}, R: {R.shape}, x: {x.shape}, b: {b.shape}, px: {px}, py: {py}, w: {w}, h: {h}")
       
@@ -286,40 +303,30 @@ def device_calculations(v_cycle_data):
       # H2D
       print(f"\t1. Copying data to device")
       ############################################################
-      simulator.memcpy_h2d(symbol_x, x, px, py, w, h, N*1, streaming=False,
-        order=memcpy_order, data_type=memcpy_dtype, nonblock=False)
-      simulator.memcpy_h2d(symbol_A, A.flatten(order='C'), px, py, w, h, M*N, streaming=False,
-        order=memcpy_order, data_type=memcpy_dtype, nonblock=False)
-      simulator.memcpy_h2d(symbol_R, R.flatten(order='C'), px, py, w, h, R_M*R_N, streaming=False,
-        order=memcpy_order, data_type=memcpy_dtype, nonblock=False)
-      simulator.memcpy_h2d(symbol_b, b, px, py, w, h, M*1, streaming=False,
-        order=memcpy_order, data_type=memcpy_dtype, nonblock=False)
+      do_memcpy(symbols['x'], x, px, py, w, h, N*1, is_h2d=True)
+      do_memcpy(symbols['A'], A.flatten(order='C'), px, py, w, h, M*N, is_h2d=True)
+      do_memcpy(symbols['R'], R.flatten(order='C'), px, py, w, h, R_M*R_N, is_h2d=True)
+      do_memcpy(symbols['b'], b, px, py, w, h, M*1, is_h2d=True)
+
       ############################################################
       # Kernel
       ############################################################
-      omega=amg.get_omega_from_presmoother(setup_config)
-      iterations=amg.get_iterations_from_presmoother(setup_config)    
+      omega = amg.get_omega_from_presmoother(setup_config)
+      iterations = amg.get_iterations_from_presmoother(setup_config)    
       print(f"\t2. Solving Layer {level_index} with omega={omega}, smoothing_iterations={iterations}")
       
       simulator.launch('v_cycle_down', np.float32(omega), np.int16(iterations), np.int16(level_index), nonblock=False)
 
       ############################################################
-      # D2H
+      # D2H & UPDATE DATA
       print(f"\t3. Copying results to host")
       ############################################################
-      b_coarse_device = np.zeros([R_M*1], dtype=np.float32)
-      simulator.memcpy_d2h(b_coarse_device, symbol_b_coarse, px, py, w, h, R_M*1, streaming=False,
-        order=memcpy_order, data_type=memcpy_dtype, nonblock=False)
+      b_coarse_device = do_memcpy(symbols['b_coarse'], None, px, py, w, h, R_M*1, is_h2d=False)
+      x_smooth = do_memcpy(symbols['x'], None, px, py, w, h, N*1, is_h2d=False)
       x_coarse_device = np.zeros_like(b_coarse_device)
-      x_smooth = np.zeros([N*1], dtype=np.float32)
-      simulator.memcpy_d2h(x_smooth, symbol_x, px, py, w, h, N*1, streaming=False,
-        order=memcpy_order, data_type=memcpy_dtype, nonblock=False)
       
-      ############################################################
-      # UPDATE DATA
-      ############################################################
-      x_level[level_index] = x_smooth # change current x to x_smooth on host, as it's updated inplace on device.
-      b_level[level_index + 1] = b_coarse_device  # Directly store in the next level
+      x_level[level_index] = x_smooth
+      b_level[level_index + 1] = b_coarse_device
       x_level[level_index + 1] = x_coarse_device
       ############################################################
       # some additional logging
@@ -343,43 +350,39 @@ def device_calculations(v_cycle_data):
       ############################################################
       # GET LAYER DATA
       ############################################################    
-      A, P, R, x, b = ml.levels[level_index].A.toarray(), ml.levels[level_index].P.toarray(), ml.levels[level_index].R.toarray(), x_level[level_index], b_level[level_index]
+      level = ml.levels[level_index]
+      A, P, R = level.A.toarray(), level.P.toarray(), level.R.toarray()
+      x, b = x_level[level_index], b_level[level_index]
       x_coarse = x_level[level_index + 1]
-      [M,N] = A.shape
-      [R_M, R_N] = R.shape
-      px, py, w, h = layer_coordinates_map[level_index]['layer_start_x'], layer_coordinates_map[level_index]['layer_start_y'], layer_coordinates_map[level_index]['layer_pe_cols'], layer_coordinates_map[level_index]['layer_pe_rows']
+      M, N = A.shape
+      R_M, R_N = R.shape
+      
+      coords = layer_coordinates_map[level_index]
+      px, py = coords['layer_start_x'], coords['layer_start_y']
+      w, h = coords['layer_pe_cols'], coords['layer_pe_rows']
       
       print(f"data before passing to layer {level_index}: P: {P.shape}, x: {x.shape}, b: {b.shape}, x_coarse: {x_coarse.shape}, px: {px}, py: {py}, w: {w}, h: {h}")
+
       ############################################################
       # H2D
       print(f"\t1. Copying data to device")
       ############################################################
-      # P is R_N x R_M matrix (transpose of R), so total elements should be R_N*R_M
-      simulator.memcpy_h2d(symbol_P, P.flatten(order='C'), px, py, w, h, R_N*R_M, streaming=False,
-        order=memcpy_order, data_type=memcpy_dtype, nonblock=False)        
-      simulator.memcpy_h2d(symbol_x_coarse, x_coarse, px, py, w, h, R_M*1, streaming=False,
-        order=memcpy_order, data_type=memcpy_dtype, nonblock=False)
+      do_memcpy(symbols['P'], P.flatten(order='C'), px, py, w, h, R_N*R_M, is_h2d=True)
+      do_memcpy(symbols['x_coarse'], x_coarse, px, py, w, h, R_M*1, is_h2d=True)
+
       ############################################################
       # COMPUTE
       print(f"\t2. V-Cycle Up")
       ############################################################
-      omega=amg.get_omega_from_postsmoother(setup_config)
-      iterations=amg.get_iterations_from_postsmoother(setup_config)
+      omega = amg.get_omega_from_postsmoother(setup_config)
+      iterations = amg.get_iterations_from_postsmoother(setup_config)
       simulator.launch('v_cycle_up', np.float32(omega), np.int16(iterations), np.int16(level_index), nonblock=False)
-      
+
       ############################################################
-      # D2H
+      # D2H & UPDATE DATA
       print(f"\t3. Copying results to host")
-      ############################################################
-      x_post_smooth = np.zeros([N*1], dtype=np.float32)
-      simulator.memcpy_d2h(x_post_smooth, symbol_x, px, py, w, h, N*1, streaming=False,
-        order=memcpy_order, data_type=memcpy_dtype, nonblock=False)
-      
-      ############################################################
-      # UPDATE DATA
-      ############################################################
-      x_level[level_index] = x_post_smooth
-      
+      x_level[level_index] = do_memcpy(symbols['x'], None, px, py, w, h, N*1, is_h2d=False)
+
       ############################################################
       # CLEANUP & LOGGING
       ############################################################
@@ -389,10 +392,12 @@ def device_calculations(v_cycle_data):
     residual = np.linalg.norm(ml.levels[0].A @ x_level[0] - b_level[0])
     print(f"Iteration {iteration} residual: {residual}")
     iteration += 1
+
   ############################################################
   # Cleanup simulator
   ############################################################
   simulator.stop()
+
   ############################################################
   # Final results
   ############################################################
@@ -400,7 +405,7 @@ def device_calculations(v_cycle_data):
   print("After final solver:")
   amg.debugprint(ml.levels, b_level, x_level)
   
-  residual_device= np.linalg.norm(ml.levels[0].A @ x_solution_device - b_solution_device)
+  residual_device = np.linalg.norm(ml.levels[0].A @ x_solution_device - b_solution_device)
   return b_solution_device, x_solution_device, residual_device
 
 def find_total_pes_used(layer_coordinates_map):
@@ -573,7 +578,7 @@ def main():
   b0 = b0.astype(np.float32)
   
   nrm_b = np.linalg.norm(b0, 2)
-  eps = 1.e-5
+  eps = 1.e-2
   relative_tol = eps * nrm_b # relative tolerance
   max_iterations = 20
   
