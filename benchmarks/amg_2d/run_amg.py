@@ -301,7 +301,7 @@ def device_calculations(v_cycle_data):
       iterations=amg.get_iterations_from_presmoother(setup_config)    
       print(f"\t2. Solving Layer {level_index} with omega={omega}, smoothing_iterations={iterations}")
       
-      simulator.launch('compute', np.float32(omega), np.int16(iterations), np.int16(level_index), nonblock=False)
+      simulator.launch('v_cycle_down', np.float32(omega), np.int16(iterations), np.int16(level_index), nonblock=False)
 
       ############################################################
       # D2H

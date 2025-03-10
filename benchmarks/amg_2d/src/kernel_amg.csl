@@ -15,10 +15,10 @@
 // params
 ////////////////////////////////////////
 param memcpy_params: comptime_struct;
-param M: i16;   // pe_rows
-param N: i16;   // pe_cols
-param R_M: i16; // R shape parameters here
-param R_N: i16;
+param M: i16;   // Matrix rows
+param N: i16;   // Matrix columns  
+param R_M: i16; // Restriction matrix rows
+param R_N: i16; // Restriction matrix columns
 param layer_index: i16; // index of the layer
 param px_start: i16; // start x of the layer
 param py_start: i16; // start y of the layer
@@ -27,27 +27,22 @@ param layer_height: i16; // number of PEs in y direction
 ////////////////////////////////////////
 // DATA(local + global)
 ////////////////////////////////////////
-// Constants defining dimensions of our matrix(MxN)
 
-const _MAX_SIZE_A = M*N;
-const _MAX_SIZE_X = N*1;
-const _MAX_SIZE_AX = M*1;
-const _MAX_SIZE_R = R_M*R_N;
-// R shape parameters here
+// // Constants
+// const _MAX_SIZE_A = M*N;
+// const _MAX_SIZE_X = N;
+// const _MAX_SIZE_AX = M;
+// const _MAX_SIZE_R = R_M*R_N;
 
 //INPUT
 // 48 kB of global memory contain A, x, b, R
-// Accessible from host.
+// Copied from host.
 var A: [M*N]f32; // A is stored in row-major order
 var R: [R_M*R_N]f32; // R is stored in row-major order
 var P: [R_N*R_M]f32; // P is stored in row-major order
-var x: [N*1]f32;    // var x: [N*1]f32;
-var b: [M*1]f32;    // var b: [M*1]f32;
+var x: [N*1]f32;    // x is stored in row-major order
+var b: [M*1]f32;    // b is stored in row-major order
 
-
-// LOCAL TEMP
-var AX = @zeros([M*1]f32);   // var AX: [M*1]f32;
-var PX = @zeros([R_N*1]f32); // var PX: [R_M*1]f32;
 
 // OUTPUT
 var residual =  @constants([M*1]f32, 0.0);   // var residual: [M*1]f32;
@@ -66,34 +61,18 @@ var x_ptr: [*]f32 = &x;
 var b_ptr: [*]f32 = &b;
 var R_ptr: [*]f32 = &R;
 var P_ptr: [*]f32 = &P;
-////////////////////////////////////////
-// DSD
-////////////////////////////////////////
-
-// General : memory_address=base_address+offset+stride×induction_variable
-// base_address, offset, stride, extent
-var mem_b_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> b[i] });
-var mem_x_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N} -> x[i] });
-var mem_A_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> A[i*N] });
-var mem_R_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M} -> R[i*R_N] });
-// base_address=&A, offset=0, stride=N, extent=M
-var mem_residual_dsd = @get_dsd(mem1d_dsd, .{ .base_address=&residual, .offset=0, .stride=1, .extent=M });
-var mem_b_coarse_dsd = @get_dsd(mem1d_dsd, .{ .base_address=&b_coarse, .offset=0, .stride=1, .extent=R_M });
-var mem_AX_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> AX[i] });
-
 
 ////////////////////////////////////////
 // import modules
 ////////////////////////////////////////
-const gemv_mod   = @import_module("../libraries/gemv.csl",   .{ .sizeA = _MAX_SIZE_A, .sizeX = _MAX_SIZE_X, .sizeY = _MAX_SIZE_AX });
+// const gemv_mod   = @import_module("../libraries/gemv.csl",   .{ .sizeA = _MAX_SIZE_A, .sizeX = _MAX_SIZE_X, .sizeY = _MAX_SIZE_AX });
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 const simprint = @import_module("<simprint>", .{ .enable = false });
-const layout_module = @import_module("<layout>");
 
 ////////////////////////////////////////
 // Functions
 ////////////////////////////////////////
-// Initialize matrix and vectors
+// Use for debugging purposes.
 fn initialize(current_level:i16) void {
 
     if (current_level == layer_index){
@@ -120,83 +99,10 @@ fn initialize(current_level:i16) void {
 
 }
 
-//  General: Ax = aplha. (A * x) + beta.y
-//  answer= 1.(A * x) + 0.y
-// AX = A*x
-fn gemv_using_library() void {
-
-    var alpha: f32 = 1.0;
-    var beta: f32 = 0.0;
-    var is_layout_column_major: bool = false;
-    gemv_mod.sgemv_inner(M, N, alpha, &A, M, &x, beta, &AX, is_layout_column_major);
-
-}
-
-// Compute gemv
-// input: A, x
-// output: AX
-// AX = A*x
-fn gemv() void {
-  for (@range(i16, M)) |i| {
-    var tmp: f32 = 0.0;
-    for (@range(i16, N)) |j| {
-      tmp += A[i*N + j] * x[j];
-    }
-    AX[i] = tmp;
-    // y[i] = tmp + b[i];
-  }
-}
-
-fn gemv_using_dsd() void{
-    // TODO: BUG: This produces wrong results if called multiple times.
-    for (@range(i16, M)) |i| {
-        AX[i] = 0.0;
-    }
-    // @fsubs(mem_AX_dsd, mem_AX_dsd, mem_AX_dsd);
-    for (@range(i16, N)) |i| {
-        @fmacs(mem_AX_dsd, mem_AX_dsd, mem_A_dsd, x[i]);
-        mem_A_dsd = @increment_dsd_offset(mem_A_dsd, 1, f32);
-    }
-}
-
-fn residual_operator() void {
-    @fsubs(mem_residual_dsd, mem_b_dsd, mem_AX_dsd);
-}
-
-fn restriction_operator() void {
-    // TODO: Use DSD for speed.
-  for (@range(i16, R_M)) |i| {
-    var tmp: f32 = 0.0;
-    for (@range(i16, R_N)) |j| {
-      tmp += R[i*R_N + j] * residual[j];
-    }
-    b_coarse[i] = tmp;
-    // y[i] = tmp + b[i];
-  }
-}
-
-// TODO: FIX BUG THEN USE IT.
-fn restriction_operator_using_dsd() void{
-    // TODO: BUG: This produces wrong results if called multiple times.
-    // for (@range(i16, R_M)) |i| {
-    //     AX[i] = 0.0;
-    // }
-    // @fsubs(mem_AX_dsd, mem_AX_dsd, mem_AX_dsd);
-    for (@range(i16, R_N)) |i| {
-        @fmacs(mem_b_coarse_dsd, mem_b_coarse_dsd, mem_R_dsd, residual[i]);
-        mem_R_dsd = @increment_dsd_offset(mem_R_dsd, 1, f32);
-    }
-}
-
 // Weighted jacobi iteration
 // formula: x = (1-omega)*x + omega*(b - A*x)/diag(A)
 // Ax is for all values except the diagonal value.
-
 fn jacobi(omega:f32, iterations: i16) void {
-
-    // var omega: f32 = 1.0/3.0;
-    // var iterations: i32 = 5;
-
     for (@range(i16, iterations)) |iter| {
         // make copy of x into temp.
         var tmp = @zeros([N*1]f32);
@@ -217,8 +123,6 @@ fn jacobi(omega:f32, iterations: i16) void {
             }
         }
     }
-
-    // sys_mod.unblock_cmd_stream();
 }
 
 // V-cycle upward phase implementation
@@ -227,49 +131,52 @@ fn v_cycle_up(omega: f32, post_smooth_iterations: i16, current_level: i16) void 
         simprint.fmt_with_coords("In layer = {d} V_CYCLE_UP", .{ @as(u32, layer_index) });
         
         // Step 1: Prolongation operator (P * x_coarse)
-        // P is [R_N x R_M] matrix, R_N = fine grid size, R_M = coarse grid size
-        // x_coarse is [R_M x 1] vector
-        // x is [R_N x 1] vector
         for (@range(i16, R_N)) |i| {
-            var tmp: f32 = 0.0;
+            var Px: f32 = 0.0;
             for (@range(i16, R_M)) |j| {
                 // P[i*R_M + j] accesses element (i,j) in P matrix
-                tmp += P[i*R_M + j] * x_coarse[j];
+                Px += P[i*R_M + j] * x_coarse[j];
             }
-            x[i] += tmp;  // Add correction to existing solution
+            x[i] += Px;  // Add correction to existing solution
         }
 
-        // Step 2: Post-smoothing using existing Jacobi
-        jacobi(omega, post_smooth_iterations);
-
-        // Debug prints
-        simprint.fmt("After V-cycle up on level {d}", .{@as(u32, current_level)});
-        for (x) |val, i| {
-            simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
-        }
-        
+        // Step 2: Post-smoothing
+        jacobi(omega, post_smooth_iterations);        
     }
     // Unblock memcpy so that it can send data outside
     sys_mod.unblock_cmd_stream();        
 }
 
 // Call initialize and gemv functions
-fn compute(omega:f32, iterations: i16, current_level:i16) void {
+fn v_cycle_down(omega:f32, pre_smooth_iterations: i16, current_level:i16) void {
     if (current_level == layer_index) {
-        simprint.fmt_with_coords("In layer = {d} V_CYCLE_DOWN", .{ @as(u32, layer_index) });    
-        initialize(current_level);
-        // gemv();
-        jacobi(omega, iterations);  // presmoother
-        gemv_using_library();
-        // gemv();
-        // // // gemv_using_dsd();
-        residual_operator();        // residual
-        // restriction_operator_using_dsd();   // restriction
-        restriction_operator();   
+        // simprint.fmt_with_coords("In layer = {d} V_CYCLE_DOWN", .{ @as(u32, layer_index) });    
+        // initialize(current_level);
+
+        // 1. Presmoother
+        jacobi(omega, pre_smooth_iterations);  
+        
+        // 2. Compute residual = b - AX
+        // Compute AX = A*x
+        for (@range(i16, M)) |i| {
+            var Ax: f32 = 0.0;
+            for (@range(i16, N)) |j| {
+                Ax += A[i*N + j] * x[j];
+            }
+            residual[i] = b[i] - Ax;  // Merged both loops by computing residual here
+        }
+        
+        // 3. Restriction operator  (b_coarse = R * residual)
+        for (@range(i16, R_M)) |i| {
+            var tmp: f32 = 0.0;
+            for (@range(i16, R_N)) |j| {
+                tmp += R[i*R_N + j] * residual[j];
+            }
+            b_coarse[i] = tmp;
+        }
     }
     // unblock memcpy so that it can send data outside.
     sys_mod.unblock_cmd_stream();
-
 }
 
 
@@ -282,15 +189,81 @@ comptime {
     @export_symbol(P_ptr, "P");
     @export_symbol(x_ptr, "x");
     @export_symbol(b_ptr, "b");
-}
-comptime {
+
     // Export function so it is host-callable by RPC mechanism
-    @export_symbol(compute);
+    @export_symbol(v_cycle_down);
     @export_symbol(v_cycle_up);
-}
-comptime {
+
     // Export symbol pointing to y so it is host-readable
     @export_symbol(residual_ptr, "residual");
     @export_symbol(b_coarse_ptr, "b_coarse");
     @export_symbol(x_coarse_ptr, "x_coarse");
 }
+
+// Extra code
+
+// ////////////////////////////////////////
+// // DSD
+// ////////////////////////////////////////
+// // General : memory_address=base_address+offset+stride×induction_variable
+// // base_address, offset, stride, extent
+// var mem_b_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> b[i] });
+// var mem_x_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N} -> x[i] });
+// var mem_A_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> A[i*N] });
+// var mem_R_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M} -> R[i*R_N] });
+// // base_address=&A, offset=0, stride=N, extent=M
+// var mem_residual_dsd = @get_dsd(mem1d_dsd, .{ .base_address=&residual, .offset=0, .stride=1, .extent=M });
+// var mem_b_coarse_dsd = @get_dsd(mem1d_dsd, .{ .base_address=&b_coarse, .offset=0, .stride=1, .extent=R_M });
+// var mem_AX_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M} -> AX[i] });
+
+
+// fn gemv_using_dsd() void{
+//     // TODO: BUG: This produces wrong results if called multiple times.
+//     for (@range(i16, M)) |i| {
+//         AX[i] = 0.0;
+//     }
+//     // @fsubs(mem_AX_dsd, mem_AX_dsd, mem_AX_dsd);
+//     for (@range(i16, N)) |i| {
+//         @fmacs(mem_AX_dsd, mem_AX_dsd, mem_A_dsd, x[i]);
+//         mem_A_dsd = @increment_dsd_offset(mem_A_dsd, 1, f32);
+//     }
+// }
+
+
+// // Compute gemv
+// // input: A, x
+// // output: AX
+// // AX = A*x
+// fn gemv() void {
+//   for (@range(i16, M)) |i| {
+//     var tmp: f32 = 0.0;
+//     for (@range(i16, N)) |j| {
+//       tmp += A[i*N + j] * x[j];
+//     }
+//     AX[i] = tmp;
+//     // y[i] = tmp + b[i];
+//   }
+// }
+
+// // TODO: FIX BUG THEN USE IT.
+// fn restriction_operator_using_dsd() void{
+//     // TODO: BUG: This produces wrong results if called multiple times.
+//     // for (@range(i16, R_M)) |i| {
+//     //     AX[i] = 0.0;
+//     // }
+//     // @fsubs(mem_AX_dsd, mem_AX_dsd, mem_AX_dsd);
+//     for (@range(i16, R_N)) |i| {
+//         @fmacs(mem_b_coarse_dsd, mem_b_coarse_dsd, mem_R_dsd, residual[i]);
+//         mem_R_dsd = @increment_dsd_offset(mem_R_dsd, 1, f32);
+//     }
+// }
+
+// //  General: Ax = aplha. (A * x) + beta.y
+// //  answer= 1.(A * x) + 0.y
+// // AX = A*x
+// fn gemv_using_library() void {
+//     var alpha: f32 = 1.0;
+//     var beta: f32 = 0.0;
+//     var is_layout_column_major: bool = false;
+//     gemv_mod.sgemv_inner(M, N, alpha, &A, M, &x, beta, &AX, is_layout_column_major);
+// }
