@@ -1,5 +1,3 @@
-
-
 import os
 import argparse
 from typing import Optional
@@ -444,119 +442,129 @@ def device_calculations(v_cycle_data):
   residual = float('inf')
   while iteration < max_iterations and residual > tol:
     print(f"Iteration {iteration}")
-    level_index = 0
 
     ############################################################
-    # DOWNWARD V-CYCLE
-    ############################################################    
-    while(level_index < len(ml.levels) - 1):  # not the coarsest level
-      print(f"Solving Layer {level_index}:")
-      
-      ############################################################
-      # GET LAYER DATA
-      ############################################################
-      level = ml.levels[level_index]
-      A, P, R = level.A.toarray(), level.P.toarray(), level.R.toarray()
-      x, b = x_level[level_index], b_level[level_index]
-      M, N = A.shape
-      R_M, R_N = R.shape
-      
-      coords = layer_coordinates_map[level_index]
-      px, py = coords['layer_start_x'], coords['layer_start_y']
-      w, h = coords['layer_pe_cols'], coords['layer_pe_rows']
-      
-      print(f"data before passing to layer {level_index}: A: {A.shape}, R: {R.shape}, x: {x.shape}, b: {b.shape}, px: {px}, py: {py}, w: {w}, h: {h}")
-      
-      ############################################################
-      # H2D
-      print(f"\t1. Copying data to device")
-      ############################################################
-      do_memcpy(symbols['x'], x, px, py, w, h, N*1, is_h2d=True)
-      do_memcpy(symbols['A'], A.flatten(order='C'), px, py, w, h, M*N, is_h2d=True)
-      do_memcpy(symbols['R'], R.flatten(order='C'), px, py, w, h, R_M*R_N, is_h2d=True)
-      do_memcpy(symbols['b'], b, px, py, w, h, M*1, is_h2d=True)
-
-      ############################################################
-      # Kernel
-      ############################################################
-      omega = amg.get_omega_from_presmoother(setup_config)
-      iterations = amg.get_iterations_from_presmoother(setup_config)    
-      print(f"\t2. Solving Layer {level_index} with omega={omega}, smoothing_iterations={iterations}")
-      
-      simulator.launch('v_cycle_down', np.float32(omega), np.int16(iterations), np.int16(level_index), nonblock=False)
-
-      ############################################################
-      # D2H & UPDATE DATA
-      print(f"\t3. Copying results to host")
-      ############################################################
-      b_coarse_device = do_memcpy(symbols['b_coarse'], None, px, py, w, h, R_M*1, is_h2d=False)
-      x_smooth = do_memcpy(symbols['x'], None, px, py, w, h, N*1, is_h2d=False)
-      x_coarse_device = np.zeros_like(b_coarse_device)
-      
-      x_level[level_index] = x_smooth
-      b_level[level_index + 1] = b_coarse_device
-      x_level[level_index + 1] = x_coarse_device
-      ############################################################
-      # some additional logging
-      ############################################################
-      
-      logs(run_args, logs_dir)  
-      level_index += 1  #loop induction var
+    # COMBINED V-CYCLE (DOWN AND UP)
     ############################################################
-    # COARSE SOLVE
-    ############################################################
-    x_coarsest_device = x_level[-1]
-    solver_callable_host = amg.scipy_direct_solver
-    x_coarsest_device[:] = solver_callable_host(ml.levels[-1].A, b_level[-1])
-    ############################################################
-    # UPWARD V-CYCLE
-    ############################################################
-    # Start from second-to-last level since coarsest level was already solved
-    for level_index in reversed(range(len(ml.levels) - 1)):
-      print(f"Solving Layer {level_index} UPWARD")
-      
-      ############################################################
-      # GET LAYER DATA
-      ############################################################    
-      level = ml.levels[level_index]
-      A, P, R = level.A.toarray(), level.P.toarray(), level.R.toarray()
-      x, b = x_level[level_index], b_level[level_index]
-      x_coarse = x_level[level_index + 1]
-      M, N = A.shape
-      R_M, R_N = R.shape
-      
-      coords = layer_coordinates_map[level_index]
-      px, py = coords['layer_start_x'], coords['layer_start_y']
-      w, h = coords['layer_pe_cols'], coords['layer_pe_rows']
-      
-      print(f"data before passing to layer {level_index}: P: {P.shape}, x: {x.shape}, b: {b.shape}, x_coarse: {x_coarse.shape}, px: {px}, py: {py}, w: {w}, h: {h}")
-
-      ############################################################
-      # H2D
-      print(f"\t1. Copying data to device")
-      ############################################################
-      do_memcpy(symbols['P'], P.flatten(order='C'), px, py, w, h, R_N*R_M, is_h2d=True)
-      do_memcpy(symbols['x_coarse'], x_coarse, px, py, w, h, R_M*1, is_h2d=True)
-
-      ############################################################
-      # COMPUTE
-      print(f"\t2. V-Cycle Up")
-      ############################################################
-      omega = amg.get_omega_from_postsmoother(setup_config)
-      iterations = amg.get_iterations_from_postsmoother(setup_config)
-      simulator.launch('v_cycle_up', np.float32(omega), np.int16(iterations), np.int16(level_index), nonblock=False)
-
-      ############################################################
-      # D2H & UPDATE DATA
-      print(f"\t3. Copying results to host")
-      x_level[level_index] = do_memcpy(symbols['x'], None, px, py, w, h, N*1, is_h2d=False)
-
-      ############################################################
-      # CLEANUP & LOGGING
-      ############################################################
-      logs(run_args, logs_dir)
+    one_side_levels = len(ml.levels)  # e.g. 4 levels (0,1,2,3)
+    total_levels = 2 * one_side_levels - 1  # e.g. 7 total positions in V-cycle
+    center_index = one_side_levels - 1  # e.g. index 3 is the coarsest level
     
-    # Check convergence
+    for total_level_index in range(total_levels):  # range(7)
+        ############################################################
+        # COARSE SOLVE (at the bottom of V or only one level)
+        ############################################################
+        if total_level_index == center_index:  # At the bottom of V
+            print(f"Solving coarse problem at level {one_side_levels-1}")
+            x_coarsest_device = x_level[-1]  # Use last level
+            solver_callable_host = amg.scipy_direct_solver
+            x_coarsest_device[:] = solver_callable_host(ml.levels[-1].A, b_level[-1])
+            continue
+
+        ############################################################
+        # LAYER INDEX CALCULATION
+        ############################################################
+        is_downward = total_level_index < center_index
+        is_upward = total_level_index > center_index
+        
+        if is_downward:
+            level_index = total_level_index
+        elif is_upward:
+            # For upward phase, mirror the indices around center
+            level_index = total_levels - total_level_index - 1
+            
+        # Add bounds check and debug info
+        if level_index < 0 or level_index >= len(ml.levels) - 1:
+            print(f"Warning: Invalid level_index {level_index}, skipping")
+            continue
+            
+        print(f"{'Downward' if is_downward else 'Upward'} V-cycle at Layer {level_index}")
+        
+        ############################################################
+        # GET LAYER DATA & VERIFY DIMENSIONS
+        ############################################################
+        level = ml.levels[level_index]
+        if is_downward:
+            A, R = level.A.toarray(), level.R.toarray()
+            x, b = x_level[level_index], b_level[level_index]
+            M, N = A.shape
+            R_M, R_N = R.shape
+            
+            # Verify dimensions
+            print(f"Down phase dimensions - A: {A.shape}, R: {R.shape}, x: {x.shape}, b: {b.shape}")
+            assert x.shape[0] == N, f"x dimension mismatch: {x.shape[0]} != {N}"
+            assert b.shape[0] == M, f"b dimension mismatch: {b.shape[0]} != {M}"
+            
+        elif is_upward:
+            A, P, R = level.A.toarray(), level.P.toarray(), level.R.toarray()
+            x, b = x_level[level_index], b_level[level_index]
+            x_coarse = x_level[level_index + 1]
+            M, N = A.shape
+            R_N, R_M = P.shape
+            
+            # Verify dimensions
+            print(f"Up phase dimensions - A: {A.shape}, R: {R.shape}, P: {P.shape}, x: {x.shape}, x_coarse: {x_coarse.shape}")
+            assert x_coarse.shape[0] == R_M, f"x_coarse dimension mismatch: {x_coarse.shape[0]} != {R_M}"
+            
+        coords = layer_coordinates_map[level_index]
+        px, py = coords['layer_start_x'], coords['layer_start_y']
+        w, h = coords['layer_pe_cols'], coords['layer_pe_rows']
+        
+        print(f"PEs layout - px: {px}, py: {py}, w: {w}, h: {h}")
+
+        ############################################################
+        # H2D TRANSFERS WITH SIZE CHECKS
+        ############################################################
+        if is_downward:
+            print(f"Copying down phase data - sizes: N*1={N*1}, M*N={M*N}, R_M*R_N={R_M*R_N}, M*1={M*1}")
+            do_memcpy(symbols['x'], x, px, py, w, h, N*1, is_h2d=True)
+            do_memcpy(symbols['A'], A.flatten(order='C'), px, py, w, h, M*N, is_h2d=True)
+            do_memcpy(symbols['R'], R.flatten(order='C'), px, py, w, h, R_M*R_N, is_h2d=True)
+            do_memcpy(symbols['b'], b, px, py, w, h, M*1, is_h2d=True)
+        elif is_upward:
+            print(f"Copying up phase data - sizes: R_N*R_M={R_N*R_M}, R_M*1={R_M*1}")
+            do_memcpy(symbols['P'], P.flatten(order='C'), px, py, w, h, R_N*R_M, is_h2d=True)
+            do_memcpy(symbols['x_coarse'], x_coarse, px, py, w, h, R_M*1, is_h2d=True)
+
+        ############################################################
+        # COMPUTE
+        ############################################################
+        if is_downward:
+            omega = amg.get_omega_from_presmoother(setup_config)
+            iterations = amg.get_iterations_from_presmoother(setup_config)
+            print(f"\t2. Solving Layer {level_index} DOWN with omega={omega}, iterations={iterations}")
+            simulator.launch('v_cycle_down', np.float32(omega), np.int16(iterations), 
+                           np.int16(level_index), nonblock=False)
+        elif is_upward:
+            omega = amg.get_omega_from_postsmoother(setup_config)
+            iterations = amg.get_iterations_from_postsmoother(setup_config)
+            print(f"\t2. Solving Layer {level_index} UP with omega={omega}, iterations={iterations}")
+            simulator.launch('v_cycle_up', np.float32(omega), np.int16(iterations), 
+                           np.int16(level_index), nonblock=False)
+
+        ############################################################
+        # D2H & UPDATE DATA
+        ############################################################
+        print(f"\t3. Copying results to host")
+        if is_downward:
+            b_coarse_device = do_memcpy(symbols['b_coarse'], None, px, py, w, h, R_M*1, is_h2d=False)
+            x_smooth = do_memcpy(symbols['x'], None, px, py, w, h, N*1, is_h2d=False)
+            x_coarse_device = np.zeros_like(b_coarse_device)
+            
+            x_level[level_index] = x_smooth
+            b_level[level_index + 1] = b_coarse_device
+            x_level[level_index + 1] = x_coarse_device
+        elif is_upward:
+            x_level[level_index] = do_memcpy(symbols['x'], None, px, py, w, h, N*1, is_h2d=False)
+
+        ############################################################
+        # LOGGING
+        ############################################################
+        logs(run_args, logs_dir)
+    
+    ############################################################
+    # CHECK CONVERGENCE
+    ############################################################
     residual = np.linalg.norm(ml.levels[0].A @ x_level[0] - b_level[0])
     print(f"Iteration {iteration} residual: {residual}")
     iteration += 1
@@ -564,16 +572,15 @@ def device_calculations(v_cycle_data):
   ############################################################
   # Cleanup simulator
   ############################################################
-  simulator.stop()
-
+  simulator.stop()        
   ############################################################
   # Final results
   ############################################################
   b_solution_device, x_solution_device = b_level[0], x_level[0]
   print("After final solver:")
   amg.debugprint(ml.levels, b_level, x_level)
-  
-  residual_device = np.linalg.norm(ml.levels[0].A @ x_solution_device - b_solution_device)
+
+  residual_device = np.linalg.norm(ml.levels[0].A @ x_solution_device - b_level[0])
   return b_solution_device, x_solution_device, residual_device
 
 def main():
