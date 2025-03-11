@@ -381,207 +381,227 @@ def host_calculations(v_cycle_data):
   return b_solution, x_solution, residual_host
 
 def device_calculations(v_cycle_data):
-  run_args, logs_dir = parse_args()
-  
-  ############################################################
-  # unpack data
-  ############################################################
-  # unpack the input data
-  ml = v_cycle_data["ml"]
-  setup_config = v_cycle_data["setup_config"]
-  x_level = v_cycle_data["x_level"]
-  b_level = v_cycle_data["b_level"]
-  max_iterations = v_cycle_data["max_iterations"]
-  tol = v_cycle_data["tol"]
-
-  ############################################################
-  # CREATE DYNAMIC LAYOUT
-  ############################################################
-  layer_coordinates_map = amg_2_layers
-  layer_param_map, layer_coordinates_map = generate_dynamic_layout(run_args, ml, layer_coordinates_map, filename="images/amg_2_layers.png")
-
-  ############################################################
-  # Setup simulator
-  ############################################################
-  simulator = SdkRuntime(run_args.elffolder, cmaddr=run_args.cmaddr)
-  simulator.load()
-  simulator.run()
-  
-  ############################################################
-  # VARIABLES
-  ############################################################
-  memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
-  memcpy_order = MemcpyOrder.ROW_MAJOR
-  
-  # Helper function for memcpy operations
-  def do_memcpy(symbol, data, px, py, w, h, size, is_h2d=True):
-    if is_h2d:
-      simulator.memcpy_h2d(symbol, data, px, py, w, h, size, streaming=False,
-        order=memcpy_order, data_type=memcpy_dtype, nonblock=False)
-    else:
-      result = np.zeros(size, dtype=np.float32)
-      simulator.memcpy_d2h(result, symbol, px, py, w, h, size, streaming=False,
-        order=memcpy_order, data_type=memcpy_dtype, nonblock=False)
-      return result
-
-  # Cache commonly used symbols
-  symbols = {
-    'b_coarse': simulator.get_id("b_coarse"),
-    'A': simulator.get_id("A"),
-    'x': simulator.get_id("x"), 
-    'b': simulator.get_id("b"),
-    'R': simulator.get_id("R"),
-    'x_coarse': simulator.get_id("x_coarse"),
-    'P': simulator.get_id("P")
-  }
-
-  ############################################################
-  # AMG V-CYCLE
-  ############################################################
-  iteration = 0
-  residual = float('inf')
-  while iteration < max_iterations and residual > tol:
-    print(f"Iteration {iteration}")
-
-    ############################################################
-    # COMBINED V-CYCLE (DOWN AND UP)
-    ############################################################
-    one_side_levels = len(ml.levels)  # e.g. 4 levels (0,1,2,3)
-    total_levels = 2 * one_side_levels - 1  # e.g. 7 total positions in V-cycle
-    center_index = one_side_levels - 1  # e.g. index 3 is the coarsest level
-    
-    for total_level_index in range(total_levels):  # range(7)
-        ############################################################
-        # COARSE SOLVE (at the bottom of V or only one level)
-        ############################################################
-        if total_level_index == center_index:  # At the bottom of V
-            print(f"Solving coarse problem at level {one_side_levels-1}")
-            x_coarsest_device = x_level[-1]  # Use last level
-            solver_callable_host = amg.scipy_direct_solver
-            x_coarsest_device[:] = solver_callable_host(ml.levels[-1].A, b_level[-1])
-            continue
-
-        ############################################################
-        # LAYER INDEX CALCULATION
-        ############################################################
-        is_downward = total_level_index < center_index
-        is_upward = total_level_index > center_index
-        
-        if is_downward:
-            level_index = total_level_index
-        elif is_upward:
-            # For upward phase, mirror the indices around center
-            level_index = total_levels - total_level_index - 1
-            
-        # Add bounds check and debug info
-        if level_index < 0 or level_index >= len(ml.levels) - 1:
-            print(f"Warning: Invalid level_index {level_index}, skipping")
-            continue
-            
-        print(f"{'Downward' if is_downward else 'Upward'} V-cycle at Layer {level_index}")
-        
-        ############################################################
-        # GET LAYER DATA & VERIFY DIMENSIONS
-        ############################################################
-        level = ml.levels[level_index]
-        if is_downward:
-            A, R = level.A.toarray(), level.R.toarray()
-            x, b = x_level[level_index], b_level[level_index]
-            M, N = A.shape
-            R_M, R_N = R.shape
-            
-            # Verify dimensions
-            print(f"Down phase dimensions - A: {A.shape}, R: {R.shape}, x: {x.shape}, b: {b.shape}")
-            assert x.shape[0] == N, f"x dimension mismatch: {x.shape[0]} != {N}"
-            assert b.shape[0] == M, f"b dimension mismatch: {b.shape[0]} != {M}"
-            
-        elif is_upward:
-            A, P, R = level.A.toarray(), level.P.toarray(), level.R.toarray()
-            x, b = x_level[level_index], b_level[level_index]
-            x_coarse = x_level[level_index + 1]
-            M, N = A.shape
-            R_N, R_M = P.shape
-            
-            # Verify dimensions
-            print(f"Up phase dimensions - A: {A.shape}, R: {R.shape}, P: {P.shape}, x: {x.shape}, x_coarse: {x_coarse.shape}")
-            assert x_coarse.shape[0] == R_M, f"x_coarse dimension mismatch: {x_coarse.shape[0]} != {R_M}"
-            
-        coords = layer_coordinates_map[level_index]
-        px, py = coords['layer_start_x'], coords['layer_start_y']
-        w, h = coords['layer_pe_cols'], coords['layer_pe_rows']
-        
-        print(f"PEs layout - px: {px}, py: {py}, w: {w}, h: {h}")
-
-        ############################################################
-        # H2D TRANSFERS WITH SIZE CHECKS
-        ############################################################
-        if is_downward:
-            print(f"Copying down phase data - sizes: N*1={N*1}, M*N={M*N}, R_M*R_N={R_M*R_N}, M*1={M*1}")
-            do_memcpy(symbols['x'], x, px, py, w, h, N*1, is_h2d=True)
-            do_memcpy(symbols['A'], A.flatten(order='C'), px, py, w, h, M*N, is_h2d=True)
-            do_memcpy(symbols['R'], R.flatten(order='C'), px, py, w, h, R_M*R_N, is_h2d=True)
-            do_memcpy(symbols['b'], b, px, py, w, h, M*1, is_h2d=True)
-        elif is_upward:
-            print(f"Copying up phase data - sizes: R_N*R_M={R_N*R_M}, R_M*1={R_M*1}")
-            do_memcpy(symbols['P'], P.flatten(order='C'), px, py, w, h, R_N*R_M, is_h2d=True)
-            do_memcpy(symbols['x_coarse'], x_coarse, px, py, w, h, R_M*1, is_h2d=True)
-
-        ############################################################
-        # COMPUTE
-        ############################################################
-        if is_downward:
-            omega = amg.get_omega_from_presmoother(setup_config)
-            iterations = amg.get_iterations_from_presmoother(setup_config)
-            print(f"\t2. Solving Layer {level_index} DOWN with omega={omega}, iterations={iterations}")
-            simulator.launch('v_cycle_down', np.float32(omega), np.int16(iterations), 
-                           np.int16(level_index), nonblock=False)
-        elif is_upward:
-            omega = amg.get_omega_from_postsmoother(setup_config)
-            iterations = amg.get_iterations_from_postsmoother(setup_config)
-            print(f"\t2. Solving Layer {level_index} UP with omega={omega}, iterations={iterations}")
-            simulator.launch('v_cycle_up', np.float32(omega), np.int16(iterations), 
-                           np.int16(level_index), nonblock=False)
-
-        ############################################################
-        # D2H & UPDATE DATA
-        ############################################################
-        print(f"\t3. Copying results to host")
-        if is_downward:
-            b_coarse_device = do_memcpy(symbols['b_coarse'], None, px, py, w, h, R_M*1, is_h2d=False)
-            x_smooth = do_memcpy(symbols['x'], None, px, py, w, h, N*1, is_h2d=False)
-            x_coarse_device = np.zeros_like(b_coarse_device)
-            
-            x_level[level_index] = x_smooth
-            b_level[level_index + 1] = b_coarse_device
-            x_level[level_index + 1] = x_coarse_device
-        elif is_upward:
-            x_level[level_index] = do_memcpy(symbols['x'], None, px, py, w, h, N*1, is_h2d=False)
-
-        ############################################################
-        # LOGGING
-        ############################################################
-        logs(run_args, logs_dir)
+    run_args, logs_dir = parse_args()
     
     ############################################################
-    # CHECK CONVERGENCE
+    # unpack data
     ############################################################
-    residual = np.linalg.norm(ml.levels[0].A @ x_level[0] - b_level[0])
-    print(f"Iteration {iteration} residual: {residual}")
-    iteration += 1
+    # unpack the input data
+    ml = v_cycle_data["ml"]
+    setup_config = v_cycle_data["setup_config"]
+    x_level = v_cycle_data["x_level"]
+    b_level = v_cycle_data["b_level"]
+    max_iterations = v_cycle_data["max_iterations"]
+    tol = v_cycle_data["tol"]
 
-  ############################################################
-  # Cleanup simulator
-  ############################################################
-  simulator.stop()        
-  ############################################################
-  # Final results
-  ############################################################
-  b_solution_device, x_solution_device = b_level[0], x_level[0]
-  print("After final solver:")
-  amg.debugprint(ml.levels, b_level, x_level)
+    ############################################################
+    # CREATE DYNAMIC LAYOUT
+    ############################################################
+    layer_coordinates_map = amg_2_layers
+    layer_param_map, layer_coordinates_map = generate_dynamic_layout(run_args, ml, layer_coordinates_map, filename="images/amg_2_layers.png")
 
-  residual_device = np.linalg.norm(ml.levels[0].A @ x_solution_device - b_level[0])
-  return b_solution_device, x_solution_device, residual_device
+    ############################################################
+    # Setup simulator
+    ############################################################
+    simulator = SdkRuntime(run_args.elffolder, cmaddr=run_args.cmaddr)
+    simulator.load()
+    simulator.run()
+    
+    ############################################################
+    # VARIABLES
+    ############################################################
+    memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
+    memcpy_order = MemcpyOrder.ROW_MAJOR
+    
+    # Helper function for memcpy operations
+    def do_memcpy(symbol, data, px, py, w, h, size, is_h2d=True):
+        if is_h2d:
+            simulator.memcpy_h2d(symbol, data, px, py, w, h, size, streaming=False,
+                                order=memcpy_order, data_type=memcpy_dtype, nonblock=False)
+        else:
+            result = np.zeros(size, dtype=np.float32)
+            simulator.memcpy_d2h(result, symbol, px, py, w, h, size, streaming=False,
+                                order=memcpy_order, data_type=memcpy_dtype, nonblock=False)
+            return result
+
+    # Cache commonly used symbols
+    symbols = {
+        'b_coarse': simulator.get_id("b_coarse"),
+        'A': simulator.get_id("A"),
+        'x': simulator.get_id("x"), 
+        'b': simulator.get_id("b"),
+        'R': simulator.get_id("R"),
+        'x_coarse': simulator.get_id("x_coarse"),
+        'P': simulator.get_id("P")
+    }
+
+    ############################################################
+    # AMG V-CYCLE
+    ############################################################
+    iteration = 0
+    residual = float('inf')
+    while iteration < max_iterations and residual > tol:
+        print("\n" + "="*80)
+        print(f"║ ITERATION {iteration:3d}")
+        print("="*80)
+
+        ############################################################
+        # COMBINED V-CYCLE (DOWN AND UP)
+        ############################################################
+        one_side_levels = len(ml.levels)
+        total_levels = 2 * one_side_levels - 1
+        center_index = one_side_levels - 1
+        
+        for total_level_index in range(total_levels):
+            if total_level_index == center_index:
+                print("\n" + "-"*40)
+                print(f"│ COARSE SOLVE AT LEVEL {one_side_levels-1}")
+                print("-"*40)
+                x_coarsest_device = x_level[-1]
+                A_coarse = ml.levels[-1].A.toarray()
+                b_coarse = b_level[-1]
+
+                print("Matrix Dimensions:")
+                print(f"  A: {A_coarse.shape}")
+                print(f"  x: {x_coarsest_device.shape} | b: {b_coarse.shape}")
+
+                solver_callable_host = amg.scipy_direct_solver
+                x_coarsest_device[:] = solver_callable_host(ml.levels[-1].A, b_level[-1])
+                continue
+
+            is_downward = total_level_index < center_index
+            is_upward = total_level_index > center_index
+            
+            if is_downward:
+                level_index = total_level_index
+            elif is_upward:
+                level_index = total_levels - total_level_index - 1
+                
+            if level_index < 0 or level_index >= len(ml.levels) - 1:
+                print(f"Warning: Invalid level_index {level_index}, skipping")
+                continue
+
+            phase = "DOWN" if is_downward else "UP"
+            print("\n" + "-"*40)
+            print(f"│ {phase} PHASE - LAYER {level_index}")
+            print("-"*40)
+            
+            ############################################################
+            # GET LAYER DATA & VERIFY DIMENSIONS
+            ############################################################
+            level = ml.levels[level_index]
+            if is_downward:
+                A, R = level.A.toarray(), level.R.toarray()
+                x, b = x_level[level_index], b_level[level_index]
+                M, N = A.shape
+                R_M, R_N = R.shape
+                
+                print("Matrix Dimensions:")
+                print(f"  A: {A.shape} | R: {R.shape}")
+                print(f"  x: {x.shape} | b: {b.shape}")
+                
+            elif is_upward:
+                A, P = level.A.toarray(), level.P.toarray()
+                x, b = x_level[level_index], b_level[level_index]
+                x_coarse = x_level[level_index + 1]
+                M, N = A.shape
+                R_N, R_M = P.shape
+                
+                print("Matrix Dimensions:")
+                print(f"  A: {A.shape} | P: {P.shape}")
+                print(f"  x: {x.shape} | x_coarse: {x_coarse.shape}")
+            
+            coords = layer_coordinates_map[level_index]
+            px, py = coords['layer_start_x'], coords['layer_start_y']
+            w, h = coords['layer_pe_cols'], coords['layer_pe_rows']
+            
+            print("\nPE Configuration:")
+            print(f"  Position: ({px}, {py}) | Size: {w}x{h}")
+
+            ############################################################
+            # H2D TRANSFERS
+            ############################################################
+            print("\nMemory Transfers (H2D):")
+            if is_downward:
+                print(f"  Vector x    : {N*1} elements")
+                print(f"  Matrix A    : {M*N} elements")
+                print(f"  Matrix R    : {R_M*R_N} elements")
+                print(f"  Vector b    : {M*1} elements")
+                do_memcpy(symbols['x'], x, px, py, w, h, N*1, is_h2d=True)
+                do_memcpy(symbols['A'], A.flatten(order='C'), px, py, w, h, M*N, is_h2d=True)
+                do_memcpy(symbols['R'], R.flatten(order='C'), px, py, w, h, R_M*R_N, is_h2d=True)
+                do_memcpy(symbols['b'], b, px, py, w, h, M*1, is_h2d=True)
+            elif is_upward:
+                print(f"  Matrix P    : {R_N*R_M} elements")
+                print(f"  Vector x_c  : {R_M*1} elements")
+                do_memcpy(symbols['P'], P.flatten(order='C'), px, py, w, h, R_N*R_M, is_h2d=True)
+                do_memcpy(symbols['x_coarse'], x_coarse, px, py, w, h, R_M*1, is_h2d=True)
+
+            ############################################################
+            # COMPUTE
+            ############################################################
+            if is_downward:
+                omega = amg.get_omega_from_presmoother(setup_config)
+                iterations = amg.get_iterations_from_presmoother(setup_config)
+            else:
+                omega = amg.get_omega_from_postsmoother(setup_config)
+                iterations = amg.get_iterations_from_postsmoother(setup_config)
+                
+            print("\nComputation:")
+            print(f"  Smoothing iterations: {iterations}")
+            print(f"  Relaxation factor ω: {omega:.4f}")
+            
+            simulator.launch(f'v_cycle_{phase.lower()}', np.float32(omega), 
+                           np.int16(iterations), np.int16(level_index), nonblock=False)
+
+            ############################################################
+            # D2H & UPDATE DATA
+            ############################################################
+            print("\nMemory Transfers (D2H):")
+            if is_downward:
+                print("  Copying b_coarse, x_smooth")
+                b_coarse_device = do_memcpy(symbols['b_coarse'], None, px, py, w, h, R_M*1, is_h2d=False)
+                x_smooth = do_memcpy(symbols['x'], None, px, py, w, h, N*1, is_h2d=False)
+                x_coarse_device = np.zeros_like(b_coarse_device)
+                
+                x_level[level_index] = x_smooth
+                b_level[level_index + 1] = b_coarse_device
+                x_level[level_index + 1] = x_coarse_device
+            elif is_upward:
+                print("  Copying x")
+                x_level[level_index] = do_memcpy(symbols['x'], None, px, py, w, h, N*1, is_h2d=False)
+
+            ############################################################
+            # LOGGING
+            ############################################################
+            logs(run_args, logs_dir)
+
+        ############################################################
+        # CHECK CONVERGENCE
+        ############################################################
+        residual = np.linalg.norm(ml.levels[0].A @ x_level[0] - b_level[0])
+        print("\n" + "="*40)
+        print(f"ITERATION {iteration} SUMMARY")
+        print("="*40)
+        print(f"Residual: {residual:.6e}")
+        if residual <= tol:
+            print("Convergence achieved!")
+        print("="*40 + "\n")
+        iteration += 1
+
+    ############################################################
+    # Cleanup simulator
+    ############################################################
+    simulator.stop()        
+    ############################################################
+    # Final results
+    ############################################################
+    b_solution_device, x_solution_device = b_level[0], x_level[0]
+    print("After final solver:")
+    amg.debugprint(ml.levels, b_level, x_level)
+
+    residual_device = np.linalg.norm(ml.levels[0].A @ x_solution_device - b_level[0])
+    return b_solution_device, x_solution_device, residual_device
 
 def main():
   random.seed(127)
