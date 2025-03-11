@@ -31,27 +31,6 @@ import copy
 import warnings
 
 from mapper_layouts.different_layouts import *
-
-@dataclass
-class CompileCoreArgs:
-    cslc: str
-    layout_file: str
-    arch: str
-    fabric_width: int
-    fabric_height: int
-    core_fabric_offset_x: int
-    core_fabric_offset_y: int
-    pe_rows: int
-    pe_cols: int
-    M: int
-    N: int
-    R_M: int
-    R_N: int
-    channels: int
-    width_west_buf: int
-    width_east_buf: int
-    elf_folder: str
-    extra_args: str
  
 def calculate_fabric_dimensions(width, height, width_west_buf, width_east_buf):
   # fabric-offsets = 1,1
@@ -77,60 +56,6 @@ def calculate_fabric_dimensions(width, height, width_west_buf, width_east_buf):
   assert fabric_height >= min_fabric_height
 
   return fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y
-
-def parse_and_get_arguments(run_args, logs_dir):
-  # args, logs_dir = parse_args()
-  # Get params from compile metadata
-  cslc = "cslc"  
-  layout_file = "./src/layout_amg.csl"
-  
-  with open(f"{logs_dir}/out.json", encoding='utf-8') as json_file:
-      compile_data = json.load(json_file)
-  pe_rows = int(compile_data['params']['pe_rows'])
-  pe_cols = int(compile_data['params']['pe_cols'])
-  M = int(compile_data['params']['M'])
-  N = int(compile_data['params']['N'])
-  R_M = int(compile_data['params']['R_M'])
-  R_N = int(compile_data['params']['R_N'])
-  # do check that M should be equal to N, to be square matrix
-  assert M == N, "M should be equal to N, to be square matrix"
-  
-  channels = 1
-  assert channels <= 16, "only support up to 16 I/O channels"
-  assert channels >= 1, "number of I/O channels must be at least 1"
-  width_west_buf = 0
-  width_east_buf = 0
-  fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y = calculate_fabric_dimensions(pe_cols, pe_rows, width_west_buf, width_east_buf)
-
-
-  layout_arguments = CompileCoreArgs(
-      run_args, logs_dir, cslc, pe_cols, pe_rows, M, N, R_M, R_N, layout_file, logs_dir,
-      fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y,  # fabric details
-      run_args.run_only, run_args.arch, channels,
-      width_west_buf, width_east_buf
-  )
-  return layout_arguments
-
-def compile_csl_core(layout_arguments: CompileCoreArgs):
-    
-    args = []
-    args.append(layout_arguments.cslc) # command
-    args.append(layout_arguments.layout_file)
-    args.append(f"--arch={layout_arguments.arch}")
-    args.append(f"--fabric-dims={layout_arguments.fabric_width},{layout_arguments.fabric_height}")
-    args.append(f"--fabric-offsets={layout_arguments.core_fabric_offset_x},{layout_arguments.core_fabric_offset_y}")    
-    args.append(f"--params=pe_rows:{layout_arguments.pe_rows},pe_cols:{layout_arguments.pe_cols},M:{layout_arguments.M},N:{layout_arguments.N},R_M:{layout_arguments.R_M},R_N:{layout_arguments.R_N}")
-    args.append("--memcpy")
-    args.append(f"--channels={layout_arguments.channels}")
-    args.append(f"--width-west-buf={layout_arguments.width_west_buf}")
-    args.append(f"--width-east-buf={layout_arguments.width_east_buf}")
-    args.append("--verbose")
-    args.append(layout_arguments.extra_args)
-    args.append(f"-o={layout_arguments.elf_folder}")
-    
-    print(f"subprocess.check_call(layout_args = {args})")
-    subprocess.check_call(args)
-
  
 def logs(run_args, logs_dir):
 
@@ -158,8 +83,251 @@ def logs(run_args, logs_dir):
                 dest.unlink()
         shutil.move(str(item), str(logs_dir))
 
+def find_total_pes_used(layer_coordinates_map):
+    """
+    Selects the best total PE column and row calculation method 
+    with the simplest logic.
+    """
 
+    # Compute max and sum of layer PE counts
+    sum_pe_cols = sum(layer['layer_pe_cols'] for layer in layer_coordinates_map.values())
+    sum_pe_rows = sum(layer['layer_pe_rows'] for layer in layer_coordinates_map.values())
+    max_pe_cols = max(layer['layer_start_x'] + layer['layer_pe_cols'] for layer in layer_coordinates_map.values())  
+    max_pe_rows = max(layer['layer_start_y'] + layer['layer_pe_rows'] for layer in layer_coordinates_map.values())  
+
+    if abs(sum_pe_cols - max_pe_cols) < abs(sum_pe_rows - max_pe_rows):
+        return sum_pe_cols, max_pe_rows  # sum, max (Row-wise stacking)
+    elif abs(sum_pe_rows - max_pe_rows) < abs(sum_pe_cols - max_pe_cols):
+        return max_pe_cols, sum_pe_rows  # max, sum (Column-wise stacking)
+    else:
+        return sum_pe_cols, sum_pe_rows  # Safe fallback
+      
+def run_command(command):
+    try:
+        result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        print("Command output:", result.stdout)
+        print("Layout compiled successfully.")
+    except subprocess.CalledProcessError as e:
+        print("Error occurred:", e.stderr)
+
+def generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_cols, total_levels, generated_layout_file, run_args):
+    # Mostly doesn't change
+    cslc, layout_file, arch = "cslc", generated_layout_file , "wse2"
+    extra_args = "--max-inlined-iterations=1000000"
+    elf_folder = run_args.elffolder
+    # Can Change based on problem size.
+    channels, width_west_buf, width_east_buf = 1, 0, 0
+    assert channels <= 16, "only support up to 16 I/O channels"
+    assert channels >= 1, "number of I/O channels must be at least 1"    
+    fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y = calculate_fabric_dimensions(total_pe_cols, total_pe_rows, width_west_buf, width_east_buf)
+
+    base_command = f"cslc {layout_file} --arch={arch} --fabric-dims={fabric_width},{fabric_height} --fabric-offsets={core_fabric_offset_x},{core_fabric_offset_y} \\\n"
+    # Extract global parameters
+    global_params = f"--params=total_pe_rows:{total_pe_rows},total_pe_cols:{total_pe_cols},total_levels:{total_levels} \\\n"
+
+    # Extract per-layer parameters from the map
+    layer_params_list = []
+    for key, params in layer_param_map.items():
+        layer_data_shapes = params['layer_data_shapes']
+        layer_coordinates = params['layer_coordinates']
+        layer_params = f"--params=layer_M_{key}:{layer_data_shapes['layer_M']},layer_N_{key}:{layer_data_shapes['layer_N']},layer_R_M_{key}:{layer_data_shapes['layer_R_M']},layer_R_N_{key}:{layer_data_shapes['layer_R_N']},"
+        layer_params += f"layer_start_x_{key}:{layer_coordinates['layer_start_x']},layer_start_y_{key}:{layer_coordinates['layer_start_y']},layer_pe_cols_{key}:{layer_coordinates['layer_pe_cols']},layer_pe_rows_{key}:{layer_coordinates['layer_pe_rows']},"
+        layer_params += f"layer_index_{key}:{params['layer_index']}"
+        layer_params += f" \\\n"
+        layer_params_list.append(layer_params)
+
+    # Combine all layer parameters
+    all_layer_params = " ".join(layer_params_list)
+
+    # Other fixed parameters
+    fixed_params = f"--memcpy --channels={channels} --width-west-buf={width_west_buf} --width-east-buf={width_east_buf} {extra_args} -o {elf_folder}"
+
+    # Construct the final command
+    final_command = f"{base_command} " \
+                    f"{global_params} " \
+                    f"{all_layer_params} " \
+                    f"{fixed_params}"
+                    
+    # create a data structure to store fabric details and return it.
+    fabric_dimensions = [fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y]
+    return final_command, fabric_dimensions
+ 
+def create_layer_param_map(ml, layer_coordinates_input=None):
+  # create a dictionary to store the metadata of each layer
+  layer_params_map = {}
+  layer_coordinates_map = {}  # much smaller map.(User defined or auto-generated)
+  layer_data_shapes_map = {}
+  total_levels = len(ml.levels) - 1
+  
+  # default mapping.
+  if layer_coordinates_input is None:
+    print("Layer coordinates not provided, using default linear placement across columns.")
+    layer_coordinates_input = {
+      i: {
+        "layer_start_x": i,  # default linear placement to right/px
+        "layer_start_y": 0,
+        "layer_pe_cols": 1,  # spread across columns
+        "layer_pe_rows": 1,
+        } for i in range(total_levels)
+    }
     
+  for i in layer_coordinates_input.keys():
+    layer_coordinates_map[i] = layer_coordinates_input[i]
+    # if i not in range(total_levels):
+    #   raise ValueError(f"It looks like layer {i} provided is not in input problem layers(most likely more coordinates than AMG Levels size.)")
+
+  # error checks
+  for i in range(len(layer_coordinates_input)):
+    if layer_coordinates_input[i]['layer_start_x'] < 0:
+      raise ValueError(f"Layer {i} should have positive x coordinate.")
+    if layer_coordinates_input[i]['layer_start_y'] < 0:
+      raise ValueError(f"Layer {i} should have positive y coordinate.")
+    # update the map.
+    
+
+  # AMG problem specific layers.
+  for level_index in range(total_levels):  # not the coarsest level
+    A, R = ml.levels[level_index].A.toarray(), ml.levels[level_index].R.toarray()
+    [M,N] = A.shape
+    [R_M, R_N] = R.shape
+    
+    layer_data_shapes = {
+      "layer_M": M,
+      "layer_N": N,
+      "layer_R_M": R_M,
+      "layer_R_N": R_N,
+    }
+    layer_params = {  # map         # Layer specific data.
+        # problem data.
+        "layer_data_shapes": layer_data_shapes,  # map of shapes of data
+        # layer coordinates
+        "layer_coordinates": layer_coordinates_map[level_index],  # map of coordinates
+        # layer kernel to run(e.g. L1_kernel.csl, L2_kernel.csl, ...)
+        #"layer_kernel": "kernel_amg.csl", # kernel to run on this layer
+        "layer_index": level_index,  # layer index
+    }
+    layer_params_map[level_index] = layer_params
+    layer_data_shapes_map[level_index] = layer_data_shapes
+    
+  return layer_params_map, layer_coordinates_map
+
+def generate_dynamic_layout(run_args, ml, layer_coordinates_map:Optional[dict]=None, filename="images/layer_mapping.png"):
+  # This is a function to generate dynamic layout based on the problem size.
+  
+  # global data regardless of layers.
+  tot_level_minus_one = len(ml.levels) - 1
+  
+  # This is problem specific.
+  layer_param_map, layer_coordinates_map = create_layer_param_map(ml, layer_coordinates_map)
+  total_pe_cols, total_pe_rows = find_total_pes_used(layer_coordinates_map)
+  
+  # generated_layout_file = ut.generate_layout_file_from_template(layer_param_map, run_args, total_pe_cols, total_pe_rows, tot_level_minus_one)
+  generated_layout_file = "./src/layout_amg.csl"
+  
+  print("Precompile disabled, compiling based on problem size.")
+  layout_command, fabric_dimensions = generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_cols, tot_level_minus_one, generated_layout_file, run_args)
+  ut.visualize_layout_with_empty(fabric_dimensions, layer_coordinates_map, layer_param_map, total_pe_cols, total_pe_rows, filename)
+  print("############################################################")
+  print("Generating blueprint layout with :\n")
+  print(layout_command)
+  print("############################################################")
+  run_command(layout_command)
+    
+  if (run_args.compile_only):
+    print("Compilation complete, check the layout. exiting.")
+    exit(0)
+  else:
+    return layer_param_map, layer_coordinates_map
+
+def checkinput(A0, b0, x0, relative_tol, max_iterations):
+  A = copy.deepcopy(A0.toarray())
+  b = copy.deepcopy(b0)
+  x = copy.deepcopy(x0)
+  # Compute the rank and condition number of A
+  rank_A = np.linalg.matrix_rank(A)
+  cond_A = np.linalg.cond(A)
+
+  print("Rank of A:", rank_A)
+  print("Condition Number of A:", cond_A)
+
+  # Solve using spsolve on a CSR version of A
+  A_csr = sp.csr_matrix(A)
+  x_spsolve = spla.spsolve(A_csr, b)
+  residual = np.linalg.norm(A @ x_spsolve - b)
+  
+
+  # Separate iteration counters
+  pyamg_iter = 0
+  pyamg_sa_iter = 0
+  cg_iter = 0
+  def iteration_callback_pyamg(xk):
+      nonlocal pyamg_iter
+      pyamg_iter += 1
+  
+  def iteration_callback_pyamg_sa(xk):
+      nonlocal pyamg_sa_iter
+      pyamg_sa_iter += 1
+
+  def iteration_callback_cg(xk):
+      nonlocal cg_iter
+      cg_iter += 1
+      
+  # setup and solve using pyamg.
+  ml_pyamg = pyamg.ruge_stuben_solver(A_csr)
+  xpyamg = ml_pyamg.solve(b, tol=relative_tol, maxiter=max_iterations, callback=iteration_callback_pyamg)
+  residualpyamg = np.linalg.norm(A @ xpyamg - b)
+
+  
+  iteration_count = 0
+  # solve using smoothed_aggregation_solver from pyamg
+  ml_pyamg_SA = pyamg.smoothed_aggregation_solver(A_csr)
+  xpyamg_SA = ml_pyamg_SA.solve(b, tol=relative_tol, maxiter=max_iterations, callback=iteration_callback_pyamg_sa)
+  residualpyamg_SA = np.linalg.norm(A @ xpyamg_SA - b)
+  
+  
+  # custom smoothed_aggregate_solver with config from amg.py
+  solver_callable_host = amg.scipy_direct_solver
+  ml_custom, setup_config = amg.smooth_aggregate_setup_only(A_csr, x, b, solver=solver_callable_host, max_level=10, max_coarse=2)
+  x_custom = ml_custom.solve(b, x0=x, tol=relative_tol, maxiter=max_iterations)
+  residualcustom = np.linalg.norm(A @ x_custom - b)
+  
+  # custom old amg solver
+  x_otheramg, _ = amg.AMG_only_solve(A_csr, b0=b, x0=x, tol=relative_tol, max_ite=max_iterations, max_levels=10, max_coarse=2, solver=solver_callable_host)      # split into 3 phases
+  residual_otheramg = np.linalg.norm(A @ x_otheramg - b)
+  
+  # do a cg solver from scipy spla.
+  iteration_count = 0
+  x_cg, info = spla.cg(A_csr, b, x0=x, tol=relative_tol, maxiter=max_iterations, callback=iteration_callback_cg)
+  residual_cg = np.linalg.norm(A @ x_cg - b)
+
+  # **Print Iteration Counts & Residuals**
+  print("Residual SPSolve||Ax - b||:", residual)
+  print(f"Residual pyamg RS ||Ax - b||: {residualpyamg} , iterations {pyamg_iter}")
+  print(f"Residual pyamg_SA setup-base=solve-base ||Ax - b||: {residualpyamg_SA} , iterations {pyamg_sa_iter}")
+  print(f"Residual setup-custom=solve-base||Ax - b||: {residualcustom}")
+  print(f"Residual setup-custom=solve-custom ||Ax - b||: {residual_otheramg}")
+  print(f"Residual scipy.cg ||Ax - b||: {residual_cg}, Iterations: {cg_iter}")
+
+def generate_input1(M, N):
+    # A0 = np.arange(M*N, dtype=np.float32).reshape(M, N)  # 2D
+    A0 = np.random.rand(M, N).astype(np.float32)  # Use random values to ensure positive definiteness  
+    A0 = np.dot(A0.T, A0) + 1e-6 * np.eye(A0.shape[1])
+  # ill condition number
+    lambda_reg = 1000  # Adjust this value as needed
+    A0 = A0 + lambda_reg * np.eye(A0.shape[0], dtype=A0.dtype)  
+    A0 = A0.astype(np.float32)
+  
+    x0 = np.full(shape=N*1, fill_value=1.0, dtype=np.float32)  # 1D
+  # b0 = np.zeros(shape=M*1, dtype=np.float32)
+    b0 = np.full(shape=M*1, fill_value=3.0,dtype=np.float32)
+    return A0,x0,b0
+
+def generate_input2(M, N):
+    A = pyamg.gallery.poisson((M, N), dtype=np.float32, format='csr')  # 2D
+    b = np.ones((A.shape[0]))                      # RHS
+    x = np.zeros((A.shape[1]))                      # initial guess
+    return A, x, b
+
 def host_calculations(v_cycle_data):
 
   # unpack v_cycle_data
@@ -408,161 +576,6 @@ def device_calculations(v_cycle_data):
   residual_device = np.linalg.norm(ml.levels[0].A @ x_solution_device - b_solution_device)
   return b_solution_device, x_solution_device, residual_device
 
-def find_total_pes_used(layer_coordinates_map):
-    """
-    Selects the best total PE column and row calculation method 
-    with the simplest logic.
-    """
-
-    # Compute max and sum of layer PE counts
-    sum_pe_cols = sum(layer['layer_pe_cols'] for layer in layer_coordinates_map.values())
-    sum_pe_rows = sum(layer['layer_pe_rows'] for layer in layer_coordinates_map.values())
-    max_pe_cols = max(layer['layer_start_x'] + layer['layer_pe_cols'] for layer in layer_coordinates_map.values())  
-    max_pe_rows = max(layer['layer_start_y'] + layer['layer_pe_rows'] for layer in layer_coordinates_map.values())  
-
-    if abs(sum_pe_cols - max_pe_cols) < abs(sum_pe_rows - max_pe_rows):
-        return sum_pe_cols, max_pe_rows  # sum, max (Row-wise stacking)
-    elif abs(sum_pe_rows - max_pe_rows) < abs(sum_pe_cols - max_pe_cols):
-        return max_pe_cols, sum_pe_rows  # max, sum (Column-wise stacking)
-    else:
-        return sum_pe_cols, sum_pe_rows  # Safe fallback
-      
-def run_command(command):
-    try:
-        result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        print("Command output:", result.stdout)
-        print("Layout compiled successfully.")
-    except subprocess.CalledProcessError as e:
-        print("Error occurred:", e.stderr)
-
-def generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_cols, total_levels, generated_layout_file, run_args):
-    # Mostly doesn't change
-    cslc, layout_file, arch = "cslc", generated_layout_file , "wse2"
-    extra_args = "--max-inlined-iterations=1000000"
-    elf_folder = run_args.elffolder
-    # Can Change based on problem size.
-    channels, width_west_buf, width_east_buf = 1, 0, 0
-    fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y = calculate_fabric_dimensions(total_pe_cols, total_pe_rows, width_west_buf, width_east_buf)
-
-    base_command = f"cslc {layout_file} --arch={arch} --fabric-dims={fabric_width},{fabric_height} --fabric-offsets={core_fabric_offset_x},{core_fabric_offset_y} \\\n"
-    # Extract global parameters
-    global_params = f"--params=total_pe_rows:{total_pe_rows},total_pe_cols:{total_pe_cols},total_levels:{total_levels} \\\n"
-
-    # Extract per-layer parameters from the map
-    layer_params_list = []
-    for key, params in layer_param_map.items():
-        layer_data_shapes = params['layer_data_shapes']
-        layer_coordinates = params['layer_coordinates']
-        layer_params = f"--params=layer_M_{key}:{layer_data_shapes['layer_M']},layer_N_{key}:{layer_data_shapes['layer_N']},layer_R_M_{key}:{layer_data_shapes['layer_R_M']},layer_R_N_{key}:{layer_data_shapes['layer_R_N']},"
-        layer_params += f"layer_start_x_{key}:{layer_coordinates['layer_start_x']},layer_start_y_{key}:{layer_coordinates['layer_start_y']},layer_pe_cols_{key}:{layer_coordinates['layer_pe_cols']},layer_pe_rows_{key}:{layer_coordinates['layer_pe_rows']},"
-        layer_params += f"layer_index_{key}:{params['layer_index']}"
-        layer_params += f" \\\n"
-        layer_params_list.append(layer_params)
-
-    # Combine all layer parameters
-    all_layer_params = " ".join(layer_params_list)
-
-    # Other fixed parameters
-    fixed_params = f"--memcpy --channels={channels} --width-west-buf={width_west_buf} --width-east-buf={width_east_buf} {extra_args} -o {elf_folder}"
-
-    # Construct the final command
-    final_command = f"{base_command} " \
-                    f"{global_params} " \
-                    f"{all_layer_params} " \
-                    f"{fixed_params}"
-                    
-    # create a data structure to store fabric details and return it.
-    fabric_dimensions = [fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y]
-    return final_command, fabric_dimensions
- 
-def create_layer_param_map(ml, layer_coordinates_input=None):
-  # create a dictionary to store the metadata of each layer
-  layer_params_map = {}
-  layer_coordinates_map = {}  # much smaller map.(User defined or auto-generated)
-  layer_data_shapes_map = {}
-  total_levels = len(ml.levels) - 1
-  
-  # default mapping.
-  if layer_coordinates_input is None:
-    print("Layer coordinates not provided, using default linear placement across columns.")
-    layer_coordinates_input = {
-      i: {
-        "layer_start_x": i,  # default linear placement to right/px
-        "layer_start_y": 0,
-        "layer_pe_cols": 1,  # spread across columns
-        "layer_pe_rows": 1,
-        } for i in range(total_levels)
-    }
-    
-  for i in layer_coordinates_input.keys():
-    layer_coordinates_map[i] = layer_coordinates_input[i]
-    # if i not in range(total_levels):
-    #   raise ValueError(f"It looks like layer {i} provided is not in input problem layers(most likely more coordinates than AMG Levels size.)")
-
-  # error checks
-  for i in range(len(layer_coordinates_input)):
-    if layer_coordinates_input[i]['layer_start_x'] < 0:
-      raise ValueError(f"Layer {i} should have positive x coordinate.")
-    if layer_coordinates_input[i]['layer_start_y'] < 0:
-      raise ValueError(f"Layer {i} should have positive y coordinate.")
-    # update the map.
-    
-
-  # AMG problem specific layers.
-  for level_index in range(total_levels):  # not the coarsest level
-    A, R = ml.levels[level_index].A.toarray(), ml.levels[level_index].R.toarray()
-    [M,N] = A.shape
-    [R_M, R_N] = R.shape
-    
-    layer_data_shapes = {
-      "layer_M": M,
-      "layer_N": N,
-      "layer_R_M": R_M,
-      "layer_R_N": R_N,
-    }
-    layer_params = {  # map         # Layer specific data.
-        # problem data.
-        "layer_data_shapes": layer_data_shapes,  # map of shapes of data
-        # layer coordinates
-        "layer_coordinates": layer_coordinates_map[level_index],  # map of coordinates
-        # layer kernel to run(e.g. L1_kernel.csl, L2_kernel.csl, ...)
-        #"layer_kernel": "kernel_amg.csl", # kernel to run on this layer
-        "layer_index": level_index,  # layer index
-    }
-    layer_params_map[level_index] = layer_params
-    layer_data_shapes_map[level_index] = layer_data_shapes
-    
-  return layer_params_map, layer_coordinates_map
-
-def generate_dynamic_layout(run_args, ml, layer_coordinates_map:Optional[dict]=None, filename="images/layer_mapping.png"):
-  # This is a function to generate dynamic layout based on the problem size.
-  
-  # global data regardless of layers.
-  tot_level_minus_one = len(ml.levels) - 1
-  
-  # This is problem specific.
-  layer_param_map, layer_coordinates_map = create_layer_param_map(ml, layer_coordinates_map)
-  total_pe_cols, total_pe_rows = find_total_pes_used(layer_coordinates_map)
-  
-  # generated_layout_file = ut.generate_layout_file_from_template(layer_param_map, run_args, total_pe_cols, total_pe_rows, tot_level_minus_one)
-  generated_layout_file = "./src/layout_amg.csl"
-  
-  print("Precompile disabled, compiling based on problem size.")
-  layout_command, fabric_dimensions = generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_cols, tot_level_minus_one, generated_layout_file, run_args)
-  ut.visualize_layout_with_empty(fabric_dimensions, layer_coordinates_map, layer_param_map, total_pe_cols, total_pe_rows, filename)
-  print("############################################################")
-  print("Generating blueprint layout with :\n")
-  print(layout_command)
-  print("############################################################")
-  run_command(layout_command)
-    
-  if (run_args.compile_only):
-    print("Compilation complete, check the layout. exiting.")
-    exit(0)
-  else:
-    return layer_param_map, layer_coordinates_map
-
-
 def main():
   random.seed(127)
 
@@ -571,86 +584,17 @@ def main():
   print("############################################################")
   N = 7
   M = 7
-  
+  eps = 1.e-2
+  max_iterations = 20
+    
   A0, x0, b0 = generate_input2(M, N)
   A0 = A0.astype(np.float32)
   x0 = x0.astype(np.float32)  # Do this compulsorily to make the data 32bit.
   b0 = b0.astype(np.float32)
   
   nrm_b = np.linalg.norm(b0, 2)
-  eps = 1.e-2
   relative_tol = eps * nrm_b # relative tolerance
-  max_iterations = 20
   
-  def checkinput(A0, b0, x0, relative_tol, max_iterations):
-    A = copy.deepcopy(A0.toarray())
-    b = copy.deepcopy(b0)
-    x = copy.deepcopy(x0)
-    # Compute the rank and condition number of A
-    rank_A = np.linalg.matrix_rank(A)
-    cond_A = np.linalg.cond(A)
-
-    print("Rank of A:", rank_A)
-    print("Condition Number of A:", cond_A)
-
-    # Solve using spsolve on a CSR version of A
-    A_csr = sp.csr_matrix(A)
-    x_spsolve = spla.spsolve(A_csr, b)
-    residual = np.linalg.norm(A @ x_spsolve - b)
-    
-
-    # Separate iteration counters
-    pyamg_iter = 0
-    pyamg_sa_iter = 0
-    cg_iter = 0
-    def iteration_callback_pyamg(xk):
-        nonlocal pyamg_iter
-        pyamg_iter += 1
-    
-    def iteration_callback_pyamg_sa(xk):
-        nonlocal pyamg_sa_iter
-        pyamg_sa_iter += 1
-
-    def iteration_callback_cg(xk):
-        nonlocal cg_iter
-        cg_iter += 1
-        
-    # setup and solve using pyamg.
-    ml_pyamg = pyamg.ruge_stuben_solver(A_csr)
-    xpyamg = ml_pyamg.solve(b, tol=relative_tol, maxiter=max_iterations, callback=iteration_callback_pyamg)
-    residualpyamg = np.linalg.norm(A @ xpyamg - b)
-
-    
-    iteration_count = 0
-    # solve using smoothed_aggregation_solver from pyamg
-    ml_pyamg_SA = pyamg.smoothed_aggregation_solver(A_csr)
-    xpyamg_SA = ml_pyamg_SA.solve(b, tol=relative_tol, maxiter=max_iterations, callback=iteration_callback_pyamg_sa)
-    residualpyamg_SA = np.linalg.norm(A @ xpyamg_SA - b)
-    
-    
-    # custom smoothed_aggregate_solver with config from amg.py
-    solver_callable_host = amg.scipy_direct_solver
-    ml_custom, setup_config = amg.smooth_aggregate_setup_only(A_csr, x, b, solver=solver_callable_host, max_level=10, max_coarse=2)
-    x_custom = ml_custom.solve(b, x0=x, tol=relative_tol, maxiter=max_iterations)
-    residualcustom = np.linalg.norm(A @ x_custom - b)
-    
-    # custom old amg solver
-    x_otheramg, _ = amg.AMG_only_solve(A_csr, b0=b, x0=x, tol=relative_tol, max_ite=max_iterations, max_levels=10, max_coarse=2, solver=solver_callable_host)      # split into 3 phases
-    residual_otheramg = np.linalg.norm(A @ x_otheramg - b)
-    
-    # do a cg solver from scipy spla.
-    iteration_count = 0
-    x_cg, info = spla.cg(A_csr, b, x0=x, tol=relative_tol, maxiter=max_iterations, callback=iteration_callback_cg)
-    residual_cg = np.linalg.norm(A @ x_cg - b)
-
-    # **Print Iteration Counts & Residuals**
-    print("Residual SPSolve||Ax - b||:", residual)
-    print(f"Residual pyamg RS ||Ax - b||: {residualpyamg} , iterations {pyamg_iter}")
-    print(f"Residual pyamg_SA setup-base=solve-base ||Ax - b||: {residualpyamg_SA} , iterations {pyamg_sa_iter}")
-    print(f"Residual setup-custom=solve-base||Ax - b||: {residualcustom}")
-    print(f"Residual setup-custom=solve-custom ||Ax - b||: {residual_otheramg}")
-    print(f"Residual scipy.cg ||Ax - b||: {residual_cg}, Iterations: {cg_iter}")
-        
   checkinput(A0, b0, x0, relative_tol, max_iterations)
 
   # print data
@@ -719,26 +663,6 @@ def main():
   assert np.allclose(b_final_host, b_final_device, atol=1e-6), "b_final of host and device do not match!"
   assert np.allclose(x_final_host, x_final_device, atol=1e-6), "x_final of host and device do not match!"
   print("Results Match!")
-
-def generate_input1(M, N):
-    # A0 = np.arange(M*N, dtype=np.float32).reshape(M, N)  # 2D
-    A0 = np.random.rand(M, N).astype(np.float32)  # Use random values to ensure positive definiteness  
-    A0 = np.dot(A0.T, A0) + 1e-6 * np.eye(A0.shape[1])
-  # ill condition number
-    lambda_reg = 1000  # Adjust this value as needed
-    A0 = A0 + lambda_reg * np.eye(A0.shape[0], dtype=A0.dtype)  
-    A0 = A0.astype(np.float32)
-  
-    x0 = np.full(shape=N*1, fill_value=1.0, dtype=np.float32)  # 1D
-  # b0 = np.zeros(shape=M*1, dtype=np.float32)
-    b0 = np.full(shape=M*1, fill_value=3.0,dtype=np.float32)
-    return A0,x0,b0
-
-def generate_input2(M, N):
-    A = pyamg.gallery.poisson((M, N), dtype=np.float32, format='csr')  # 2D
-    b = np.ones((A.shape[0]))                      # RHS
-    x = np.zeros((A.shape[1]))                      # initial guess
-    return A, x, b
 
 
 if __name__ == "__main__":
