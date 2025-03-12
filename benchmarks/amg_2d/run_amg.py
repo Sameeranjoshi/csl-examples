@@ -99,7 +99,39 @@ def time_logs(h, w, time_memcpy_hwl, time_ref_hwl, is_downward, level_index, ite
     # Update timing data for this level
     timing_map_all_iterations[iteration][direction][level_index] = timing_data_per_layer
 
+  # 1. memory usage per pe.
+  # Calculate memory usage per PE based on array sizes
+
+# The shapes or the data stored on PE might change, this is just a rough estimate.
+def find_max_memory_usage(layer_param_map, layer_coordinates_map):
+    print("\nMemory allocation(max static) per PE:")
+    for level_index in layer_param_map:
+        shapes = layer_param_map[level_index]["layer_data_shapes"]
+        M = shapes["layer_M"]
+        N = shapes["layer_N"] 
+        R_M = shapes["layer_R_M"]
+        R_N = shapes["layer_R_N"]
+        
+        mem_A = M*N*4  # A matrix (float32 = 4 bytes)
+        mem_R = R_M*R_N*4  # R matrix
+        mem_P = R_N*R_M*4  # P matrix
+        mem_x = N*4  # x vector
+        mem_b = M*4  # b vector
+        mem_residual = M*4  # residual vector
+        mem_b_coarse = R_M*4  # b_coarse vector
+        mem_x_coarse = R_M*4  # x_coarse vector
+        
+        total_mem_per_pe = mem_A + mem_R + mem_P + mem_x + mem_b + mem_residual + mem_b_coarse + mem_x_coarse
+        # Used hypersparse memory usage example, 48KB total per WSE-2, 2KB maybe for instructions.
+        assert total_mem_per_pe < 46*1024, "exceed maximum memory capacity (46KB), increase the core rectangle"
+        print(f"Level {level_index}:")
+        print(f"  Per PE max memory: {total_mem_per_pe/1024:.2f} KB")
+        # 2. memory usage per layer.
+        coords = layer_coordinates_map[level_index]
+        num_pes = coords["layer_pe_cols"] * coords["layer_pe_rows"]
+        print(f"  Total memory(wxh): {total_mem_per_pe*num_pes/1024:.2f} KB({coords['layer_pe_cols']}x{coords['layer_pe_rows']})")
     
+            
 def find_total_pes_used(layer_coordinates_map):
     """
     Selects the best total PE column and row calculation method 
@@ -249,7 +281,9 @@ def generate_dynamic_layout(run_args, ml, layer_coordinates_map:Optional[dict]=N
   print(layout_command)
   print("############################################################")
   run_command(layout_command)
-    
+  print("############################################################")
+  find_max_memory_usage(layer_param_map, layer_coordinates_map)
+  print("############################################################")
   if (run_args.compile_only):
     print("Compilation complete, check the layout. exiting.")
     exit(0)
@@ -696,7 +730,7 @@ def main():
   print("Input x_1d Shape:", x0.shape)
   print("Norm of b:", nrm_b)
   print("Relative Tolerance:", relative_tol)
-  ut.visualize_matrix(A0, title="A Matrix", filename="images/A.png")
+  # ut.visualize_matrix(A0, title="A Matrix", filename="images/A.png")
   
   # wrap into a dictionary
   input_data = {
