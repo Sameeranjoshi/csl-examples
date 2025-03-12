@@ -98,8 +98,7 @@ def time_logs(h, w, time_memcpy_hwl, time_ref_hwl, is_downward, level_index, ite
         
     # Update timing data for this level
     timing_map_all_iterations[iteration][direction][level_index] = timing_data_per_layer
-    
-    print(timing_map_all_iterations)
+
     
 def find_total_pes_used(layer_coordinates_map):
     """
@@ -659,8 +658,12 @@ def device_calculations(v_cycle_data):
     b_solution_device, x_solution_device = b_level[0], x_level[0]
     print("After final solver:")
     amg.debugprint(ml.levels, b_level, x_level)
-    # Save timing data to CSV file
-    time_ut.write_timing_data(timing_map_all_iterations, filename="timing_data.csv")
+
+    # Save and analyze timing data
+    print("\nGenerating timing analysis...")
+    df = time_ut.write_timing_data(timing_map_all_iterations, filename="reports/timing_data.csv")
+    # time_ut.analyze_timing_data("reports/timing_data.csv")
+    # print("\nTiming analysis complete. Open timing_report.html to view the results.")
 
     residual_device = np.linalg.norm(ml.levels[0].A @ x_solution_device - b_level[0])
     return b_solution_device, x_solution_device, residual_device

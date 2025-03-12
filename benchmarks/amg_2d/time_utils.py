@@ -1,5 +1,12 @@
 import struct
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from pathlib import Path
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 
 def float_to_hex(f):
@@ -85,14 +92,34 @@ def timing_analysis_2d(height, width, time_memcpy_hwl, time_ref_hwl):
     # Convert cycles to time (850MHz clock)
     time_us = (cycles_total / 0.85) * 1e-3  # Convert to microseconds
     
-    # Optional: Create timing heatmap
-    timing_heatmap = time_end - time_start
     return {
-        'cycles_total': cycles_total,
-        'time_us': time_us,
-        'timing_heatmap': timing_heatmap
+        'cycles': np.mean(cycles_total),
+        'time_us': np.mean(time_us),
+        'time_start': time_start,
+        'time_end': time_end,
+        'time_ref': time_ref
     }
 
+def write_timing_data(timing_map, filename="timing_data.csv"):
+    """Write timing data to CSV file."""
+    rows = []
+    for iteration, direction_data in timing_map.items():
+        for direction, level_data in direction_data.items():
+            for level, timing_data in level_data.items():
+                rows.append({
+                    'Iteration': iteration,
+                    'Direction': direction,
+                    'Level': level,
+                    'Cycles': timing_data['cycles'],
+                    'Time (us)': timing_data['time_us']
+                })
+    
+    df = pd.DataFrame(rows)
+    df.to_csv(filename, index=False)
+    print(f"Timing data written to {filename}")
+    return df
+
+## Experimental all the following functions
 def visualize_timing_heatmap(timing_data, filename='timing_heatmap.png'):
     """
     Visualize timing data as a heatmap
@@ -114,10 +141,139 @@ def visualize_timing_heatmap(timing_data, filename='timing_heatmap.png'):
     plt.savefig(filename)
     plt.close()
     
-def write_timing_data(timing_map_all_iterations, filename='timing_data.csv'):
-    with open(filename, 'w') as f:
-        f.write("Iteration,Direction,Level,Cycles,Time (us)\n")
-        for iteration, vcycle_data in timing_map_all_iterations.items():
-            for direction, level_data in vcycle_data.items():
-                for level_index, timing_data in level_data.items():
-                    f.write(f"{iteration},{direction},{level_index},{timing_data['cycles_total']},{timing_data['time_us']}\n")
+def plot_timing_heatmap(df, output_file="timing_heatmap.html"):
+    """Create an interactive heatmap of execution times across iterations and levels."""
+    pivot_df = df.pivot_table(
+        values='Time (us)', 
+        index=['Iteration', 'Direction'], 
+        columns='Level', 
+        aggfunc='sum'
+    )
+    
+    fig = px.imshow(pivot_df,
+                    labels=dict(x="Level", y="Iteration-Direction", color="Time (μs)"),
+                    title="Execution Time Heatmap",
+                    aspect="auto")
+    
+    fig.write_html(output_file)
+    print(f"Heatmap saved to {output_file}")
+
+def plot_timing_breakdown(df, output_file="timing_breakdown.html"):
+    """Create an interactive stacked bar chart showing timing breakdown per iteration."""
+    fig = px.bar(df, 
+                 x='Iteration', 
+                 y='Time (us)',
+                 color='Direction',
+                 barmode='stack',
+                 title='Timing Breakdown per Iteration',
+                 labels={'Time (us)': 'Time (μs)'})
+    
+    fig.write_html(output_file)
+    print(f"Timing breakdown saved to {output_file}")
+
+def plot_convergence_analysis(df, output_file="convergence_analysis.html"):
+    """Create an interactive line plot showing timing patterns across iterations."""
+    fig = make_subplots(rows=2, cols=1,
+                        subplot_titles=('Total Time per Iteration', 
+                                      'Time Distribution by Level'))
+    
+    # Total time per iteration
+    total_time = df.groupby('Iteration')['Time (us)'].sum()
+    fig.add_trace(
+        go.Scatter(x=total_time.index, y=total_time.values,
+                  mode='lines+markers',
+                  name='Total Time'),
+        row=1, col=1
+    )
+    
+    # Time distribution by level
+    for level in df['Level'].unique():
+        level_data = df[df['Level'] == level].groupby('Iteration')['Time (us)'].sum()
+        fig.add_trace(
+            go.Scatter(x=level_data.index, y=level_data.values,
+                      mode='lines+markers',
+                      name=f'Level {level}'),
+            row=2, col=1
+        )
+    
+    fig.update_layout(height=800, title_text="Convergence Analysis")
+    fig.write_html(output_file)
+    print(f"Convergence analysis saved to {output_file}")
+
+def generate_timing_report(df, output_file="timing_report.html"):
+    """Generate a comprehensive HTML report with all visualizations and statistics."""
+    
+    # Calculate summary statistics
+    total_time = df['Time (us)'].sum()
+    avg_iteration_time = df.groupby('Iteration')['Time (us)'].sum().mean()
+    time_by_direction = df.groupby('Direction')['Time (us)'].sum()
+    time_by_level = df.groupby('Level')['Time (us)'].sum()
+    
+    # Create HTML report
+    html_content = f"""
+    <html>
+    <head>
+        <title>AMG Timing Analysis Report</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; }}
+            .section {{ margin: 20px 0; padding: 20px; border: 1px solid #ddd; }}
+            .stat {{ margin: 10px 0; }}
+            table {{ border-collapse: collapse; width: 100%; }}
+            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+            th {{ background-color: #f2f2f2; }}
+        </style>
+    </head>
+    <body>
+        <h1>AMG Timing Analysis Report</h1>
+        
+        <div class="section">
+            <h2>Summary Statistics</h2>
+            <div class="stat">Total Execution Time: {total_time:.2f} μs ({total_time/1e6:.2f} s)</div>
+            <div class="stat">Average Iteration Time: {avg_iteration_time:.2f} μs</div>
+        </div>
+        
+        <div class="section">
+            <h2>Time Distribution by Direction</h2>
+            <table>
+                <tr><th>Direction</th><th>Time (μs)</th><th>Percentage</th></tr>
+                {''.join(f"<tr><td>{dir}</td><td>{time:.2f}</td><td>{(time/total_time)*100:.1f}%</td></tr>" 
+                        for dir, time in time_by_direction.items())}
+            </table>
+        </div>
+        
+        <div class="section">
+            <h2>Time Distribution by Level</h2>
+            <table>
+                <tr><th>Level</th><th>Time (μs)</th><th>Percentage</th></tr>
+                {''.join(f"<tr><td>{level}</td><td>{time:.2f}</td><td>{(time/total_time)*100:.1f}%</td></tr>"
+                        for level, time in time_by_level.items())}
+            </table>
+        </div>
+        
+        <div class="section">
+            <h2>Visualizations</h2>
+            <iframe src="timing_heatmap.html" width="100%" height="600px"></iframe>
+            <iframe src="timing_breakdown.html" width="100%" height="600px"></iframe>
+            <iframe src="convergence_analysis.html" width="100%" height="800px"></iframe>
+        </div>
+    </body>
+    </html>
+    """
+    
+    with open(output_file, 'w') as f:
+        f.write(html_content)
+    print(f"Comprehensive report saved to {output_file}")
+
+def analyze_timing_data(csv_file="timing_data.csv"):
+    """Main function to generate all visualizations and reports."""
+    df = pd.read_csv(csv_file)
+    
+    # Create visualizations
+    plot_timing_heatmap(df)
+    plot_timing_breakdown(df)
+    plot_convergence_analysis(df)
+    
+    # Generate comprehensive report
+    generate_timing_report(df)
+    
+    return df
