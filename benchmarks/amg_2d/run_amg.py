@@ -1,5 +1,6 @@
 import os
 import argparse
+import time
 from typing import Optional
 from pathlib import Path
 import shutil
@@ -29,6 +30,7 @@ import copy
 import warnings
 
 from mapper_layouts.different_layouts import *
+import time_utils as time_ut
  
 def calculate_fabric_dimensions(width, height, width_west_buf, width_east_buf):
   # fabric-offsets = 1,1
@@ -81,6 +83,24 @@ def logs(run_args, logs_dir):
                 dest.unlink()
         shutil.move(str(item), str(logs_dir))
 
+def time_logs(h, w, time_memcpy_hwl, time_ref_hwl, is_downward, level_index, iteration, timing_map_all_iterations):
+    # Get timing data for this layer
+    timing_data_per_layer = time_ut.timing_analysis_2d(h, w, time_memcpy_hwl, time_ref_hwl)
+    
+    # Store timing data based on direction and level
+    direction = "down" if is_downward else "up"
+    
+    # Initialize iteration and direction if not exists
+    if iteration not in timing_map_all_iterations:
+        timing_map_all_iterations[iteration] = {}
+    if direction not in timing_map_all_iterations[iteration]:
+        timing_map_all_iterations[iteration][direction] = {}
+        
+    # Update timing data for this level
+    timing_map_all_iterations[iteration][direction][level_index] = timing_data_per_layer
+    
+    print(timing_map_all_iterations)
+    
 def find_total_pes_used(layer_coordinates_map):
     """
     Selects the best total PE column and row calculation method 
@@ -235,7 +255,7 @@ def generate_dynamic_layout(run_args, ml, layer_coordinates_map:Optional[dict]=N
     print("Compilation complete, check the layout. exiting.")
     exit(0)
   else:
-    return layer_param_map, layer_coordinates_map
+    return layer_param_map, layer_coordinates_map, total_pe_cols, total_pe_rows
 
 def checkinput(A0, b0, x0, relative_tol, max_iterations):
   A = copy.deepcopy(A0.toarray())
@@ -398,14 +418,26 @@ def device_calculations(v_cycle_data):
     # CREATE DYNAMIC LAYOUT
     ############################################################
     layer_coordinates_map = amg_2_layers
-    layer_param_map, layer_coordinates_map = generate_dynamic_layout(run_args, ml, layer_coordinates_map, filename="images/amg_2_layers.png")
+    layer_param_map, layer_coordinates_map, total_pe_cols, total_pe_rows = generate_dynamic_layout(run_args, ml, layer_coordinates_map, filename="images/amg_2_layers.png")
 
     ############################################################
     # Setup simulator
     ############################################################
     simulator = SdkRuntime(run_args.elffolder, cmaddr=run_args.cmaddr)
+    start = time.time()
     simulator.load()
+    end = time.time()
+    print(f"*** Layout Load done in {end-start}s")
+
     simulator.run()
+    
+    ############################################################
+    # Initialize Hardware Timing
+    ############################################################
+    print("Initializing hardware timing...")
+    print("Step 1: Enable timer")
+    simulator.launch("f_enable_timer", nonblock=False)
+    
     
     ############################################################
     # VARIABLES
@@ -432,7 +464,9 @@ def device_calculations(v_cycle_data):
         'b': simulator.get_id("b"),
         'R': simulator.get_id("R"),
         'x_coarse': simulator.get_id("x_coarse"),
-        'P': simulator.get_id("P")
+        'P': simulator.get_id("P"),
+        'time_buf_u16': simulator.get_id("time_buf_u16"),
+        'time_ref_u16': simulator.get_id("time_ref_u16")
     }
 
     ############################################################
@@ -440,6 +474,7 @@ def device_calculations(v_cycle_data):
     ############################################################
     iteration = 0
     residual = float('inf')
+    timing_map_all_iterations = {}
     while iteration < max_iterations and residual > tol:
         print("\n" + "="*80)
         print(f"║ ITERATION {iteration:3d}")
@@ -540,20 +575,28 @@ def device_calculations(v_cycle_data):
             ############################################################
             # COMPUTE
             ############################################################
+            print("Step 2: Initial sync across PEs in each Layer")
+            # simulator.launch("f_sync_layer", nonblock=False)
+            print("Step 4: Record initial timestamp (tic)")
+            simulator.launch("f_tic", nonblock=True)
+            
+            print("\nComputation:")
             if is_downward:
                 omega = amg.get_omega_from_presmoother(setup_config)
                 iterations = amg.get_iterations_from_presmoother(setup_config)
+                print(f"Launching v_cycle_down with omega={omega}, iterations={iterations}, level_index={level_index}")
+                simulator.launch("v_cycle_down", np.float32(omega), np.int16(iterations), np.int16(level_index), nonblock=False)                
             else:
                 omega = amg.get_omega_from_postsmoother(setup_config)
                 iterations = amg.get_iterations_from_postsmoother(setup_config)
-                
-            print("\nComputation:")
-            print(f"  Smoothing iterations: {iterations}")
-            print(f"  Relaxation factor ω: {omega:.4f}")
-            
-            simulator.launch(f'v_cycle_{phase.lower()}', np.float32(omega), 
-                           np.int16(iterations), np.int16(level_index), nonblock=False)
+                print(f"Launching v_cycle_up with omega={omega}, iterations={iterations}, level_index={level_index}")
+                simulator.launch("v_cycle_up", np.float32(omega), np.int16(iterations), np.int16(level_index), nonblock=False)                
 
+            print("Step 5: toc() records time_end")
+            simulator.launch("f_toc", nonblock=False)
+            print("Step 6: prepare (time_start, time_end)")
+            simulator.launch("f_memcpy_timestamps", nonblock=False)
+            
             ############################################################
             # D2H & UPDATE DATA
             ############################################################
@@ -572,10 +615,27 @@ def device_calculations(v_cycle_data):
                 x_level[level_index] = do_memcpy(symbols['x'], None, px, py, w, h, N*1, is_h2d=False)
 
             ############################################################
+            # TIME TRANSFERS
+            ############################################################
+               
+            print("Step 7: Retrieve timing data")
+            time_memcpy_hwl_1d = np.zeros(w*h*6, np.uint32)
+            simulator.memcpy_d2h(time_memcpy_hwl_1d, symbols['time_buf_u16'], px, py, w, h, 6,
+                streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.ROW_MAJOR, nonblock=False)
+            time_memcpy_hwl = oned_to_hwl_colmajor(h, w, 6, time_memcpy_hwl_1d, np.uint16)
+            
+            time_ref_1d = np.zeros(w*h*3, np.uint32)
+            simulator.memcpy_d2h(time_ref_1d, symbols['time_ref_u16'], px, py, w, h, 3,
+                streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.ROW_MAJOR, nonblock=False)
+            time_ref_hwl = oned_to_hwl_colmajor(h, w, 3, time_ref_1d, np.uint16)
+            
+            ############################################################
             # LOGGING
             ############################################################
             logs(run_args, logs_dir)
-
+            print("\nAnalyzing timing data...")
+            time_logs(h, w, time_memcpy_hwl, time_ref_hwl, is_downward, level_index, iteration, timing_map_all_iterations)
+            
         ############################################################
         # CHECK CONVERGENCE
         ############################################################
@@ -599,6 +659,8 @@ def device_calculations(v_cycle_data):
     b_solution_device, x_solution_device = b_level[0], x_level[0]
     print("After final solver:")
     amg.debugprint(ml.levels, b_level, x_level)
+    # Save timing data to CSV file
+    time_ut.write_timing_data(timing_map_all_iterations, filename="timing_data.csv")
 
     residual_device = np.linalg.norm(ml.levels[0].A @ x_solution_device - b_level[0])
     return b_solution_device, x_solution_device, residual_device

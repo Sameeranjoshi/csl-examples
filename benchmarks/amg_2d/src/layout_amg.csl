@@ -149,10 +149,19 @@ layout {
     // kernels
     @export_name("v_cycle_down", fn(f32, i16, i16)void);
     @export_name("v_cycle_up", fn(f32, i16, i16)void);
+    @export_name("f_enable_timer", fn()void);
+    @export_name("f_tic", fn()void);
+    @export_name("f_toc", fn()void);
+    @export_name("f_memcpy_timestamps", fn()void);
 
     // outputs
     @export_name("residual", [*]f32, false);    // host can't modify residual.
     @export_name("b_coarse", [*]f32, false);    // host can't modify b_coarse.
     @export_name("x_coarse", [*]f32, false);    // host can't modify x_coarse.
+
+    // time variables
+    @export_name("time_buf_u16", [*]u16, true);
+    @export_name("time_ref_u16", [*]u16, true);
+    
 
 } // end of layout
