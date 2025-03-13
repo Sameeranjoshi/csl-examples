@@ -467,9 +467,7 @@ def device_calculations(v_cycle_data):
     ############################################################
     # Initialize Hardware Timing
     ############################################################
-    print("Initializing hardware timing...")
-    print("Step 1: Enable timer")
-    simulator.launch("f_enable_timer", nonblock=False)
+
     
     
     ############################################################
@@ -608,8 +606,12 @@ def device_calculations(v_cycle_data):
             ############################################################
             # COMPUTE
             ############################################################
-            print("Step 2: Initial sync across PEs in each Layer")
-            # simulator.launch("f_sync_layer", nonblock=False)
+            print("Initializing hardware timing...")
+            print("Step 1: Enable timer")
+            simulator.launch("f_enable_timer", nonblock=False)            
+            # print("Step 2: Initial sync across PEs in each Layer")
+            # Might be useful for spatial layout now, for single PE not useful fails.
+            # simulator.launch("f_sync", nonblock=False)
             print("Step 4: Record initial timestamp (tic)")
             simulator.launch("f_tic", nonblock=True)
             
@@ -629,6 +631,8 @@ def device_calculations(v_cycle_data):
             simulator.launch("f_toc", nonblock=False)
             print("Step 6: prepare (time_start, time_end)")
             simulator.launch("f_memcpy_timestamps", nonblock=False)
+            print("step 7: prepare reference clock")
+            simulator.launch("f_reference_timestamps", nonblock=False)
             
             ############################################################
             # D2H & UPDATE DATA

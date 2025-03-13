@@ -53,12 +53,27 @@ const second = [9]i16 { layer_M_1, layer_N_1, layer_R_M_1, layer_R_N_1, layer_st
 // continue for all levels
 
 
+// SYNC MODULE
+const C0 : color = @get_color(0);
+const C1 : color = @get_color(1);
+const C2 : color = @get_color(2);
+const C3 : color = @get_color(3);
+const C4 : color = @get_color(4);
+
+// entrypoints of sync module
+const STARTUP: local_task_id = @get_local_task_id(15);
+const SYNC_Y: local_task_id = @get_local_task_id(16);
+const SYNC_BCAST: local_task_id = @get_local_task_id(17);
+const EXIT: local_task_id = @get_local_task_id(18);
+
+const sync_module = @import_module( "./libraries/sync/layout.csl", .{
+    .colors = [5]color{C0, C1, C2, C3, C4},
+    .entrypoints = [4]local_task_id{STARTUP, SYNC_Y, SYNC_BCAST, EXIT},
+    });
 const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = total_pe_cols,
     .height = total_pe_rows
     });
-const simprint = @import_module("<simprint>");
-
 
 
 layout {
@@ -91,15 +106,17 @@ layout {
         var px_end = px_start + layer_width;
         var py_end = py_start + layer_height;
 
-
+        ////// Layout plotting //////
         var px: i16 = px_start;
         while (px < px_end) : (px += 1) {
             var py: i16 = py_start;  // Reset py for each new px
             const memcpy_params = memcpy.get_params(px);
+            const syncParams = sync_module.get_params(px, py, px_start, py_start, layer_width, layer_height);
 
             while (py < py_end) : (py += 1) {
                 var params: comptime_struct = .{
                     .memcpy_params = memcpy_params,
+                    .sync_params = syncParams,
                     .M = M,
                     .N = N,
                     .R_M = R_M,
@@ -150,10 +167,11 @@ layout {
     @export_name("v_cycle_down", fn(f32, i16, i16)void);
     @export_name("v_cycle_up", fn(f32, i16, i16)void);
     @export_name("f_enable_timer", fn()void);
+    @export_name("f_sync", fn()void);
     @export_name("f_tic", fn()void);
     @export_name("f_toc", fn()void);
     @export_name("f_memcpy_timestamps", fn()void);
-
+    @export_name("f_reference_timestamps", fn()void);
     // outputs
     @export_name("residual", [*]f32, false);    // host can't modify residual.
     @export_name("b_coarse", [*]f32, false);    // host can't modify b_coarse.

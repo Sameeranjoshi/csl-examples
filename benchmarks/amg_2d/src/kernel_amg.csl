@@ -15,6 +15,7 @@
 // params
 ////////////////////////////////////////
 param memcpy_params: comptime_struct;
+param sync_params: comptime_struct;
 param M: i16;   // Matrix rows
 param N: i16;   // Matrix columns  
 param R_M: i16; // Restriction matrix rows
@@ -78,6 +79,11 @@ var ptr_time_ref_u16: [*]u16 = &time_ref_u16;
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 const simprint = @import_module("<simprint>", .{ .enable = false });
 const timestamp = @import_module("<time>");
+const sync_mod = @import_module( "./libraries/sync/pe.csl", @concat_structs(sync_params, .{
+     .f_callback = sys_mod.unblock_cmd_stream,
+     .input_queues=[3]u16{2, 3, 4},
+     .output_queues=[3]u16{2, 3, 4},
+     }));
 
 ////////////////////////////////////////
 // Functions
@@ -87,6 +93,12 @@ fn f_enable_timer() void {
     timestamp.enable_tsc();
     // the user must unblock cmd color for every PE
     sys_mod.unblock_cmd_stream();
+}
+
+fn f_sync() void {
+    // sync all PEs and record the reference clock
+    sync_mod.f_sync();
+
 }
 
 fn f_tic() void {
@@ -117,7 +129,15 @@ fn f_memcpy_timestamps() void {
     sys_mod.unblock_cmd_stream();
 }
 
-// Use for debugging purposes.
+fn f_reference_timestamps() void {
+    time_ref_u16[0] = sync_mod.tscRefBuffer[0];
+    time_ref_u16[1] = sync_mod.tscRefBuffer[1];
+    time_ref_u16[2] = sync_mod.tscRefBuffer[2];
+
+    // the user must unblock cmd color for every PE
+    sys_mod.unblock_cmd_stream();
+}
+
 fn initialize(current_level:i16) void {
 
     if (current_level == layer_index){
@@ -239,9 +259,11 @@ comptime {
     @export_symbol(v_cycle_down);
     @export_symbol(v_cycle_up);
     @export_symbol(f_enable_timer);
+    @export_symbol(f_sync);
     @export_symbol(f_tic);
     @export_symbol(f_toc);
     @export_symbol(f_memcpy_timestamps);
+    @export_symbol(f_reference_timestamps);
 
     // Export symbol pointing to y so it is host-readable
     @export_symbol(residual_ptr, "residual");
