@@ -22,7 +22,7 @@
 //   3 c2d_y_color_1   12 compute          21 reserved (memcpy) 30 reserved (memcpy)
 //   4                 13 gather_result    22 reserved (memcpy) 31 reserved
 //   5                 14 c2d_x_entrypt_0  23 reserved (memcpy) 32
-//   6                 15 c2d_x_entrypt_1  24                   33
+//   6                 15 c2d_x_entrypt_1  24 broadcast_residual  33
 //   7                 16 c2d_y_entrypt_0  25                   34
 //   8                 17 c2d_y_entrypt_1  26                   35
 
@@ -55,6 +55,8 @@ const gather_result_task_id:    local_task_id = @get_local_task_id(13);
 const restrict_compute_task_id: local_task_id = @get_local_task_id(18);
 const scatter_residual_task_id: local_task_id = @get_local_task_id(19);
 const gather_b_next_task_id:     local_task_id = @get_local_task_id(20);
+const broadcast_residual_task_id: local_task_id = @get_local_task_id(24);
+
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 // The default values of queue IDs and DSR IDs of collectives_2d are applied implicitly.
 // See mpi_x and mpi_y of gemm-collectives_2d/pe.csl for default values of queue and DSR IDs.
@@ -158,14 +160,24 @@ task gather_result() void {
   if (px == 0) {
     @fsubs(dsd_row_sum, dsd_b_tile, dsd_row_sum); // r = b - ax
   }
-  // bring into first PE.
+  // bring into top-left PE.
   mpi_y.gather(0, @ptrcast([*]u32, &row_sum), @ptrcast([*]u32, &residual),
                M_local, scatter_residual_task_id);
 }
 
+
 task scatter_residual() void {
-  mpi_x.scatter(0, @ptrcast([*]u32, &residual), @ptrcast([*]u32, &residual_tile),
-               M_local, restrict_compute_task_id);  
+  if (py == 0) {
+    mpi_x.scatter(0, @ptrcast([*]u32, &residual), @ptrcast([*]u32, &residual_tile),
+               M_local, broadcast_residual_task_id);  
+  } else {
+    @activate(broadcast_residual_task_id);
+  }
+}
+
+// Broadcast tiles of `residual` down the columns of PEs
+task broadcast_residual() void {
+  mpi_y.broadcast(0, @ptrcast([*]u32, &residual_tile), R_N_local, restrict_compute_task_id);
 }
 
 task restrict_compute() void {
@@ -180,6 +192,7 @@ task restrict_compute() void {
 
   mpi_x.reduce_fadds(layer_kernel_cols-1, @ptrcast([*]f32, &local_prod_R), @ptrcast([*]f32, &row_sum_R),
                      R_M_local, gather_b_next_task_id); // reduce across rows towards left
+
 }
 
 // Gather the product into the top left PE
@@ -199,6 +212,7 @@ comptime {
   @bind_local_task(compute, compute_task_id);
   @bind_local_task(gather_result, gather_result_task_id);
   @bind_local_task(scatter_residual, scatter_residual_task_id);
+  @bind_local_task(broadcast_residual, broadcast_residual_task_id);
   @bind_local_task(restrict_compute, restrict_compute_task_id);
   @bind_local_task(gather_b_next, gather_b_next_task_id);
   @bind_local_task(f_exit, EXIT);
