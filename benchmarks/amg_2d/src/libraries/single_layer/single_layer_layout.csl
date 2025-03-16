@@ -29,6 +29,8 @@
 
 param layer_rows_A : i16; // Height of matrix
 param layer_cols_A : i16; // Width of matrix
+param layer_rows_R : i16; // Height of matrix R
+param layer_cols_R : i16; // Width of matrix R
 param layer_start_x: i16; // start x of the layer
 param layer_start_y: i16; // start y of the layer
 param layer_kernel_rows : i16; // Height of kernel
@@ -50,11 +52,21 @@ comptime {
 
   // Number of matrix cols must be multiple of kernel rectangle width
   @comptime_assert(layer_cols_A % layer_kernel_cols == 0);
+
+  // at least R_N should be same as A_M
+  @comptime_assert(layer_cols_R == layer_rows_A);
+
+  // If we do this this becomes a GMG with a very structured lowering, 
+  // keep for now.
+  @comptime_assert(layer_rows_R % layer_kernel_rows == 0);
+  @comptime_assert(layer_cols_R % layer_kernel_cols == 0);
 }
 
 // Local matrix dimensions
 const LOCAL_rows_A: i16 = layer_rows_A / layer_kernel_rows; // Number of rows per PE
 const LOCAL_cols_A: i16 = layer_cols_A / layer_kernel_cols; // Number of columns per PE
+const LOCAL_rows_R: i16 = layer_rows_R / layer_kernel_rows; // Number of rows per PE
+const LOCAL_cols_R: i16 = layer_cols_R / layer_kernel_cols; // Number of columns per PE
 const layer_end_x: i16 = layer_start_x + layer_kernel_cols; // end x of the layer
 const layer_end_y: i16 = layer_start_y + layer_kernel_rows; // end y of the layer
 
@@ -88,6 +100,8 @@ layout {
         .N = layer_cols_A,
         .M_local = LOCAL_rows_A,
         .N_local = LOCAL_cols_A,
+        .R_M_local = LOCAL_rows_R,
+        .R_N_local = LOCAL_cols_R,
         .layer_start_x = layer_start_x,
         .layer_start_y = layer_start_y,
         .layer_end_x = layer_end_x,
@@ -107,8 +121,10 @@ layout {
 
   // export symbol names
   @export_name("A", [*]f32, true);
+  @export_name("R", [*]f32, true);
   @export_name("x", [*]f32, true);
   @export_name("b", [*]f32, true);
   @export_name("y", [*]f32, true);
   @export_name("main", fn()void);
+  @export_name("b_next", [*]f32, true);
 }

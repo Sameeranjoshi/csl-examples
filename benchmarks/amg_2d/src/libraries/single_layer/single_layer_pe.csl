@@ -16,9 +16,9 @@
 // color/ task ID map
 //
 //  ID var             ID var              ID var               ID var
-//   0 c2d_x_color_0    9 EXIT             18                   27 reserved (memcpy)
-//   1 c2d_x_color_1   10 scatter_x        19                   28 reserved (memcpy)
-//   2 c2d_y_color_0   11 broadcast_x_down 20                   29 reserved
+//   0 c2d_x_color_0    9 EXIT             18 scatter_residual  27 reserved (memcpy)
+//   1 c2d_x_color_1   10 scatter_x        19 restrict_compute  28 reserved (memcpy)
+//   2 c2d_y_color_0   11 broadcast_x_down 20 gather_b_next     29 reserved (memcpy)
 //   3 c2d_y_color_1   12 compute          21 reserved (memcpy) 30 reserved (memcpy)
 //   4                 13 gather_result    22 reserved (memcpy) 31 reserved
 //   5                 14 c2d_x_entrypt_0  23 reserved (memcpy) 32
@@ -36,6 +36,8 @@ const M: i16 = layer_params.M; // Height of local matrix, or num rows per PE
 const N: i16 = layer_params.N; // Width of local matrix, or num cols per PE
 const M_local: i16 = layer_params.M_local; // Height of local matrix, or num rows per PE
 const N_local: i16 = layer_params.N_local; // Width of local matrix, or num cols per PE
+const R_M_local: i16 = layer_params.R_M_local; // Height of local matrix, or num rows per PE
+const R_N_local: i16 = layer_params.R_N_local; // Width of local matrix, or num cols per PE
 const layer_start_x: i16 = layer_params.layer_start_x;
 const layer_start_y: i16 = layer_params.layer_start_y;
 const layer_end_x: i16 = layer_params.layer_end_x;
@@ -50,7 +52,9 @@ const scatter_x_task_id:        local_task_id = @get_local_task_id(10);
 const broadcast_x_down_task_id: local_task_id = @get_local_task_id(11);
 const compute_task_id:          local_task_id = @get_local_task_id(12);
 const gather_result_task_id:    local_task_id = @get_local_task_id(13);
-
+const restrict_compute_task_id: local_task_id = @get_local_task_id(18);
+const scatter_residual_task_id: local_task_id = @get_local_task_id(19);
+const gather_b_next_task_id:     local_task_id = @get_local_task_id(20);
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 // The default values of queue IDs and DSR IDs of collectives_2d are applied implicitly.
 // See mpi_x and mpi_y of gemm-collectives_2d/pe.csl for default values of queue and DSR IDs.
@@ -71,25 +75,32 @@ var x_tile = @zeros([N_local]f32);
 // The tile of `b` which will be scattered across PEs received in `scatter_b()`
 var b_tile = @zeros([M_local]f32);
 // The product of `A_tile` with `x_tile` (computed by the `compute()` task)
-var local_prod = @zeros([M_local]f32);
+var local_prod = @zeros([M_local]f32);  // ax
 // The sum of products across a row of PEs
 var row_sum = @zeros([M_local]f32);
-// The final result is stored on PE (layer_kernel_cols-1, layer_kernel_rows-1)
-var final_result = @zeros([M_local * layer_kernel_rows]f32);
-
+// The final result is stored on PE (0,0)
+var residual = @zeros([M_local * layer_kernel_rows]f32);
+var residual_tile = @zeros([M_local]f32);
+var R_tile = @zeros([R_M_local*R_N_local]f32);
+var local_prod_R = @zeros([R_M_local]f32);
+var row_sum_R = @zeros([R_M_local]f32);
+var b_next = @zeros([R_M_local * layer_kernel_rows]f32);
 
 // DSDs
 const dsd_A_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*@as(i16, N_local)] }); // 1 row of A_tile
+const dsd_R_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> R_tile[i*@as(i16, R_N_local)] }); // 1 row of R_tile
 const dsd_x_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N_local} -> x_tile[i]});
 const dsd_b_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> b_tile[i]});
+const dsd_row_sum = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> row_sum[i]});
 const dsd_local_prod = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> local_prod[i]});
-
+const dsd_local_prod_R = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> local_prod_R[i]});
 // Pointers and advertised outside
-var ptr_y : [*]f32 = &final_result;
+var ptr_y : [*]f32 = &residual;
 var ptr_x : [*]f32 = &x_src;
 var ptr_b : [*]f32 = &b_src;
 var ptr_A : [*]f32 = &A_tile;
-
+var ptr_R : [*]f32 = &R_tile;
+var ptr_b_next : [*]f32 = &b_next;
 
 // temp variables
 // Updated at runtime to store x and y IDs of PE reported by collectives library
@@ -106,7 +117,7 @@ fn main() void {
 
   if (px == 0) {
     mpi_y.scatter(0, @ptrcast([*]u32, &b_src), @ptrcast([*]u32, &b_tile),
-                  M, scatter_x_task_id);
+                  M_local, scatter_x_task_id);
   } else {
     @activate(scatter_x_task_id);
   }
@@ -116,7 +127,7 @@ fn main() void {
 task scatter_x() void {
   if (py == 0) {
     mpi_x.scatter(0, @ptrcast([*]u32, &x_src), @ptrcast([*]u32, &x_tile),
-                  N, broadcast_x_down_task_id);
+                  N_local, broadcast_x_down_task_id);
   } else {
     @activate(broadcast_x_down_task_id);
   }
@@ -124,31 +135,58 @@ task scatter_x() void {
 
 // Broadcast tiles of `x` down the columns of PEs
 task broadcast_x_down() void {
-  mpi_y.broadcast(0, @ptrcast([*]u32, &x_tile), N, compute_task_id);
+  mpi_y.broadcast(0, @ptrcast([*]u32, &x_tile), N_local, compute_task_id);
 }
 
 // Compute the product of the local `x_tile` with the local `A_tile`,
 // then reduce it across rows of PEs
 task compute() void {
 
-  for (@range(i16, N)) |j| {
+  for (@range(i16, N_local)) |j| {
     // offset dsd_A_tile to the corresponding column of A_tile
     const dsd_A_offset = @increment_dsd_offset(dsd_A_tile, j, f32);
     @fmacs(dsd_local_prod, dsd_local_prod, dsd_A_offset, x_tile[j]);
   }
 
-  if (px == 0) {
-    @fadds(dsd_local_prod, dsd_local_prod, dsd_b_tile);
-  }
+  mpi_x.reduce_fadds(0, @ptrcast([*]f32, &local_prod), @ptrcast([*]f32, &row_sum),
+                     M_local, gather_result_task_id); // reduce across rows towards left
 
-  mpi_x.reduce_fadds(layer_kernel_cols - 1, @ptrcast([*]f32, &local_prod), @ptrcast([*]f32, &row_sum),
-                     M, gather_result_task_id);
 }
 
-// Gather the product into the bottom right PE
+// Gather the product into the top left PE
 task gather_result() void {
-  mpi_y.gather(layer_kernel_rows - 1, @ptrcast([*]u32, &row_sum), @ptrcast([*]u32, &final_result),
-               M, EXIT);
+  if (px == 0) {
+    @fsubs(dsd_row_sum, dsd_b_tile, dsd_row_sum); // r = b - ax
+  }
+  // bring into first PE.
+  mpi_y.gather(0, @ptrcast([*]u32, &row_sum), @ptrcast([*]u32, &residual),
+               M_local, scatter_residual_task_id);
+}
+
+task scatter_residual() void {
+  mpi_x.scatter(0, @ptrcast([*]u32, &residual), @ptrcast([*]u32, &residual_tile),
+               M_local, restrict_compute_task_id);  
+}
+
+task restrict_compute() void {
+
+  // // TODO: Implement the restrict operator
+  // // implement like the compute() but only on R instead of A.
+  for (@range(i16, R_N_local)) |j| {
+    // offset dsd_R_tile to the corresponding column of R_tile
+    const dsd_R_offset = @increment_dsd_offset(dsd_R_tile, j, f32);
+    @fmacs(dsd_local_prod_R, dsd_local_prod_R, dsd_R_offset, residual_tile[j]);
+  }
+
+  mpi_x.reduce_fadds(layer_kernel_cols-1, @ptrcast([*]f32, &local_prod_R), @ptrcast([*]f32, &row_sum_R),
+                     R_M_local, gather_b_next_task_id); // reduce across rows towards left
+}
+
+// Gather the product into the top left PE
+task gather_b_next() void {
+  // bring into top rightmost PE.
+  mpi_y.gather(0, @ptrcast([*]u32, &row_sum_R), @ptrcast([*]u32, &b_next),
+               R_M_local, EXIT);
 }
 
 task f_exit() void {
@@ -160,11 +198,16 @@ comptime {
   @bind_local_task(broadcast_x_down, broadcast_x_down_task_id);
   @bind_local_task(compute, compute_task_id);
   @bind_local_task(gather_result, gather_result_task_id);
+  @bind_local_task(scatter_residual, scatter_residual_task_id);
+  @bind_local_task(restrict_compute, restrict_compute_task_id);
+  @bind_local_task(gather_b_next, gather_b_next_task_id);
   @bind_local_task(f_exit, EXIT);
 
   @export_symbol(ptr_A, "A");
   @export_symbol(ptr_x, "x");
   @export_symbol(ptr_b, "b");
   @export_symbol(ptr_y, "y");
+  @export_symbol(ptr_R, "R");
+  @export_symbol(ptr_b_next, "b_next");
   @export_symbol(main);
 }
