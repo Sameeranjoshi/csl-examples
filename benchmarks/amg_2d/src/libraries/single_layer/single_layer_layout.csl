@@ -31,8 +31,8 @@ param layer_rows_A : i16; // Height of matrix
 param layer_cols_A : i16; // Width of matrix
 param layer_start_x: i16; // start x of the layer
 param layer_start_y: i16; // start y of the layer
-param kernel_rows : i16; // Height of kernel
-param kernel_cols : i16; // Width of kernel
+param layer_kernel_rows : i16; // Height of kernel
+param layer_kernel_cols : i16; // Width of kernel
 param layer_index: i16; // index of the layer
 // LAYER (Other way - This can be @import_comptime_value)
 // param layer_M: i16;       // A shape parameters here
@@ -46,29 +46,28 @@ param layer_index: i16; // index of the layer
 
 comptime {
   // Number of matrix rows must be multiple of kernel rectangle height
-  @comptime_assert(layer_rows_A % kernel_rows == 0);
+  @comptime_assert(layer_rows_A % layer_kernel_rows == 0);
 
   // Number of matrix cols must be multiple of kernel rectangle width
-  @comptime_assert(layer_cols_A % kernel_cols == 0);
+  @comptime_assert(layer_cols_A % layer_kernel_cols == 0);
 }
 
 // Local matrix dimensions
-const LOCAL_rows_A: i16 = layer_rows_A / kernel_rows; // Number of rows per PE
-const LOCAL_cols_A: i16 = layer_cols_A / kernel_cols; // Number of columns per PE
-const layer_end_x: i16 = layer_start_x + kernel_cols; // end x of the layer
-const layer_end_y: i16 = layer_start_y + kernel_rows; // end y of the layer
-
+const LOCAL_rows_A: i16 = layer_rows_A / layer_kernel_rows; // Number of rows per PE
+const LOCAL_cols_A: i16 = layer_cols_A / layer_kernel_cols; // Number of columns per PE
+const layer_end_x: i16 = layer_start_x + layer_kernel_cols; // end x of the layer
+const layer_end_y: i16 = layer_start_y + layer_kernel_rows; // end y of the layer
 
 const memcpy = @import_module( "<memcpy/get_params>", .{
-    .width = kernel_cols,
-    .height = kernel_rows
+    .width = layer_kernel_cols,
+    .height = layer_kernel_rows
 });
 
 
 const c2d = @import_module("<collectives_2d/params>");
 
 layout {
-  @set_rectangle(kernel_cols, kernel_rows);
+  @set_rectangle(layer_kernel_cols, layer_kernel_rows);
 
   var Px_end: u16 = layer_end_x;
   var Py_end: u16 = layer_end_y;
@@ -85,16 +84,16 @@ layout {
         .y_entrypoints = .{ @get_local_task_id(16), @get_local_task_id(17) },
       });
       var layer_params: comptime_struct = .{        
-        .layer_rows_A = layer_rows_A,
-        .layer_cols_A = layer_cols_A,
-        .LOCAL_rows_A = LOCAL_rows_A,
-        .LOCAL_cols_A = LOCAL_cols_A,
+        .M = layer_rows_A,
+        .N = layer_cols_A,
+        .M_local = LOCAL_rows_A,
+        .N_local = LOCAL_cols_A,
         .layer_start_x = layer_start_x,
         .layer_start_y = layer_start_y,
         .layer_end_x = layer_end_x,
         .layer_end_y = layer_end_y,
-        .kernel_rows = kernel_rows,
-        .kernel_cols = kernel_cols,
+        .layer_kernel_rows = layer_kernel_rows,
+        .layer_kernel_cols = layer_kernel_cols,
         .layer_index = layer_index,
       };
 

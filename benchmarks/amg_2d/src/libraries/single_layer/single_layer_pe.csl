@@ -26,19 +26,22 @@
 //   7                 16 c2d_y_entrypt_0  25                   34
 //   8                 17 c2d_y_entrypt_1  26                   35
 
+// params
 param memcpy_params: comptime_struct;
 param c2d_params: comptime_struct;
 param layer_params: comptime_struct;
 
 
-const Mt: i16 = layer_params.LOCAL_rows_A; // Height of local matrix, or num rows per PE
-const Nt: i16 = layer_params.LOCAL_cols_A; // Width of local matrix, or num cols per PE
+const M: i16 = layer_params.M; // Height of local matrix, or num rows per PE
+const N: i16 = layer_params.N; // Width of local matrix, or num cols per PE
+const M_local: i16 = layer_params.M_local; // Height of local matrix, or num rows per PE
+const N_local: i16 = layer_params.N_local; // Width of local matrix, or num cols per PE
 const layer_start_x: i16 = layer_params.layer_start_x;
 const layer_start_y: i16 = layer_params.layer_start_y;
 const layer_end_x: i16 = layer_params.layer_end_x;
 const layer_end_y: i16 = layer_params.layer_end_y;
-const kernel_rows: i16 = layer_params.kernel_rows;
-const kernel_cols: i16 = layer_params.kernel_cols;
+const layer_kernel_rows: i16 = layer_params.layer_kernel_rows;
+const layer_kernel_cols: i16 = layer_params.layer_kernel_cols;
 const layer_index: i16 = layer_params.layer_index;
 
 // Task IDs
@@ -49,49 +52,46 @@ const compute_task_id:          local_task_id = @get_local_task_id(12);
 const gather_result_task_id:    local_task_id = @get_local_task_id(13);
 
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
-
 // The default values of queue IDs and DSR IDs of collectives_2d are applied implicitly.
 // See mpi_x and mpi_y of gemm-collectives_2d/pe.csl for default values of queue and DSR IDs.
 const mpi_x = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.x });
 const mpi_y = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.y });
 
-// Size of rectangle of PEs on which our kernel runs
-const Pw = @get_rectangle().width;  // Num cols of PEs in kernel
-const Ph = @get_rectangle().height; // Num rows of PEs in kernel
 
-// Only PE (0,0) will be initialized by run.py with a full copy of `x`
-var x_src = @zeros([Nt * Pw]f32);
-var ptr_x : [*]f32 = &x_src;
 
+// Only PE (0,0) will be initialized by run.py with a full copy of `x`, other PEs will be empty?
+var x_src = @zeros([N_local * layer_kernel_cols]f32);
 // Only PE (0,0) will be initialized by run.py with a full copy of `b`
-var b_src = @zeros([Mt * Ph]f32);
-var ptr_b : [*]f32 = &b_src;
-
+var b_src = @zeros([M_local * layer_kernel_rows]f32);
 // Each PE has its own tile of `A` initialized by run.py
-var A_tile = @zeros([Mt*Nt]f32);
-const dsd_A_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Mt} -> A_tile[i*@as(i16, Nt)] });
-var ptr_A : [*]f32 = &A_tile;
-
+var A_tile = @zeros([M_local*N_local]f32);
 // The tile of `x` which will be scattered across PEs received in `scatter_x()`
 // or received in `broadcast_x_down()`
-var x_tile = @zeros([Nt]f32);
-const dsd_x_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Nt} -> x_tile[i]});
-
+var x_tile = @zeros([N_local]f32);
 // The tile of `b` which will be scattered across PEs received in `scatter_b()`
-var b_tile = @zeros([Mt]f32);
-const dsd_b_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Mt} -> b_tile[i]});
-
+var b_tile = @zeros([M_local]f32);
 // The product of `A_tile` with `x_tile` (computed by the `compute()` task)
-var local_prod = @zeros([Mt]f32);
-const dsd_local_prod = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Mt} -> local_prod[i]});
-
+var local_prod = @zeros([M_local]f32);
 // The sum of products across a row of PEs
-var row_sum = @zeros([Mt]f32);
+var row_sum = @zeros([M_local]f32);
+// The final result is stored on PE (layer_kernel_cols-1, layer_kernel_rows-1)
+var final_result = @zeros([M_local * layer_kernel_rows]f32);
 
-// The final result is stored on PE (Pw-1, Ph-1)
-var final_result = @zeros([Mt * Ph]f32);
+
+// DSDs
+const dsd_A_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*@as(i16, N_local)] }); // 1 row of A_tile
+const dsd_x_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N_local} -> x_tile[i]});
+const dsd_b_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> b_tile[i]});
+const dsd_local_prod = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> local_prod[i]});
+
+// Pointers and advertised outside
 var ptr_y : [*]f32 = &final_result;
+var ptr_x : [*]f32 = &x_src;
+var ptr_b : [*]f32 = &b_src;
+var ptr_A : [*]f32 = &A_tile;
 
+
+// temp variables
 // Updated at runtime to store x and y IDs of PE reported by collectives library
 var px: u16;
 var py: u16;
@@ -106,7 +106,7 @@ fn main() void {
 
   if (px == 0) {
     mpi_y.scatter(0, @ptrcast([*]u32, &b_src), @ptrcast([*]u32, &b_tile),
-                  Mt, scatter_x_task_id);
+                  M, scatter_x_task_id);
   } else {
     @activate(scatter_x_task_id);
   }
@@ -116,7 +116,7 @@ fn main() void {
 task scatter_x() void {
   if (py == 0) {
     mpi_x.scatter(0, @ptrcast([*]u32, &x_src), @ptrcast([*]u32, &x_tile),
-                  Nt, broadcast_x_down_task_id);
+                  N, broadcast_x_down_task_id);
   } else {
     @activate(broadcast_x_down_task_id);
   }
@@ -124,14 +124,14 @@ task scatter_x() void {
 
 // Broadcast tiles of `x` down the columns of PEs
 task broadcast_x_down() void {
-  mpi_y.broadcast(0, @ptrcast([*]u32, &x_tile), Nt, compute_task_id);
+  mpi_y.broadcast(0, @ptrcast([*]u32, &x_tile), N, compute_task_id);
 }
 
 // Compute the product of the local `x_tile` with the local `A_tile`,
 // then reduce it across rows of PEs
 task compute() void {
 
-  for (@range(i16, Nt)) |j| {
+  for (@range(i16, N)) |j| {
     // offset dsd_A_tile to the corresponding column of A_tile
     const dsd_A_offset = @increment_dsd_offset(dsd_A_tile, j, f32);
     @fmacs(dsd_local_prod, dsd_local_prod, dsd_A_offset, x_tile[j]);
@@ -141,14 +141,14 @@ task compute() void {
     @fadds(dsd_local_prod, dsd_local_prod, dsd_b_tile);
   }
 
-  mpi_x.reduce_fadds(Pw - 1, @ptrcast([*]f32, &local_prod), @ptrcast([*]f32, &row_sum),
-                     Mt, gather_result_task_id);
+  mpi_x.reduce_fadds(layer_kernel_cols - 1, @ptrcast([*]f32, &local_prod), @ptrcast([*]f32, &row_sum),
+                     M, gather_result_task_id);
 }
 
 // Gather the product into the bottom right PE
 task gather_result() void {
-  mpi_y.gather(Ph - 1, @ptrcast([*]u32, &row_sum), @ptrcast([*]u32, &final_result),
-               Mt, EXIT);
+  mpi_y.gather(layer_kernel_rows - 1, @ptrcast([*]u32, &row_sum), @ptrcast([*]u32, &final_result),
+               M, EXIT);
 }
 
 task f_exit() void {
