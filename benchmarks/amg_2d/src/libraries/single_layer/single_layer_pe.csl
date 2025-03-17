@@ -109,6 +109,13 @@ var ptr_b_next : [*]f32 = &b_next;
 var px: u16;
 var py: u16;
 
+fn compute_mv_per_tile(N_tile: i16, dsd_mv_tile: anytype, dsd_matrix_tile: anytype, vector_tile_data: [*]const f32) void {
+  for (@range(i16, N_tile)) |j| {
+    const dsd_offset = @increment_dsd_offset(dsd_matrix_tile, j, f32);
+    @fmacs(dsd_mv_tile, dsd_mv_tile, dsd_offset, vector_tile_data[j]);
+  }
+}
+
 // Entrypoint into kernel
 // PE (0,0) scatters `b` into tiles across the left column of PEs
 fn main() void {
@@ -143,13 +150,8 @@ task broadcast_x_down() void {
 // Compute the product of the local `x_tile` with the local `A_tile`,
 // then reduce it across rows of PEs
 task compute() void {
-
-  for (@range(i16, N_local)) |j| {
-    // offset dsd_A_tile to the corresponding column of A_tile
-    const dsd_A_offset = @increment_dsd_offset(dsd_A_tile, j, f32);
-    @fmacs(dsd_local_prod, dsd_local_prod, dsd_A_offset, x_tile[j]);
-  }
-
+  // (vector_size, ax, A, x) // ax = A*x
+  compute_mv_per_tile(N_local, dsd_local_prod, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  
   mpi_x.reduce_fadds(0, @ptrcast([*]f32, &local_prod), @ptrcast([*]f32, &row_sum),
                      M_local, gather_result_task_id); // reduce across rows towards left
 
@@ -181,15 +183,8 @@ task broadcast_residual() void {
 }
 
 task restrict_compute() void {
-
-  // // TODO: Implement the restrict operator
-  // // implement like the compute() but only on R instead of A.
-  for (@range(i16, R_N_local)) |j| {
-    // offset dsd_R_tile to the corresponding column of R_tile
-    const dsd_R_offset = @increment_dsd_offset(dsd_R_tile, j, f32);
-    @fmacs(dsd_local_prod_R, dsd_local_prod_R, dsd_R_offset, residual_tile[j]);
-  }
-
+  // local_prod_R = R_tile*residual_tile
+  compute_mv_per_tile(R_N_local, dsd_local_prod_R, dsd_R_tile, @ptrcast([*]const f32, &residual_tile));
   mpi_x.reduce_fadds(layer_kernel_cols-1, @ptrcast([*]f32, &local_prod_R), @ptrcast([*]f32, &row_sum_R),
                      R_M_local, gather_b_next_task_id); // reduce across rows towards left
 
