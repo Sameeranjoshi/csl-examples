@@ -54,8 +54,8 @@ R = np.random.rand(restrict_rows, restrict_cols).astype(np.float32)
 from jacobi_only import jacobi_iteration
 x_copy = X.copy()
 X_smooth_host = jacobi_iteration(A, B, x_copy, 1.0, 1)
-# residual =  B - (A @ X)
-# b_next_expected = R @ residual 
+residual =  B - (A @ X_smooth_host)
+b_next_host = R @ residual
 
 # Specify path to ELF files, set up runner
 runner = SdkRuntime(args.name, cmaddr=args.cmaddr)
@@ -135,19 +135,16 @@ print("Launching kernel...")
 # Run the kernel
 runner.launch("main", nonblock=False)
 
-# PE 0.0
-X_smooth_device = np.zeros(matrix_cols, dtype=np.float32)
-runner.memcpy_d2h(X_smooth_device, symbol_x_smooth_src, 0, 0, 1, 1, matrix_cols,
+# TOPRIGHT PE
+b_next_device = np.zeros(restrict_rows, dtype=np.float32)
+runner.memcpy_d2h(b_next_device, symbol_b_next, kernel_cols-1, 0, 1, 1, restrict_rows,
                   streaming=False, data_type=memcpy_dtype, nonblock=False,
                   order=memcpy_order)
-# b_next = np.zeros(restrict_rows, dtype=np.float32)
-# runner.memcpy_d2h(b_next, symbol_b_next, kernel_cols-1, 0, 1, 1, restrict_rows,
-#                   streaming=False, data_type=memcpy_dtype, nonblock=False,
-#                   order=memcpy_order)
+
 runner.stop()
 print("Copied back result.")
 
-print("x_smooth_host calculated: ", X_smooth_host)
-print("x_smooth_device calculated: ", X_smooth_device)
-np.testing.assert_allclose(X_smooth_host, X_smooth_device, atol=0.01, rtol=0)
+print("b_next_host calculated: ", b_next_host)
+print("b_next_device calculated: ", b_next_device)
+np.testing.assert_allclose(b_next_host, b_next_device, atol=0.01, rtol=0)
 print("SUCCESS")

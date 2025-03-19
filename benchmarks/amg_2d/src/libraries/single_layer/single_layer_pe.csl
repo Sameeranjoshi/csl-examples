@@ -253,8 +253,8 @@ task gather_rsum_diag_sum() void {
     }
   }
   // bring into top-left PE.
-  mpi_y.gather(0, @ptrcast([*]u32, &x_smooth), @ptrcast([*]u32, &x_smooth_src),
-               N_local, EXIT);
+  mpi_y.gather(0, @ptrcast([*]u32, &x_smooth), @ptrcast([*]u32, &x_src),
+               N_local, scatter_smooth_x_task_id);
 }
 
 //__________________________________________________________________
