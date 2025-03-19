@@ -36,26 +36,15 @@ param layer_start_y: i16; // start y of the layer
 param layer_kernel_rows : i16; // Height of kernel
 param layer_kernel_cols : i16; // Width of kernel
 param layer_index: i16; // index of the layer
-// LAYER (Other way - This can be @import_comptime_value)
-// param layer_M: i16;       // A shape parameters here
-// param layer_N: i16;      // This is matrix_rows_layer and matrix_cols.
-// param layer_pe_cols: i16; // number of PEs in x direction // This is kernel_rows and kernel_cols 
-// param layer_pe_rows: i16; // number of PEs in y direction
-// Kernel rectangle of PEs
-// param layer_R_M: i16;     // R shape parameters here
-// param layer_R_N: i16; 
 
 
 comptime {
   // Number of matrix rows must be multiple of kernel rectangle height
   @comptime_assert(layer_rows_A % layer_kernel_rows == 0);
-
   // Number of matrix cols must be multiple of kernel rectangle width
   @comptime_assert(layer_cols_A % layer_kernel_cols == 0);
-
   // at least R_N should be same as A_M
   @comptime_assert(layer_cols_R == layer_rows_A);
-
   // If we do this this becomes a GMG with a very structured lowering, 
   // keep for now.
   @comptime_assert(layer_rows_R % layer_kernel_rows == 0);
@@ -123,6 +112,8 @@ layout {
   @export_name("A", [*]f32, true);
   @export_name("R", [*]f32, true);
   @export_name("x", [*]f32, true);
+  @export_name("x_smooth", [*]f32, true);
+  @export_name("x_smooth_src", [*]f32, true);
   @export_name("b", [*]f32, true);
   @export_name("y", [*]f32, true);
   @export_name("main", fn()void);

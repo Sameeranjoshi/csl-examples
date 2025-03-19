@@ -47,6 +47,8 @@ const layer_kernel_cols: i16 = layer_params.layer_kernel_cols;
 const layer_index: i16 = layer_params.layer_index;
 
 // Task IDs
+const scatter_smooth_x_task_id: local_task_id = @get_local_task_id(4);
+const bcast_x_down_task_id:  local_task_id = @get_local_task_id(6);
 const EXIT:                     local_task_id = @get_local_task_id(9);
 const scatter_x_task_id:        local_task_id = @get_local_task_id(10);
 const broadcast_x_down_task_id: local_task_id = @get_local_task_id(11);
@@ -54,20 +56,19 @@ const compute_task_id:          local_task_id = @get_local_task_id(12);
 const gather_result_task_id:    local_task_id = @get_local_task_id(13);
 const restrict_compute_task_id: local_task_id = @get_local_task_id(18);
 const scatter_residual_task_id: local_task_id = @get_local_task_id(19);
-const gather_b_next_task_id:     local_task_id = @get_local_task_id(20);
+const gather_b_next_task_id:    local_task_id = @get_local_task_id(20);
 const broadcast_residual_task_id: local_task_id = @get_local_task_id(24);
-const jacobi_task_id:            local_task_id = @get_local_task_id(25);
-const scatter_smooth_x_task_id: local_task_id = @get_local_task_id(4);
-const gather_smooth_x_task_id:   local_task_id = @get_local_task_id(5);
-const bcast_tile_down_task_id:  local_task_id = @get_local_task_id(6);
-const bcast_b_right_task_id:    local_task_id = @get_local_task_id(7);
 const compute_jacobi_task_id:   local_task_id = @get_local_task_id(25);
+const gather_diag_sum_task_id:  local_task_id = @get_local_task_id(26);
+const gather_rsum_diag_sum_task_id: local_task_id = @get_local_task_id(5);
+const gather_row_sum_task_id:    local_task_id = @get_local_task_id(8);
 
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 // The default values of queue IDs and DSR IDs of collectives_2d are applied implicitly.
 // See mpi_x and mpi_y of gemm-collectives_2d/pe.csl for default values of queue and DSR IDs.
 const mpi_x = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.x });
 const mpi_y = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.y });
+const simprint = @import_module("<simprint>", .{ .enable = true });
 
 
 
@@ -86,6 +87,13 @@ var b_tile = @zeros([M_local]f32);
 var local_prod = @zeros([M_local]f32);  // ax
 // The sum of products across a row of PEs
 var row_sum = @zeros([M_local]f32);
+var diag_sum = @zeros([M_local]f32);
+var x_smooth = @zeros([N_local]f32);
+var x_smooth_src = @zeros([N_local * layer_kernel_cols]f32);
+var diag_tile = @zeros([M_local]f32);
+var rsum_tile = @zeros([M_local]f32);
+
+
 // The final result is stored on PE (0,0)
 var residual = @zeros([M_local * layer_kernel_rows]f32);
 var residual_tile = @zeros([M_local]f32);
@@ -93,17 +101,18 @@ var R_tile = @zeros([R_M_local*R_N_local]f32);
 var local_prod_R = @zeros([R_M_local]f32);
 var row_sum_R = @zeros([R_M_local]f32);
 var b_next = @zeros([R_M_local * layer_kernel_rows]f32);
-var temp_tile = @zeros([N_local]f32); // jacobi
+
 
 // DSDs
 const dsd_A_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*@as(i16, N_local)] }); // 1 row of A_tile
 const dsd_R_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> R_tile[i*@as(i16, R_N_local)] }); // 1 row of R_tile
 const dsd_x_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N_local} -> x_tile[i]});
-const dsd_temp_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N_local} -> temp_tile[i]});
 const dsd_b_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> b_tile[i]});
 const dsd_row_sum = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> row_sum[i]});
 const dsd_local_prod = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> local_prod[i]});
 const dsd_local_prod_R = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> local_prod_R[i]});
+const dsd_diag_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*@as(i16, N_local) + i]});
+
 // Pointers and advertised outside
 var ptr_y : [*]f32 = &residual;
 var ptr_x : [*]f32 = &x_src;
@@ -111,11 +120,14 @@ var ptr_b : [*]f32 = &b_src;
 var ptr_A : [*]f32 = &A_tile;
 var ptr_R : [*]f32 = &R_tile;
 var ptr_b_next : [*]f32 = &b_next;
+var ptr_x_smooth: [*]f32 = &x_smooth;
+var ptr_x_smooth_src: [*]f32 = &x_smooth_src;
 
 // temp variables
 // Updated at runtime to store x and y IDs of PE reported by collectives library
 var px: u16;
 var py: u16;
+
 
 fn compute_mv_per_tile(N_tile: i16, dsd_mv_tile: anytype, dsd_matrix_tile: anytype, vector_tile_data: [*]const f32) void {
   for (@range(i16, N_tile)) |j| {
@@ -124,6 +136,59 @@ fn compute_mv_per_tile(N_tile: i16, dsd_mv_tile: anytype, dsd_matrix_tile: anyty
   }
 }
 
+fn jacobi_local(omega:f32, iterations: i16) void {
+  for (@range(i16, iterations)) |iter| {
+    // make copy of x into temp.
+    var tmp = @zeros([N_local*1]f32);
+    for (@range(i32, N_local)) |i| {
+        tmp[i] = x_tile[i];
+    }
+
+    for (@range(i16, M_local)) |i| {  // Given A is a SPD, it's M==N always.
+        var rsum: f32 = 0.0;
+        var diag: f32 = 0.0;
+        if (px == py) {
+            diag = A_tile[i*N_local + i];
+            if (diag != 0.0) {
+              x_tile[i] = (1.0 - omega) * tmp[i];
+            }
+        } else{
+            diag = 0.0;
+            x_tile[i] = (1.0 - omega) * tmp[i];
+        } // only set for diagonal PEs, now set rsum.
+        for (@range(i16, N_local)) |j| {
+              if (px == py){
+                    if (i != j){
+                        rsum += A_tile[i*N_local + j] * tmp[j];
+                    }
+                }
+                else {
+                    rsum += A_tile[i*N_local + j] * tmp[j];
+                }
+        }
+        rsum_tile[i] = rsum;
+        diag_tile[i] = diag;
+    }
+  }
+}
+
+// mv_tile = matrix_tile*vector_tile
+// ax without diag.
+fn compute_mv_jacobi_tile(N_tile: i16, dsd_mv_tile: anytype, dsd_matrix_tile: anytype, vector_tile_data: [*]const f32, dsd_diag_tile: anytype, px:u16, py:u16) void {
+  // tmp_nodiag = A_tile - diag_tile
+  // a * vector_tile
+  // diag * vector_tile
+
+
+  for (@range(i16, N_tile)) |j| {
+    const dsd_offset = @increment_dsd_offset(dsd_matrix_tile, j, f32);
+    @fmacs(dsd_mv_tile, dsd_mv_tile, dsd_offset, vector_tile_data[j]);
+  }
+
+  if (px == py) {
+    @fsubs(dsd_mv_tile, dsd_mv_tile, dsd_diag_tile);
+  }
+}
 
 // Entrypoint into kernel
 // PE (0,0) scatters `b` into tiles across the left column of PEs
@@ -145,58 +210,54 @@ fn main() void {
 task scatter_x() void {
   if (py == 0) {
     mpi_x.scatter(0, @ptrcast([*]u32, &x_src), @ptrcast([*]u32, &x_tile),
-                  N_local, bcast_tile_down_task_id);
+                  N_local, bcast_x_down_task_id);
   } else {
-    @activate(bcast_tile_down_task_id);
+    @activate(bcast_x_down_task_id);
   }
 }
 
 // diverted from here.
-task bcast_tile_down() void {
-  @fmovs(dsd_temp_tile, dsd_x_tile);  // temp = x
-  mpi_y.broadcast(0, @ptrcast([*]u32, &temp_tile), N_local, bcast_b_right_task_id);
+task bcast_x_down() void {
+  mpi_y.broadcast(0, @ptrcast([*]u32, &x_tile), N_local, compute_jacobi_task_id);
 }
 
-task bcast_b_right() void {
-  mpi_x.broadcast(0, @ptrcast([*]u32, &b_tile), M_local, compute_jacobi_task_id);
-}
-
+// compute_jacobi()
+// x_tile[i] = (1.0 - omega) * temp_tile[i] + omega * (b_tile[i] - rsum) / diag;
 task compute_jacobi() void {
-  // (vector_size, ax, A, x) // ax = A*x
-  // compute_jacobi_mv_per_tile(N_local, dsd_local_prod, dsd_A_tile, @ptrcast([*]const f32, &temp_tile));
   var omega: f32 = 1.0;
   var iterations: i16 = 1;
+  jacobi_local(omega, iterations);  // updates x_tile, rsum_tile, diag_tile
 
-  for (@range(i16, M_local)) |i| {
-      var rsum: f32 = 0.0;
-      var diag: f32 = 0.0;
-      for (@range(i16, N_local)) |j| {
-          if (px == py) { // is diagonal PE.
-            if (i ==j){ // is local diagonal of matrix.
-              diag = A_tile[i*N_local + i];
-            } else {
-              rsum += A_tile[i*N_local + j] * temp_tile[j];
-            }
-          } else{// don't skip diagonal for other PEs
-              rsum += A_tile[i*N_local + j] * temp_tile[j];
-          }
-      }
-      if (diag != 0.0) {
-          x_tile[i] = (1.0 - omega) * temp_tile[i] + omega * (b_tile[i] - rsum) / diag;
-      }
-  }
+  mpi_x.reduce_fadds(0, @ptrcast([*]f32, &x_tile), @ptrcast([*]f32, &x_smooth),
+                     N_local, gather_diag_sum_task_id); // reduce across rows toward
+}
 
-  mpi_x.reduce_fadds(0, @ptrcast([*]f32, &x_tile), @ptrcast([*]f32, &row_sum),
-                     M_local, gather_smooth_x_task_id); // reduce across rows towards left
+task gather_diag_sum() void {
+  mpi_x.reduce_fadds(0, @ptrcast([*]f32, &diag_tile), @ptrcast([*]f32, &diag_sum),
+                     M_local, gather_row_sum_task_id); // reduce across rows towar
+}
+task gather_row_sum() void {
+  @fmovs(dsd_row_sum, 0.0); // row_sum = 0.0
+  mpi_x.reduce_fadds(0, @ptrcast([*]f32, &rsum_tile), @ptrcast([*]f32, &row_sum),
+                     M_local, gather_rsum_diag_sum_task_id); // reduce across rows toward
 }
 
 // Gather the product into the top left PE
-task gather_smooth_x() void {
+task gather_rsum_diag_sum() void {
+  var omega: f32 = 1.0;
+  if (px == 0 ) {
+    for (@range(i16, N_local)) |i| {
+      if (diag_sum[i] != 0.0) {
+        x_smooth[i] += omega * (b_tile[i] - row_sum[i]) / diag_sum[i];
+      }
+    }
+  }
   // bring into top-left PE.
-  mpi_y.gather(0, @ptrcast([*]u32, &row_sum), @ptrcast([*]u32, &x_src),
-               M_local, scatter_residual_task_id);
+  mpi_y.gather(0, @ptrcast([*]u32, &x_smooth), @ptrcast([*]u32, &x_smooth_src),
+               N_local, EXIT);
 }
 
+//__________________________________________________________________
 task scatter_smooth_x() void {
   if (py == 0) {
     mpi_x.scatter(0, @ptrcast([*]u32, &x_src), @ptrcast([*]u32, &x_tile),
@@ -205,8 +266,6 @@ task scatter_smooth_x() void {
     @activate(broadcast_x_down_task_id);
   }
 }
-
-
 
 // This assumes X is now X_smooth
 // Broadcast tiles of `x` down the columns of PEs
@@ -278,10 +337,11 @@ comptime {
   @bind_local_task(restrict_compute, restrict_compute_task_id);
   @bind_local_task(gather_b_next, gather_b_next_task_id);
   @bind_local_task(scatter_smooth_x, scatter_smooth_x_task_id);
-  @bind_local_task(gather_smooth_x, gather_smooth_x_task_id);
-  @bind_local_task(bcast_tile_down, bcast_tile_down_task_id);
-  @bind_local_task(bcast_b_right, bcast_b_right_task_id);
+  @bind_local_task(bcast_x_down, bcast_x_down_task_id);
   @bind_local_task(compute_jacobi, compute_jacobi_task_id);
+  @bind_local_task(gather_diag_sum, gather_diag_sum_task_id);
+  @bind_local_task(gather_row_sum, gather_row_sum_task_id);
+  @bind_local_task(gather_rsum_diag_sum, gather_rsum_diag_sum_task_id);
   @bind_local_task(f_exit, EXIT);
 
   @export_symbol(ptr_A, "A");
@@ -290,5 +350,7 @@ comptime {
   @export_symbol(ptr_y, "y");
   @export_symbol(ptr_R, "R");
   @export_symbol(ptr_b_next, "b_next");
+  @export_symbol(ptr_x_smooth, "x_smooth");
+  @export_symbol(ptr_x_smooth_src, "x_smooth_src");
   @export_symbol(main);
 }

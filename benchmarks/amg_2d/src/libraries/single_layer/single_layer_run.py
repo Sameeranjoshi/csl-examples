@@ -46,12 +46,16 @@ np.random.seed(seed=7)
 A = np.random.rand(matrix_rows, matrix_cols).astype(np.float32)
 X = np.random.rand(matrix_cols).astype(np.float32)
 B = np.random.rand(matrix_rows).astype(np.float32)
+
 # check if R_rows = layer_rows_A
 assert restrict_cols == matrix_rows, "restrict_cols must be equal to matrix_rows, example:(4,49) x (49,1) = (4,1)"
 R = np.random.rand(restrict_rows, restrict_cols).astype(np.float32)
 # Compute expected result
-residual =  B - (A @ X)
-b_next_expected = R @ residual 
+from jacobi_only import jacobi_iteration
+x_copy = X.copy()
+X_smooth_host = jacobi_iteration(A, B, x_copy, 1.0, 1)
+# residual =  B - (A @ X)
+# b_next_expected = R @ residual 
 
 # Specify path to ELF files, set up runner
 runner = SdkRuntime(args.name, cmaddr=args.cmaddr)
@@ -64,6 +68,8 @@ symbol_R = runner.get_id("R")
 symbol_x = runner.get_id("x")
 symbol_b = runner.get_id("b")
 symbol_b_next = runner.get_id("b_next") 
+symbol_x_smooth = runner.get_id("x_smooth")
+symbol_x_smooth_src = runner.get_id("x_smooth_src")
 
 runner.load()
 runner.run()
@@ -129,15 +135,19 @@ print("Launching kernel...")
 # Run the kernel
 runner.launch("main", nonblock=False)
 
-# Collect the result y from PE (kernel_cols-1, 0) and compare to expected, top-right corner of the PE grid
-b_next = np.zeros(restrict_rows, dtype=np.float32)
-runner.memcpy_d2h(b_next, symbol_b_next, kernel_cols-1, 0, 1, 1, restrict_rows,
+# PE 0.0
+X_smooth_device = np.zeros(matrix_cols, dtype=np.float32)
+runner.memcpy_d2h(X_smooth_device, symbol_x_smooth_src, 0, 0, 1, 1, matrix_cols,
                   streaming=False, data_type=memcpy_dtype, nonblock=False,
                   order=memcpy_order)
+# b_next = np.zeros(restrict_rows, dtype=np.float32)
+# runner.memcpy_d2h(b_next, symbol_b_next, kernel_cols-1, 0, 1, 1, restrict_rows,
+#                   streaming=False, data_type=memcpy_dtype, nonblock=False,
+#                   order=memcpy_order)
 runner.stop()
 print("Copied back result.")
 
-print("b_next calculated: ", b_next)
-print("b_next expected:   ", b_next_expected)
-np.testing.assert_allclose(b_next, b_next_expected, atol=0.01, rtol=0)
+print("x_smooth_host calculated: ", X_smooth_host)
+print("x_smooth_device calculated: ", X_smooth_device)
+np.testing.assert_allclose(X_smooth_host, X_smooth_device, atol=0.01, rtol=0)
 print("SUCCESS")
