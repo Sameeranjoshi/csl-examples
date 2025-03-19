@@ -66,8 +66,23 @@ const gather_row_sum_task_id:    local_task_id = @get_local_task_id(8);
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 // The default values of queue IDs and DSR IDs of collectives_2d are applied implicitly.
 // See mpi_x and mpi_y of gemm-collectives_2d/pe.csl for default values of queue and DSR IDs.
-const mpi_x = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.x });
-const mpi_y = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.y });
+// const mpi_x = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.x });
+// const mpi_y = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.y });
+const mpi_x = @import_module("<collectives_2d/pe>", .{
+    .dim_params = c2d_params.x,
+    .queues = [2]u16{2,4},
+    .dest_dsr_ids = [1]u16{1},
+    .src0_dsr_ids = [1]u16{1},
+    .src1_dsr_ids = [1]u16{1}
+    });
+const mpi_y = @import_module("<collectives_2d/pe>", .{
+    .dim_params = c2d_params.y,
+    .queues = [2]u16{3,5},
+    .dest_dsr_ids = [1]u16{2},
+    .src0_dsr_ids = [1]u16{2},
+    .src1_dsr_ids = [1]u16{2}
+    });
+
 const simprint = @import_module("<simprint>", .{ .enable = true });
 
 
