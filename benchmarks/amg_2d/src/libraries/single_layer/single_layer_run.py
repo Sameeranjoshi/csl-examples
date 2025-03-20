@@ -24,6 +24,57 @@ from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime     # pylint: disab
 from cerebras.sdk.runtime.sdkruntimepybind import MemcpyDataType # pylint: disable=no-name-in-module
 from cerebras.sdk.runtime.sdkruntimepybind import MemcpyOrder    # pylint: disable=no-name-in-module
 
+
+
+def create_block_diagonal_inverse(A, kernel_rows, kernel_cols, per_pe_rows, per_pe_cols):
+    """Create a block-structured diagonal inverse matrix where each row's blocks use that row's diagonal inverse.
+    For zero diagonal elements, the corresponding row in the inverse will be zero.
+    
+    Args:
+        A (np.ndarray): Input matrix
+        kernel_rows (int): Number of rows in the kernel grid
+        kernel_cols (int): Number of columns in the kernel grid
+        per_pe_rows (int): Number of rows per PE
+        per_pe_cols (int): Number of columns per PE
+        
+    Returns:
+        np.ndarray: Block-structured diagonal inverse matrix
+    """
+    # Extract diagonal and create inverse
+    D = np.diag(A)
+    # Create a mask for non-zero diagonal elements
+    non_zero_mask = D != 0
+    # Create inverse with zeros for zero diagonal elements
+    D_inv = np.zeros((len(D), len(D)), dtype=np.float32)
+    D_inv[non_zero_mask, non_zero_mask] = 1.0 / D[non_zero_mask]
+    
+    # Create block-structured matrix
+    matrix_rows = kernel_rows * per_pe_rows
+    matrix_cols = kernel_cols * per_pe_cols
+    D_inv_blocks = np.zeros((matrix_rows, matrix_cols), dtype=np.float32)
+    
+    # For each row of blocks
+    for i in range(kernel_rows):
+        # Get the diagonal inverse for this row's diagonal block
+        row_start = i * per_pe_rows
+        row_end = (i + 1) * per_pe_rows
+        diag_inv = D_inv[row_start:row_end, row_start:row_end]
+        
+        # For each column of blocks in this row
+        for j in range(kernel_cols):
+            col_start = j * per_pe_cols
+            col_end = (j + 1) * per_pe_cols
+            
+            # If this is a diagonal block, use the actual inverse
+            if i == j:
+                D_inv_blocks[row_start:row_end, col_start:col_end] = diag_inv
+            else:
+                # For off-diagonal blocks, use the diagonal inverse from this row
+                D_inv_blocks[row_start:row_end, col_start:col_end] = diag_inv
+    
+    return D_inv_blocks
+  
+  
 parser = argparse.ArgumentParser()
 parser.add_argument("--name", help="the test name")
 parser.add_argument("--cmaddr", help="IP:port for CS system")
@@ -44,9 +95,16 @@ restrict_cols = int(compile_data['params']['layer_cols_R'])
 # Use a deterministic seed so that CI results are predictable
 np.random.seed(seed=7)
 
-A = np.random.rand(matrix_rows, matrix_cols).astype(np.float32)
-X = np.random.rand(matrix_cols).astype(np.float32)
-B = np.random.rand(matrix_rows).astype(np.float32)
+# A = np.random.rand(matrix_rows, matrix_cols).astype(np.float32)
+# X = np.random.rand(matrix_cols).astype(np.float32)
+# B = np.random.rand(matrix_rows).astype(np.float32)
+A = np.array([[4, 1,  3,  3],
+              [4, 1, 0, 1],
+              [2, 2, 0, 4],
+              [0, 4, 0, 3]], dtype=np.float32)
+B = np.array([0,0,0,3], dtype=np.float32)
+X = np.array([2,3,4,4], dtype=np.float32)
+
 
 # check if R_rows = layer_rows_A
 assert restrict_cols == matrix_rows, "restrict_cols must be equal to matrix_rows, example:(4,49) x (49,1) = (4,1)"
@@ -54,7 +112,8 @@ R = np.random.rand(restrict_rows, restrict_cols).astype(np.float32)
 # Compute expected result
 from jacobi_only import jacobi_iteration
 x_copy = X.copy()
-X_smooth_host = jacobi_iteration(A, B, x_copy, 1.0, 1)
+omega_host = 1.0
+X_smooth_host = jacobi_iteration(A, B, x_copy, omega_host, 1)
 residual =  B - (A @ X_smooth_host)
 b_next_host = R @ residual
 
@@ -72,6 +131,9 @@ symbol_b = runner.get_id("b")
 symbol_b_next = runner.get_id("b_next") 
 symbol_x_smooth = runner.get_id("x_smooth")
 symbol_x_smooth_src = runner.get_id("x_smooth_src")
+symbol_omega = runner.get_id("omega")
+symbol_D_inv = runner.get_id("D_inv")
+symbol_identity = runner.get_id("identity")
 
 runner.load()
 runner.run()
@@ -135,6 +197,37 @@ runner.memcpy_h2d_colbcast(symbol_x, X, 0, 0, kernel_cols, kernel_rows, per_pe_c
 runner.memcpy_h2d_rowbcast(symbol_b, B, 0, 0, kernel_cols, kernel_rows, per_pe_rows,
                   streaming=False, data_type=memcpy_dtype, nonblock=False, order=memcpy_order)
 
+# omega
+# make the size of omega equal to the number of PEs.
+omega = np.zeros(kernel_rows * kernel_cols, dtype=np.float32)
+omega[:] = 1.0
+runner.memcpy_h2d(symbol_omega, omega, 0, 0, kernel_cols, kernel_rows, 1,
+                            streaming=False, data_type=memcpy_dtype, nonblock=False, order=memcpy_order)
+
+# In the main code, replace the existing block creation code with:
+np.set_printoptions(precision=4, suppress=True, linewidth=120)
+print("A:\n", A)
+D_inv_blocks = create_block_diagonal_inverse(A, kernel_rows, kernel_cols, per_pe_rows, per_pe_cols)
+print("D_inv_blocks shape:", D_inv_blocks.shape)
+print("D_inv_blocks:\n", D_inv_blocks)
+
+# Create identity matrix with same structure as D_inv_blocks but with non-zero values set to 1.0
+# Create identity matrix with same dimensions as A
+identity_blocks = np.eye(matrix_rows, matrix_cols, dtype=np.float32)
+print("Identity matrix:\n", identity_blocks)
+
+# Now we can use D_inv_blocks for broadcasting to PEs
+data_D_inv = np.stack(np.split(np.stack(np.split(D_inv_blocks, kernel_cols, axis=1)), kernel_rows, axis=1)).ravel()
+runner.memcpy_h2d(symbol_D_inv, data_D_inv, 0, 0, kernel_cols, kernel_rows, per_pe_rows * per_pe_cols,
+                  streaming=False, data_type=memcpy_dtype, nonblock=False,
+                  order=memcpy_order)
+
+# copy the identity matrix to all PEs
+data_identity = np.stack(np.split(np.stack(np.split(identity_blocks, kernel_cols, axis=1)), kernel_rows, axis=1)).ravel()
+runner.memcpy_h2d(symbol_identity, data_identity, 0, 0, kernel_cols, kernel_rows, per_pe_rows * per_pe_cols,
+                  streaming=False, data_type=memcpy_dtype, nonblock=False,
+                  order=memcpy_order)
+
 print("Launching kernel...")
 # Record start time
 
@@ -143,12 +236,14 @@ print("Launching kernel...")
 runner.launch("main", nonblock=False)
 
 # TOPRIGHT PE
-# TODO: Check if kernel_cols-1 is correct or to use only kernel_cols
 b_next_device = np.zeros(restrict_rows, dtype=np.float32)
 runner.memcpy_d2h(b_next_device, symbol_b_next, kernel_cols-1, 0, 1, 1, restrict_rows,
                   streaming=False, data_type=memcpy_dtype, nonblock=False,
                   order=memcpy_order)
-
+# x_smooth_device = np.zeros(matrix_cols, dtype=np.float32)
+# runner.memcpy_d2h(x_smooth_device, symbol_x_smooth_src, 0, 0, 1, 1, matrix_cols,
+#                   streaming=False, data_type=memcpy_dtype, nonblock=False,
+#                   order=memcpy_order)
 runner.stop()
 # Record end time and calculate duration
 end_time = time.time()

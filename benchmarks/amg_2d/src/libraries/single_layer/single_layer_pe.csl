@@ -117,6 +117,12 @@ var local_prod_R = @zeros([R_M_local]f32);
 var row_sum_R = @zeros([R_M_local]f32);
 var b_next = @zeros([R_M_local * layer_kernel_rows]f32);
 
+// add new variables
+var omega = @zeros([1]f32);
+var D_inv = @zeros([M_local*N_local]f32);
+var identity = @zeros([M_local*N_local]f32);
+var term_2 = @zeros([M_local]f32);
+var term_2_sum = @zeros([M_local]f32);
 
 // DSDs
 const dsd_A_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*@as(i16, N_local)] }); // 1 row of A_tile
@@ -137,7 +143,9 @@ var ptr_R : [*]f32 = &R_tile;
 var ptr_b_next : [*]f32 = &b_next;
 var ptr_x_smooth: [*]f32 = &x_smooth;
 var ptr_x_smooth_src: [*]f32 = &x_smooth_src;
-
+var ptr_omega: [*]f32 = &omega;
+var ptr_D_inv: [*]f32 = &D_inv;
+var ptr_identity: [*]f32 = &identity;
 // temp variables
 // Updated at runtime to store x and y IDs of PE reported by collectives library
 var px: u16;
@@ -150,39 +158,31 @@ fn compute_mv_per_tile(N_tile: i16, dsd_mv_tile: anytype, dsd_matrix_tile: anyty
     @fmacs(dsd_mv_tile, dsd_mv_tile, dsd_offset, vector_tile_data[j]);
   }
 }
-
-fn jacobi_local(omega:f32, iterations: i16) void {
+// New formula implementation: Jacobi iteration logic (new formula)
+// formula: x = (Identity-omega*D_inv*A_tile)*x_tile
+fn jacobi_local(iterations: i16) void {
   for (@range(i16, iterations)) |iter| {
-    // make copy of x into temp.
-    var tmp = @zeros([N_local*1]f32);
-    for (@range(i32, N_local)) |i| {
-        tmp[i] = x_tile[i];
-    }
-
     for (@range(i16, M_local)) |i| {  // Given A is a SPD, it's M==N always.
-        var rsum: f32 = 0.0;
-        var diag: f32 = 0.0;
-        if (px == py) {
-            diag = A_tile[i*N_local + i];
-            if (diag != 0.0) {
-              x_tile[i] = (1.0 - omega) * tmp[i];
-            }
-        } else{
-            diag = 0.0;
-            x_tile[i] = (1.0 - omega) * tmp[i];
-        } // only set for diagonal PEs, now set rsum.
-        for (@range(i16, N_local)) |j| {
-              if (px == py){
-                    if (i != j){
-                        rsum += A_tile[i*N_local + j] * tmp[j];
-                    }
-                }
-                else {
-                    rsum += A_tile[i*N_local + j] * tmp[j];
-                }
+        var a_into_x_rsum: f32 = 0.0;
+        var d_inv: f32 = 0.0;
+        var i_into_x_rsum: f32 = 0.0;
+
+        d_inv = D_inv[i*N_local + i]; 
+        // Apply formula: x = (I - omega*D_inv*A)*x
+        if (d_inv != 0.0) {
+          // Calculate matrix-vector product (A*x)
+          for (@range(i16, N_local)) |j| {
+              a_into_x_rsum += A_tile[i*N_local + j] * x_tile[j];  // vector
+              i_into_x_rsum += identity[i*N_local + j] * x_tile[j]; // vector
+          }
+          term_2[i] = i_into_x_rsum - omega[0] * d_inv * a_into_x_rsum;
+        } else {
+          if (px == py) {
+            term_2[i] = x_tile[i];
+          } else {
+            term_2[i] = 0.0;
+          }
         }
-        rsum_tile[i] = rsum;
-        diag_tile[i] = diag;
     }
   }
 }
@@ -241,35 +241,45 @@ fn main() void {
 // compute_jacobi()
 // x_tile[i] = (1.0 - omega) * temp_tile[i] + omega * (b_tile[i] - rsum) / diag;
 task compute_jacobi() void {
-  var omega: f32 = 1.0;
   var iterations: i16 = 1;
-  jacobi_local(omega, iterations);  // updates x_tile, rsum_tile, diag_tile
+  jacobi_local(iterations);  // updates term_2
 
-  mpi_x.reduce_fadds(0, @ptrcast([*]f32, &x_tile), @ptrcast([*]f32, &x_smooth),
-                     N_local, gather_diag_sum_task_id); // reduce across rows toward
-}
-
-task gather_diag_sum() void {
-  mpi_x.reduce_fadds(0, @ptrcast([*]f32, &diag_tile), @ptrcast([*]f32, &diag_sum),
-                     M_local, gather_row_sum_task_id); // reduce across rows towar
-}
-task gather_row_sum() void {
-  @fmovs(dsd_row_sum, 0.0); // row_sum = 0.0
-  mpi_x.reduce_fadds(0, @ptrcast([*]f32, &rsum_tile), @ptrcast([*]f32, &row_sum),
+  // 
+  mpi_x.reduce_fadds(0, @ptrcast([*]f32, &term_2), @ptrcast([*]f32, &term_2_sum),
                      M_local, gather_rsum_diag_sum_task_id); // reduce across rows toward
 }
 
+// task gather_diag_sum() void {
+//   mpi_x.reduce_fadds(0, @ptrcast([*]f32, &diag_tile), @ptrcast([*]f32, &diag_sum),
+//                      M_local, gather_row_sum_task_id); // reduce across rows towar
+// }
+// task gather_row_sum() void {
+//   @fmovs(dsd_row_sum, 0.0); // row_sum = 0.0
+//   mpi_x.reduce_fadds(0, @ptrcast([*]f32, &rsum_tile), @ptrcast([*]f32, &row_sum),
+//                      M_local, gather_rsum_diag_sum_task_id); // reduce across rows toward
+// }
+
 // Gather the product into the top left PE
+// complete the formula: term_2_sum = (Identity-omega*D_inv*A_tile)*x_tile
+// # formula: x = omega*D_inv*b + term_2_sum
 task gather_rsum_diag_sum() void {
-  var omega: f32 = 1.0;
   if (px == 0 ) {
-    for (@range(i16, N_local)) |i| {
-      if (diag_sum[i] != 0.0) {
-        x_smooth[i] += omega * (b_tile[i] - row_sum[i]) / diag_sum[i];
+    // find term_1 first then add term_2_sum
+    for (@range(i16, M_local)) |i| {
+      var d_inv: f32 = 0.0;
+      d_inv = D_inv[i*N_local + i];
+      if (d_inv != 0.0) {
+        var term_1: f32 = 0.0;
+        term_1 = omega[0] * d_inv * b_tile[i];
+        x_smooth[i] = term_1 + term_2_sum[i];
+      } else{
+        x_smooth[i] = term_2_sum[i];
       }
     }
   }
   // bring into top-left PE.
+  // mpi_y.gather(0, @ptrcast([*]u32, &x_smooth), @ptrcast([*]u32, &x_src),
+  //              N_local, EXIT);
   mpi_y.gather(0, @ptrcast([*]u32, &x_smooth), @ptrcast([*]u32, &x_src),
                N_local, scatter_smooth_x_task_id);
 }
@@ -356,8 +366,8 @@ comptime {
   @bind_local_task(scatter_smooth_x, scatter_smooth_x_task_id);
   // @bind_local_task(bcast_x_down, bcast_x_down_task_id);
   @bind_local_task(compute_jacobi, compute_jacobi_task_id);
-  @bind_local_task(gather_diag_sum, gather_diag_sum_task_id);
-  @bind_local_task(gather_row_sum, gather_row_sum_task_id);
+  // @bind_local_task(gather_diag_sum, gather_diag_sum_task_id);
+  // @bind_local_task(gather_row_sum, gather_row_sum_task_id);
   @bind_local_task(gather_rsum_diag_sum, gather_rsum_diag_sum_task_id);
   @bind_local_task(f_exit, EXIT);
 
@@ -369,5 +379,8 @@ comptime {
   @export_symbol(ptr_b_next, "b_next");
   @export_symbol(ptr_x_smooth, "x_smooth");
   @export_symbol(ptr_x_smooth_src, "x_smooth_src");
+  @export_symbol(ptr_omega, "omega");
+  @export_symbol(ptr_D_inv, "D_inv");
+  @export_symbol(ptr_identity, "identity");
   @export_symbol(main);
 }
