@@ -133,6 +133,7 @@ const dsd_row_sum = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> row_
 const dsd_local_prod = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> local_prod[i]});
 const dsd_local_prod_R = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> local_prod_R[i]});
 const dsd_diag_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*@as(i16, N_local) + i]});
+const dsd_residual_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> residual_tile[i]});
 
 // Pointers and advertised outside
 var ptr_y : [*]f32 = &residual;
@@ -244,8 +245,9 @@ task compute_jacobi() void {
   var iterations: i16 = 1;
   jacobi_local(iterations);  // updates term_2
 
-  // 
-  mpi_x.reduce_fadds(0, @ptrcast([*]f32, &term_2), @ptrcast([*]f32, &term_2_sum),
+  // reduce term_2 across rows to the diagonal PE
+  // notice the py instead of 0.
+  mpi_x.reduce_fadds(py, @ptrcast([*]f32, &term_2), @ptrcast([*]f32, &term_2_sum),
                      M_local, gather_rsum_diag_sum_task_id); // reduce across rows toward
 }
 
@@ -263,7 +265,7 @@ task compute_jacobi() void {
 // complete the formula: term_2_sum = (Identity-omega*D_inv*A_tile)*x_tile
 // # formula: x = omega*D_inv*b + term_2_sum
 task gather_rsum_diag_sum() void {
-  if (px == 0 ) {
+  if (px == py) { // we are on diagonal for each row.
     // find term_1 first then add term_2_sum
     for (@range(i16, M_local)) |i| {
       var d_inv: f32 = 0.0;
@@ -271,33 +273,16 @@ task gather_rsum_diag_sum() void {
       if (d_inv != 0.0) {
         var term_1: f32 = 0.0;
         term_1 = omega[0] * d_inv * b_tile[i];
-        x_smooth[i] = term_1 + term_2_sum[i];
+        x_tile[i] = term_1 + term_2_sum[i];
       } else{
-        x_smooth[i] = term_2_sum[i];
+        x_tile[i] = term_2_sum[i];
       }
     }
   }
-  // bring into top-left PE.
-  // mpi_y.gather(0, @ptrcast([*]u32, &x_smooth), @ptrcast([*]u32, &x_src),
-  //              N_local, EXIT);
-  mpi_y.gather(0, @ptrcast([*]u32, &x_smooth), @ptrcast([*]u32, &x_src),
-               N_local, scatter_smooth_x_task_id);
-}
-
-//__________________________________________________________________
-task scatter_smooth_x() void {
-  if (py == 0) {
-    mpi_x.scatter(0, @ptrcast([*]u32, &x_src), @ptrcast([*]u32, &x_tile),
-                  N_local, broadcast_x_down_task_id);
-  } else {
-    @activate(broadcast_x_down_task_id);
-  }
-}
-
-// This assumes X is now X_smooth
-// Broadcast tiles of `x` down the columns of PEs
-task broadcast_x_down() void {
-  mpi_y.broadcast(0, @ptrcast([*]u32, &x_tile), N_local, compute_task_id);
+    // other PEs are not working now.
+  // send x_tile to each pe in the column, now each PE has new x_tile.
+  mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local, compute_task_id);
+  
 }
 
 // Compute the product of the local `x_tile` with the local `A_tile`,
@@ -305,35 +290,38 @@ task broadcast_x_down() void {
 task compute() void {
   // (vector_size, ax, A, x) // ax = A*x
   compute_mv_per_tile(N_local, dsd_local_prod, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  
-  mpi_x.reduce_fadds(0, @ptrcast([*]f32, &local_prod), @ptrcast([*]f32, &row_sum),
+  // reduce local_prod across rows to the diagonal PE
+  mpi_x.reduce_fadds(py, @ptrcast([*]f32, &local_prod), @ptrcast([*]f32, &row_sum),
                      M_local, gather_result_task_id); // reduce across rows towards left
 
 }
 
 // Gather the product into the top left PE
 task gather_result() void {
-  if (px == 0) {
-    @fsubs(dsd_row_sum, dsd_b_tile, dsd_row_sum); // r = b - ax
+  if (px == py) {
+    @fsubs(dsd_residual_tile, dsd_b_tile, dsd_row_sum); // r = b - ax
   }
-  // bring into top-left PE.
-  mpi_y.gather(0, @ptrcast([*]u32, &row_sum), @ptrcast([*]u32, &residual),
-               M_local, scatter_residual_task_id);
+  // // bring into top-left PE.
+  // mpi_y.gather(0, @ptrcast([*]u32, &row_sum), @ptrcast([*]u32, &residual),
+  //              M_local, scatter_residual_task_id);
+  // bcast to other PEs.
+  mpi_y.broadcast(px, @ptrcast([*]u32, &residual_tile), M_local, restrict_compute_task_id);
 }
 
 
-task scatter_residual() void {
-  if (py == 0) {
-    mpi_x.scatter(0, @ptrcast([*]u32, &residual), @ptrcast([*]u32, &residual_tile),
-               M_local, broadcast_residual_task_id);  
-  } else {
-    @activate(broadcast_residual_task_id);
-  }
-}
+// task scatter_residual() void {
+//   if (py == 0) {
+//     mpi_x.scatter(0, @ptrcast([*]u32, &residual), @ptrcast([*]u32, &residual_tile),
+//                M_local, broadcast_residual_task_id);  
+//   } else {
+//     @activate(broadcast_residual_task_id);
+//   }
+// }
 
-// Broadcast tiles of `residual` down the columns of PEs
-task broadcast_residual() void {
-  mpi_y.broadcast(0, @ptrcast([*]u32, &residual_tile), R_N_local, restrict_compute_task_id);
-}
+// // Broadcast tiles of `residual` down the columns of PEs
+// task broadcast_residual() void {
+//   mpi_y.broadcast(0, @ptrcast([*]u32, &residual_tile), R_N_local, restrict_compute_task_id);
+// }
 
 task restrict_compute() void {
   // local_prod_R = R_tile*residual_tile
@@ -356,14 +344,14 @@ task f_exit() void {
 
 comptime {
   // @bind_local_task(scatter_x, scatter_x_task_id);
-  @bind_local_task(broadcast_x_down, broadcast_x_down_task_id);
+  // @bind_local_task(broadcast_x_down, broadcast_x_down_task_id);
   @bind_local_task(compute, compute_task_id);
   @bind_local_task(gather_result, gather_result_task_id);
-  @bind_local_task(scatter_residual, scatter_residual_task_id);
-  @bind_local_task(broadcast_residual, broadcast_residual_task_id);
+  // @bind_local_task(scatter_residual, scatter_residual_task_id);
+  // @bind_local_task(broadcast_residual, broadcast_residual_task_id);
   @bind_local_task(restrict_compute, restrict_compute_task_id);
   @bind_local_task(gather_b_next, gather_b_next_task_id);
-  @bind_local_task(scatter_smooth_x, scatter_smooth_x_task_id);
+  // @bind_local_task(scatter_smooth_x, scatter_smooth_x_task_id);
   // @bind_local_task(bcast_x_down, bcast_x_down_task_id);
   @bind_local_task(compute_jacobi, compute_jacobi_task_id);
   // @bind_local_task(gather_diag_sum, gather_diag_sum_task_id);
