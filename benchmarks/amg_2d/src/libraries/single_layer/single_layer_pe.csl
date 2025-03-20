@@ -130,8 +130,8 @@ const dsd_diag_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_
 
 // Pointers and advertised outside
 var ptr_y : [*]f32 = &residual;
-var ptr_x : [*]f32 = &x_src;
-var ptr_b : [*]f32 = &b_src;
+var ptr_x : [*]f32 = &x_tile;
+var ptr_b : [*]f32 = &b_tile;
 var ptr_A : [*]f32 = &A_tile;
 var ptr_R : [*]f32 = &R_tile;
 var ptr_b_next : [*]f32 = &b_next;
@@ -213,28 +213,30 @@ fn main() void {
   px = mpi_x.pe_id;
   py = mpi_y.pe_id;
 
-  if (px == 0) {
-    mpi_y.scatter(0, @ptrcast([*]u32, &b_src), @ptrcast([*]u32, &b_tile),
-                  M_local, scatter_x_task_id);
-  } else {
-    @activate(scatter_x_task_id);
-  }
+  @activate(compute_jacobi_task_id);
 }
+//   if (px == 0) {
+//     mpi_y.scatter(0, @ptrcast([*]u32, &b_src), @ptrcast([*]u32, &b_tile),
+//                   M_local, scatter_x_task_id);
+//   } else {
+//     @activate(scatter_x_task_id);
+//   }
+// }
 
-// Scatter `x` into tiles across the top row of PEs
-task scatter_x() void {
-  if (py == 0) {
-    mpi_x.scatter(0, @ptrcast([*]u32, &x_src), @ptrcast([*]u32, &x_tile),
-                  N_local, bcast_x_down_task_id);
-  } else {
-    @activate(bcast_x_down_task_id);
-  }
-}
+// // Scatter `x` into tiles across the top row of PEs
+// task scatter_x() void {
+//   if (py == 0) {
+//     mpi_x.scatter(0, @ptrcast([*]u32, &x_src), @ptrcast([*]u32, &x_tile),
+//                   N_local, bcast_x_down_task_id);
+//   } else {
+//     @activate(bcast_x_down_task_id);
+//   }
+// }
 
-// diverted from here.
-task bcast_x_down() void {
-  mpi_y.broadcast(0, @ptrcast([*]u32, &x_tile), N_local, compute_jacobi_task_id);
-}
+// // diverted from here.
+// task bcast_x_down() void {
+//   mpi_y.broadcast(0, @ptrcast([*]u32, &x_tile), N_local, compute_jacobi_task_id);
+// }
 
 // compute_jacobi()
 // x_tile[i] = (1.0 - omega) * temp_tile[i] + omega * (b_tile[i] - rsum) / diag;
@@ -343,7 +345,7 @@ task f_exit() void {
 }
 
 comptime {
-  @bind_local_task(scatter_x, scatter_x_task_id);
+  // @bind_local_task(scatter_x, scatter_x_task_id);
   @bind_local_task(broadcast_x_down, broadcast_x_down_task_id);
   @bind_local_task(compute, compute_task_id);
   @bind_local_task(gather_result, gather_result_task_id);
@@ -352,7 +354,7 @@ comptime {
   @bind_local_task(restrict_compute, restrict_compute_task_id);
   @bind_local_task(gather_b_next, gather_b_next_task_id);
   @bind_local_task(scatter_smooth_x, scatter_smooth_x_task_id);
-  @bind_local_task(bcast_x_down, bcast_x_down_task_id);
+  // @bind_local_task(bcast_x_down, bcast_x_down_task_id);
   @bind_local_task(compute_jacobi, compute_jacobi_task_id);
   @bind_local_task(gather_diag_sum, gather_diag_sum_task_id);
   @bind_local_task(gather_row_sum, gather_row_sum_task_id);

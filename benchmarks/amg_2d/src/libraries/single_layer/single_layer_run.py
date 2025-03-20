@@ -127,11 +127,14 @@ runner.memcpy_h2d(symbol_R, data_R, 0, 0, kernel_cols, kernel_rows, per_pe_restr
                   streaming=False, data_type=memcpy_dtype, nonblock=False,
                   order=memcpy_order)
 
-# Place x and b on PE (0,0). They will be scattered with collective comms
-runner.memcpy_h2d(symbol_x, X, 0, 0, 1, 1, matrix_cols,
+# x is across rows and b is across cols
+runner.memcpy_h2d_colbcast(symbol_x, X, 0, 0, kernel_cols, kernel_rows, per_pe_cols,
                   streaming=False, data_type=memcpy_dtype, nonblock=False, order=memcpy_order)
-runner.memcpy_h2d(symbol_b, B, 0, 0, 1, 1, matrix_rows,
+
+# B will be distributed but the diagonal will only process the first term.
+runner.memcpy_h2d_rowbcast(symbol_b, B, 0, 0, kernel_cols, kernel_rows, per_pe_rows,
                   streaming=False, data_type=memcpy_dtype, nonblock=False, order=memcpy_order)
+
 print("Launching kernel...")
 # Record start time
 
@@ -140,6 +143,7 @@ print("Launching kernel...")
 runner.launch("main", nonblock=False)
 
 # TOPRIGHT PE
+# TODO: Check if kernel_cols-1 is correct or to use only kernel_cols
 b_next_device = np.zeros(restrict_rows, dtype=np.float32)
 runner.memcpy_d2h(b_next_device, symbol_b_next, kernel_cols-1, 0, 1, 1, restrict_rows,
                   streaming=False, data_type=memcpy_dtype, nonblock=False,
