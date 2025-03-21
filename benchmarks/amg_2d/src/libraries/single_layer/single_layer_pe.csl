@@ -115,7 +115,7 @@ var residual_tile = @zeros([M_local]f32);
 var R_tile = @zeros([R_M_local*R_N_local]f32);
 var local_prod_R = @zeros([R_M_local]f32);
 var row_sum_R = @zeros([R_M_local]f32);
-var b_next = @zeros([R_M_local * layer_kernel_rows]f32);
+var b_next = @zeros([R_M_local]f32);  // rightmost Column
 
 // add new variables
 var omega = @zeros([1]f32);
@@ -161,6 +161,9 @@ fn compute_mv_per_tile(N_tile: i16, dsd_mv_tile: anytype, dsd_matrix_tile: anyty
 }
 // New formula implementation: Jacobi iteration logic (new formula)
 // formula: x = (Identity-omega*D_inv*A_tile)*x_tile
+// x_tile[i] = (1.0 - omega) * temp_tile[i] + omega * (b_tile[i] - rsum) / diag;
+// The diagonal PEs add the term_1 so that we don't have to gather on diag PE.
+
 fn jacobi_local(iterations: i16) void {
   for (@range(i16, iterations)) |iter| {
     for (@range(i16, M_local)) |i| {  // Given A is a SPD, it's M==N always.
@@ -326,17 +329,17 @@ task gather_result() void {
 task restrict_compute() void {
   // local_prod_R = R_tile*residual_tile
   compute_mv_per_tile(R_N_local, dsd_local_prod_R, dsd_R_tile, @ptrcast([*]const f32, &residual_tile));
-  mpi_x.reduce_fadds(layer_kernel_cols-1, @ptrcast([*]f32, &local_prod_R), @ptrcast([*]f32, &row_sum_R),
-                     R_M_local, gather_b_next_task_id); // reduce across rows towards left
+  mpi_x.reduce_fadds(layer_kernel_cols-1, @ptrcast([*]f32, &local_prod_R), @ptrcast([*]f32, &b_next),
+                     R_M_local, EXIT); // reduce across rows towards left
 
 }
 
-// Gather the product into the top left PE
-task gather_b_next() void {
-  // bring into top rightmost PE.
-  mpi_y.gather(0, @ptrcast([*]u32, &row_sum_R), @ptrcast([*]u32, &b_next),
-               R_M_local, EXIT);
-}
+// // Gather the product into the top left PE
+// task gather_b_next() void {
+//   // bring into top rightmost PE.
+//   mpi_y.gather(0, @ptrcast([*]u32, &row_sum_R), @ptrcast([*]u32, &b_next),
+//                R_M_local, EXIT);
+// }
 
 task f_exit() void {
   sys_mod.unblock_cmd_stream();
@@ -350,7 +353,7 @@ comptime {
   // @bind_local_task(scatter_residual, scatter_residual_task_id);
   // @bind_local_task(broadcast_residual, broadcast_residual_task_id);
   @bind_local_task(restrict_compute, restrict_compute_task_id);
-  @bind_local_task(gather_b_next, gather_b_next_task_id);
+  // @bind_local_task(gather_b_next, gather_b_next_task_id);
   // @bind_local_task(scatter_smooth_x, scatter_smooth_x_task_id);
   // @bind_local_task(bcast_x_down, bcast_x_down_task_id);
   @bind_local_task(compute_jacobi, compute_jacobi_task_id);

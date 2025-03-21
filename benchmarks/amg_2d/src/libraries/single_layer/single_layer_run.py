@@ -99,6 +99,14 @@ A = np.random.rand(matrix_rows, matrix_cols).astype(np.float32)
 X = np.random.rand(matrix_cols).astype(np.float32)
 B = np.random.rand(matrix_rows).astype(np.float32)
 
+
+# A = np.array([[4, 1,  3,  3],
+#               [4, 1, 0, 1],
+#               [2, 2, 0, 4],
+#               [0, 4, 0, 3]], dtype=np.float32)
+# B = np.array([0,0,0,3], dtype=np.float32)
+# X = np.array([2,3,4,4], dtype=np.float32)
+
 # check if R_rows = layer_rows_A
 assert restrict_cols == matrix_rows, "restrict_cols must be equal to matrix_rows, example:(4,49) x (49,1) = (4,1)"
 R = np.random.rand(restrict_rows, restrict_cols).astype(np.float32)
@@ -231,13 +239,10 @@ runner.launch("main", nonblock=False)
 
 # TOPRIGHT PE
 b_next_device = np.zeros(restrict_rows, dtype=np.float32)
-runner.memcpy_d2h(b_next_device, symbol_b_next, kernel_cols-1, 0, 1, 1, restrict_rows,
+runner.memcpy_d2h(b_next_device, symbol_b_next, kernel_cols-1, 0, 1, kernel_rows, per_pe_restrict_rows,
                   streaming=False, data_type=memcpy_dtype, nonblock=False,
                   order=memcpy_order)
-# x_smooth_device = np.zeros(matrix_cols, dtype=np.float32)
-# runner.memcpy_d2h(x_smooth_device, symbol_x_smooth_src, 0, 0, 1, 1, matrix_cols,
-#                   streaming=False, data_type=memcpy_dtype, nonblock=False,
-#                   order=memcpy_order)
+
 runner.stop()
 # Record end time and calculate duration
 end_time = time.time()
