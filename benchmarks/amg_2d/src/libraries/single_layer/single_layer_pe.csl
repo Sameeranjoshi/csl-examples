@@ -16,15 +16,15 @@
 // color/ task ID map
 //
 //  ID var             ID var              ID var               ID var
-//   0 c2d_x_color_0    9 EXIT             18 scatter_residual  27 reserved (memcpy)
-//   1 c2d_x_color_1   10 scatter_x        19 restrict_compute  28 reserved (memcpy)
-//   2 c2d_y_color_0   11 broadcast_x_down 20 gather_b_next     29 reserved (memcpy)
-//   3 c2d_y_color_1   12 compute          21 reserved (memcpy) 30 reserved (memcpy)
-//   4                 13 gather_result    22 reserved (memcpy) 31 reserved
-//   5                 14 c2d_x_entrypt_0  23 reserved (memcpy) 32
-//   6                 15 c2d_x_entrypt_1  24 broadcast_residual  33
-//   7                 16 c2d_y_entrypt_0  25                   34
-//   8                 17 c2d_y_entrypt_1  26                   35
+//   0 c2d_x_color_0    9 EXIT             18 compute_restriction  27 reserved (memcpy)
+//   1 c2d_x_color_1   10                  19 restrict_compute     28 reserved (memcpy)
+//   2 c2d_y_color_0   11                  20 bcast_residual       29 reserved (memcpy)
+//   3 c2d_y_color_1   12 compute_residual 21 reserved (memcpy)   30 reserved (memcpy)
+//   4                 13 bcast_residual   22 reserved (memcpy)   31 reserved
+//   5 compute_jacobi  14 c2d_x_entrypt_0  23 reserved (memcpy)   32
+//   6 compute_residual15 c2d_x_entrypt_1  24 broadcast_residual  33
+//   7                 16 c2d_y_entrypt_0  25 bcast_jacobi        34
+//   8                 17 c2d_y_entrypt_1  26                     35
 
 // params
 param memcpy_params: comptime_struct;
@@ -91,7 +91,6 @@ var omega = @zeros([1]f32);
 // The product of Ax or Rx or any other matrix-vector product.
 var Ax = @zeros([M_local]f32);  //Ax
 var Rx = @zeros([R_M_local]f32);  // Rr
-var diag_tile = @zeros([M_local]f32);
 var residual_tile = @zeros([M_local]f32);
 var term_2 = @zeros([M_local]f32);
 var term_2_sum = @zeros([M_local]f32);
@@ -108,7 +107,6 @@ const dsd_x_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N_local} -> x_til
 const dsd_b_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> b_tile[i]});
 const dsd_Ax = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> Ax[i]});
 const dsd_Rx = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> Rx[i]});
-const dsd_diag_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*@as(i16, N_local) + i]});
 const dsd_residual_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> residual_tile[i]});
 
 // Pointers and advertised outside
