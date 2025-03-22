@@ -219,20 +219,9 @@ D_inv_blocks = create_block_diagonal_inverse(A, kernel_rows, kernel_cols, per_pe
 print("D_inv_blocks shape:", D_inv_blocks.shape)
 print("D_inv_blocks:\n", D_inv_blocks)
 
-# Create identity matrix with same structure as D_inv_blocks but with non-zero values set to 1.0
-# Create identity matrix with same dimensions as A
-identity_blocks = np.eye(matrix_rows, matrix_cols, dtype=np.float32)
-print("Identity matrix:\n", identity_blocks)
-
 # Now we can use D_inv_blocks for broadcasting to PEs
 data_D_inv = np.stack(np.split(np.stack(np.split(D_inv_blocks, kernel_cols, axis=1)), kernel_rows, axis=1)).ravel()
 runner.memcpy_h2d(symbol_D_inv, data_D_inv, 0, 0, kernel_cols, kernel_rows, per_pe_rows * per_pe_cols,
-                  streaming=False, data_type=memcpy_dtype, nonblock=False,
-                  order=memcpy_order)
-
-# copy the identity matrix to all PEs
-data_identity = np.stack(np.split(np.stack(np.split(identity_blocks, kernel_cols, axis=1)), kernel_rows, axis=1)).ravel()
-runner.memcpy_h2d(symbol_identity, data_identity, 0, 0, kernel_cols, kernel_rows, per_pe_rows * per_pe_cols,
                   streaming=False, data_type=memcpy_dtype, nonblock=False,
                   order=memcpy_order)
 

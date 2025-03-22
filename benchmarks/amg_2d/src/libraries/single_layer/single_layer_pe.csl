@@ -85,7 +85,7 @@ var x_tile = @zeros([N_local]f32);
 var b_tile = @zeros([M_local]f32);
 var omega = @zeros([1]f32);
 var D_inv = @zeros([M_local*N_local]f32);
-var identity = @zeros([M_local*N_local]f32);
+
 
 // temporary variables on each PE.
 // The product of Ax or Rx or any other matrix-vector product.
@@ -95,6 +95,7 @@ var diag_tile = @zeros([M_local]f32);
 var residual_tile = @zeros([M_local]f32);
 var term_2 = @zeros([M_local]f32);
 var term_2_sum = @zeros([M_local]f32);
+var identity = @zeros([M_local*N_local]f32);
 
 // output
 var b_next = @zeros([R_M_local]f32);  // rightmost Column
@@ -117,7 +118,6 @@ var ptr_R : [*]f32 = &R_tile;
 var ptr_b_next : [*]f32 = &b_next;
 var ptr_omega: [*]f32 = &omega;
 var ptr_D_inv: [*]f32 = &D_inv;
-var ptr_identity: [*]f32 = &identity;
 // temp variables
 // Updated at runtime to store x and y IDs of PE reported by collectives library
 var px: u16;
@@ -161,6 +161,19 @@ fn jacobi_local(iterations: i16) void {
   }
 }
 
+fn initialize() void {
+  if (px == py) {
+    // Identity matrix
+    for (@range(i16, M_local)) |i| {
+      identity[i*N_local + i] = 1.0;
+    }
+    // // now D_inv, is 1/A_tile for px==py and bcast to other PEs.
+    // for (@range(i16, M_local)) |i| {
+    //   D_inv[i*N_local + i] = 1.0 / A_tile[i*N_local + i];
+    // }
+    // mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local*N_local, compute_jacobi_task_id);
+  }
+}
 // Entrypoint into kernel
 fn main() void {
   mpi_x.init();
@@ -168,6 +181,7 @@ fn main() void {
   px = mpi_x.pe_id;
   py = mpi_y.pe_id;
 
+  initialize();
   @activate(compute_jacobi_task_id);
 }
 
@@ -248,6 +262,5 @@ comptime {
   @export_symbol(ptr_b_next, "b_next");
   @export_symbol(ptr_omega, "omega");
   @export_symbol(ptr_D_inv, "D_inv");
-  @export_symbol(ptr_identity, "identity");
   @export_symbol(main);
 }
