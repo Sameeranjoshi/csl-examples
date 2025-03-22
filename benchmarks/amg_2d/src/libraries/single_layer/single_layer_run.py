@@ -24,57 +24,6 @@ from jacobi_only import jacobi_iteration, jacobi_iteration_alt
 from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime     # pylint: disable=no-name-in-module
 from cerebras.sdk.runtime.sdkruntimepybind import MemcpyDataType # pylint: disable=no-name-in-module
 from cerebras.sdk.runtime.sdkruntimepybind import MemcpyOrder    # pylint: disable=no-name-in-module
-
-
-
-def create_block_diagonal_inverse(A, kernel_rows, kernel_cols, per_pe_rows, per_pe_cols):
-    """Create a block-structured diagonal inverse matrix where each row's blocks use that row's diagonal inverse.
-    For zero diagonal elements, the corresponding row in the inverse will be zero.
-    
-    Args:
-        A (np.ndarray): Input matrix
-        kernel_rows (int): Number of rows in the kernel grid
-        kernel_cols (int): Number of columns in the kernel grid
-        per_pe_rows (int): Number of rows per PE
-        per_pe_cols (int): Number of columns per PE
-        
-    Returns:
-        np.ndarray: Block-structured diagonal inverse matrix
-    """
-    # Extract diagonal and create inverse
-    D = np.diag(A)
-    # Create a mask for non-zero diagonal elements
-    non_zero_mask = D != 0
-    # Create inverse with zeros for zero diagonal elements
-    D_inv = np.zeros((len(D), len(D)), dtype=np.float32)
-    D_inv[non_zero_mask, non_zero_mask] = 1.0 / D[non_zero_mask]
-    
-    # Create block-structured matrix
-    matrix_rows = kernel_rows * per_pe_rows
-    matrix_cols = kernel_cols * per_pe_cols
-    D_inv_blocks = np.zeros((matrix_rows, matrix_cols), dtype=np.float32)
-    
-    # For each row of blocks
-    for i in range(kernel_rows):
-        # Get the diagonal inverse for this row's diagonal block
-        row_start = i * per_pe_rows
-        row_end = (i + 1) * per_pe_rows
-        diag_inv = D_inv[row_start:row_end, row_start:row_end]
-        
-        # For each column of blocks in this row
-        for j in range(kernel_cols):
-            col_start = j * per_pe_cols
-            col_end = (j + 1) * per_pe_cols
-            
-            # If this is a diagonal block, use the actual inverse
-            if i == j:
-                D_inv_blocks[row_start:row_end, col_start:col_end] = diag_inv
-            else:
-                # For off-diagonal blocks, use the diagonal inverse from this row
-                D_inv_blocks[row_start:row_end, col_start:col_end] = diag_inv
-    
-    return D_inv_blocks
-  
   
 parser = argparse.ArgumentParser()
 parser.add_argument("--name", help="the test name")
@@ -96,16 +45,16 @@ restrict_cols = int(compile_data['params']['layer_cols_R'])
 # Use a deterministic seed so that CI results are predictable
 np.random.seed(seed=7)
 
-A = np.array([[4, 1,  3,  3],
-              [4, 1, 0, 1],
-              [2, 2, 0, 4],
-              [0, 4, 0, 3]], dtype=np.float32)
-B = np.array([0,0,0,3], dtype=np.float32)
-X = np.array([2,3,4,4], dtype=np.float32)
+# A = np.array([[4, 1,  3,  3],
+#               [4, 1, 0, 1],
+#               [2, 2, 0, 4],
+#               [0, 4, 0, 3]], dtype=np.float32)
+# B = np.array([0,0,0,3], dtype=np.float32)
+# X = np.array([2,3,4,4], dtype=np.float32)
 
-# A = np.random.rand(matrix_rows, matrix_cols).astype(np.float32)
-# X = np.random.rand(matrix_cols).astype(np.float32)
-# B = np.random.rand(matrix_rows).astype(np.float32)
+A = np.random.rand(matrix_rows, matrix_cols).astype(np.float32)
+X = np.random.rand(matrix_cols).astype(np.float32)
+B = np.random.rand(matrix_rows).astype(np.float32)
 R = np.random.rand(restrict_rows, restrict_cols).astype(np.float32)
 
 
@@ -140,8 +89,6 @@ symbol_b_next = runner.get_id("b_next")
 symbol_x_smooth = runner.get_id("x_smooth")
 symbol_x_smooth_src = runner.get_id("x_smooth_src")
 symbol_omega = runner.get_id("omega")
-symbol_D_inv = runner.get_id("D_inv")
-symbol_identity = runner.get_id("identity")
 
 runner.load()
 runner.run()
@@ -212,18 +159,6 @@ omega[:] = 1.0
 runner.memcpy_h2d(symbol_omega, omega, 0, 0, kernel_cols, kernel_rows, 1,
                             streaming=False, data_type=memcpy_dtype, nonblock=False, order=memcpy_order)
 
-# In the main code, replace the existing block creation code with:
-np.set_printoptions(precision=4, suppress=True, linewidth=120)
-print("A:\n", A)
-D_inv_blocks = create_block_diagonal_inverse(A, kernel_rows, kernel_cols, per_pe_rows, per_pe_cols)
-print("D_inv_blocks shape:", D_inv_blocks.shape)
-print("D_inv_blocks:\n", D_inv_blocks)
-
-# Now we can use D_inv_blocks for broadcasting to PEs
-data_D_inv = np.stack(np.split(np.stack(np.split(D_inv_blocks, kernel_cols, axis=1)), kernel_rows, axis=1)).ravel()
-runner.memcpy_h2d(symbol_D_inv, data_D_inv, 0, 0, kernel_cols, kernel_rows, per_pe_rows * per_pe_cols,
-                  streaming=False, data_type=memcpy_dtype, nonblock=False,
-                  order=memcpy_order)
 
 print("Launching kernel...")
 # Record start time
