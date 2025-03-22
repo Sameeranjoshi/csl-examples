@@ -10,10 +10,10 @@ mkdir -p out
 # Array of configurations
 # Format: [A_rows, A_cols, R_rows, R_cols, kernel_rows, kernel_cols, fabric_dim_width, fabric_dim_height, out_name]
 # declare -A configs=(
-#     # ["config1"]="256 256 256 256 64 64 71 66 out/out_A256_256_R256_256_PE64_64"
-#     # ["config2"]="256 256 256 256 8 8 15 10 out/out_A256_256_R256_256_PE8_8"
+#     # ["config1"]="256 256 256 256 64 64 71 66 out/out_A256_256_R256_256_PE64_64" # crashed
+#     # ["config2"]="256 256 256 256 8 8 15 10 out/out_A256_256_R256_256_PE8_8"     
 
-#     # ["config3"]="128 128 128 128 64 64 71 66 out/out_A128_128_R128_128_PE64_64"
+#     # ["config3"]="128 128 128 128 64 64 71 66 out/out_A128_128_R128_128_PE64_64" # crashed
 #     # ["config4"]="128 128 128 128 8 8 15 10 out/out_A128_128_R128_128_PE8_8"
 
 #     ["config5"]="64 64 64 64 32 32 39 34 out/out_A64_64_R64_64_PE32_32"
