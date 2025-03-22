@@ -19,6 +19,7 @@ import argparse
 import json
 import time
 import numpy as np
+from jacobi_only import jacobi_iteration, jacobi_iteration_alt
 
 from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime     # pylint: disable=no-name-in-module
 from cerebras.sdk.runtime.sdkruntimepybind import MemcpyDataType # pylint: disable=no-name-in-module
@@ -95,30 +96,35 @@ restrict_cols = int(compile_data['params']['layer_cols_R'])
 # Use a deterministic seed so that CI results are predictable
 np.random.seed(seed=7)
 
-A = np.random.rand(matrix_rows, matrix_cols).astype(np.float32)
-X = np.random.rand(matrix_cols).astype(np.float32)
-B = np.random.rand(matrix_rows).astype(np.float32)
+A = np.array([[4, 1,  3,  3],
+              [4, 1, 0, 1],
+              [2, 2, 0, 4],
+              [0, 4, 0, 3]], dtype=np.float32)
+B = np.array([0,0,0,3], dtype=np.float32)
+X = np.array([2,3,4,4], dtype=np.float32)
 
+# A = np.random.rand(matrix_rows, matrix_cols).astype(np.float32)
+# X = np.random.rand(matrix_cols).astype(np.float32)
+# B = np.random.rand(matrix_rows).astype(np.float32)
+R = np.random.rand(restrict_rows, restrict_cols).astype(np.float32)
 
-# A = np.array([[4, 1,  3,  3],
-#               [4, 1, 0, 1],
-#               [2, 2, 0, 4],
-#               [0, 4, 0, 3]], dtype=np.float32)
-# B = np.array([0,0,0,3], dtype=np.float32)
-# X = np.array([2,3,4,4], dtype=np.float32)
 
 # check if R_rows = layer_rows_A
+# Add more.
 assert restrict_cols == matrix_rows, "restrict_cols must be equal to matrix_rows, example:(4,49) x (49,1) = (4,1)"
-R = np.random.rand(restrict_rows, restrict_cols).astype(np.float32)
+
+
 # Compute expected result
-from jacobi_only import jacobi_iteration, jacobi_iteration_alt
 x_copy = X.copy()
 omega_host = 1.0
 X_smooth_host = jacobi_iteration(A, B, x_copy, omega_host, 1)
 residual = B - (A @ X_smooth_host)
+print("residual:\n", residual)
 # Reshape residual to be a column vector for matrix multiplication
 b_next_host = R @ residual
 
+
+# DEVICE
 start_time = time.time()
 # Specify path to ELF files, set up runner
 runner = SdkRuntime(args.name, cmaddr=args.cmaddr)

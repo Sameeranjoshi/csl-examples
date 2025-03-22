@@ -2,7 +2,7 @@
 
 set -e
 
-cslc --arch=wse2 ./single_layer_layout.csl --fabric-dims=20,10 --fabric-offsets=4,1 \
+cslc --arch=wse2 ./single_layer_layout.csl --fabric-dims=39,35 --fabric-offsets=4,1 \
 --params=layer_rows_A:4,layer_cols_A:4 \
 --params=layer_rows_R:4,layer_cols_R:4 \
 --params=layer_start_x:0,layer_start_y:0,layer_kernel_rows:2,layer_kernel_cols:2,layer_index:0 \
