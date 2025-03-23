@@ -94,21 +94,30 @@ var Rx = @zeros([R_M_local]f32);  // Rr
 var residual_tile = @zeros([M_local]f32);
 var term_2 = @zeros([M_local]f32);
 var term_2_sum = @zeros([M_local]f32);
-var D_inv = @zeros([M_local*N_local]f32);
+var D_inv = @zeros([M_local]f32); // vector of diagonals of A_tile
+var identity_tile = @zeros([M_local]f32);
+var w_dinv_a_x = @zeros([M_local]f32);
+var i_into_x = @zeros([M_local]f32);
+
+
 
 // output
 var b_next = @zeros([R_M_local]f32);  // rightmost Column
 
 // DSDs
 const dsd_A_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*@as(i16, N_local)] }); // 1 row of A_tile
+const dsd_A_diag = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*N_local + i] });
 const dsd_R_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> R_tile[i*@as(i16, R_N_local)] }); // 1 row of R_tile
 const dsd_x_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N_local} -> x_tile[i]});
 const dsd_b_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> b_tile[i]});
 const dsd_Ax = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> Ax[i]});
 const dsd_Rx = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> Rx[i]});
 const dsd_residual_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> residual_tile[i]});
-const dsd_A_diag = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*N_local + i] });
-const dsd_D_inv = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> D_inv[i*N_local + i] });
+const dsd_D_inv = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> D_inv[i] });
+const dsd_identity_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> identity_tile[i] });
+const dsd_term_2 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> term_2[i] });
+var dsd_w_dinv_a_x = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> w_dinv_a_x[i] });
+var dsd_i_into_x = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> i_into_x[i] });
 
 // Pointers and advertised outside
 var ptr_x : [*]f32 = &x_tile;
@@ -124,9 +133,12 @@ var px: u16;
 var py: u16;
 
 fn compute_mv_per_tile(N_tile: i16, dsd_mv_tile: anytype, dsd_matrix_tile: anytype, vector_tile_data: [*]const f32) void {
+  @fmovs(dsd_mv_tile, 0.0); // this can cause error if not initialized.
   for (@range(i16, N_tile)) |j| {
     const dsd_offset = @increment_dsd_offset(dsd_matrix_tile, j, f32);
-    @fmacs(dsd_mv_tile, dsd_mv_tile, dsd_offset, vector_tile_data[j]);
+    if (vector_tile_data[j] != 0.0) { // helps to speed up little bit.
+      @fmacs(dsd_mv_tile, dsd_mv_tile, dsd_offset, vector_tile_data[j]);
+    }
   }
 }
 // New formula implementation: Jacobi iteration logic (new formula)
@@ -136,35 +148,20 @@ fn compute_mv_per_tile(N_tile: i16, dsd_mv_tile: anytype, dsd_matrix_tile: anyty
 
 fn jacobi_local(iterations: i16) void {
   for (@range(i16, iterations)) |iter| {
-    for (@range(i16, M_local)) |i| {  // Given A is a SPD, it's M==N always.
-        var a_into_x_rsum: f32 = 0.0;
-        var d_inv: f32 = 0.0;
-        var i_into_x_rsum: f32 = 0.0;
 
-        d_inv = D_inv[i*N_local + i]; 
-        // Apply formula: x = (I - omega*D_inv*A)*x
-        if (d_inv != 0.0) {
-          // Calculate matrix-vector product (A*x)
-          for (@range(i16, N_local)) |j| {
-              a_into_x_rsum += A_tile[i*N_local + j] * x_tile[j];  // vector
-          }
-          // optimization: I * vector is always vector.
-          // This assumes the M_local == N_local.
-          // so if PEs are not square, this will break, so needs padding.
-          if (px == py) {
-            i_into_x_rsum = x_tile[i];  // I*x = x
-          } else {
-            i_into_x_rsum = 0.0;
-          }
-          term_2[i] = i_into_x_rsum - omega[0] * d_inv * a_into_x_rsum;
-        } else {
-          if (px == py) {
-            term_2[i] = x_tile[i];
-          } else {
-            term_2[i] = 0.0;
-          }
-        }
+
+    compute_mv_per_tile(N_local, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax(vector) = Ax(matrix * vector)
+    @fmuls(dsd_w_dinv_a_x, dsd_D_inv, dsd_Ax); // tmp = D_inv * Ax (vector * vector)
+    @fmuls(dsd_w_dinv_a_x, omega[0], dsd_w_dinv_a_x); // tmp = w * D_inv * Ax (scalar * vector)
+
+    if (px == py) { // good speedup.
+      @fmovs(dsd_i_into_x, dsd_x_tile); // I*x = x
+      // save some operatioons can be effective if PE grid large enough.
     }
+
+    @fsubs(dsd_term_2, dsd_i_into_x, dsd_w_dinv_a_x); // tmp = I*x - omega * D_inv * Ax
+
+    
   }
 }
 
@@ -177,16 +174,17 @@ fn printdsd(dsd: anytype) void {
 
 }
 
+fn inverse_callback(val: f32) f32 {
+  return if (val != 0.0) math_lib.inv(val) else 0.0;
+}
+
 fn initialize() void {
   if (px == py) {  
     // now D_inv, is 1/A_tile for px==py and bcast to other PEs.
-    for (@range(i16, M_local)) |i| {
-      if (A_tile[i*N_local + i] != 0.0) {
-        D_inv[i*N_local + i] = math_lib.inv(A_tile[i*N_local + i]); // use math library.
-      }
-    }
+    @map(inverse_callback, dsd_A_diag, dsd_D_inv);
+    @fmovs(dsd_identity_tile, 1.0);
   }
-  mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local*N_local, compute_jacobi_task_id);
+  mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, compute_jacobi_task_id);
 }
 
 // Entrypoint into kernel
@@ -216,7 +214,7 @@ task bcast_jacobi() void {
     // find term_1 first then add term_2_sum
     for (@range(i16, M_local)) |i| {
       var d_inv: f32 = 0.0;
-      d_inv = D_inv[i*N_local + i];
+      d_inv = D_inv[i];
       if (d_inv != 0.0) {
         var term_1: f32 = 0.0;
         term_1 = omega[0] * d_inv * b_tile[i];
