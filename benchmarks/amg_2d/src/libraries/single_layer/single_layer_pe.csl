@@ -85,8 +85,6 @@ var x_tile = @zeros([N_local]f32);
 var b_tile = @zeros([M_local]f32);
 var omega = @zeros([1]f32);
 
-
-
 // temporary variables on each PE.
 // The product of Ax or Rx or any other matrix-vector product.
 var Ax = @zeros([M_local]f32);  //Ax
@@ -161,17 +159,21 @@ fn jacobi_local(iterations: i16) void {
 
     @fsubs(dsd_term_2, dsd_i_into_x, dsd_w_dinv_a_x); // tmp = I*x - omega * D_inv * Ax
 
-    
+    if (px == py) { // omega * D_inv * b
+      @fmuls(dsd_w_dinv_a_x, dsd_D_inv, dsd_b_tile); // tmp = D_inv * b (vector * vector)
+      @fmuls(dsd_w_dinv_a_x, omega[0], dsd_w_dinv_a_x); // tmp = omega * D_inv * b (scalar * vector)
+      @fadds(dsd_term_2, dsd_w_dinv_a_x, dsd_term_2); // term_2 = omega * D_inv * b + term_2
+    }
   }
 }
 
-fn printme(val: anytype) void {
-  simprint.fmt_with_coords("x[i] = {f}", .{ val });
+// Ax = A_local * x_local
+fn residual_local() void {
+  compute_mv_per_tile(N_local, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax = A_tile * x_tile
 }
 
-fn printdsd(dsd: anytype) void {
-  // @map(printme, dsd);
-
+fn printdsd(val: f32) void {
+  simprint.fmt_with_coords("yourdsd_name[i] = {f}", .{ val });
 }
 
 fn inverse_callback(val: f32) f32 {
@@ -202,38 +204,19 @@ task compute_jacobi() void {
   jacobi_local(iterations);  // updates term_2
 
   // notice the py instead of 0.
-  mpi_x.reduce_fadds(py, @ptrcast([*]f32, &term_2), @ptrcast([*]f32, &term_2_sum),
+  mpi_x.reduce_fadds(py, @ptrcast([*]f32, &term_2), @ptrcast([*]f32, &x_tile),
                      M_local, bcast_jacobi_task_id); // reduce across rows toward
 }
 
-// Gather the product into the top left PE
-// complete the formula: term_2_sum = (Identity-omega*D_inv*A_tile)*x_tile
-// # formula: x = omega*D_inv*b + term_2_sum
-task bcast_jacobi() void {
-  if (px == py) { // we are on diagonal for each row.
-    // find term_1 first then add term_2_sum
-    for (@range(i16, M_local)) |i| {
-      var d_inv: f32 = 0.0;
-      d_inv = D_inv[i];
-      if (d_inv != 0.0) {
-        var term_1: f32 = 0.0;
-        term_1 = omega[0] * d_inv * b_tile[i];
-        x_tile[i] = term_1 + term_2_sum[i];
-      } else{
-        x_tile[i] = term_2_sum[i];
-      }
-    }
-  }
+// Gather the product into the diagonal PEs
+task bcast_jacobi() void {  
   mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local, compute_residual_task_id);
 }
 
-// Ax = A*x
 // r = b - Ax
 // row_sum = sum(Ax)
 task compute_residual() void {
-  // (vector_size, ax, A, x)
-  // ax = A*x
-  compute_mv_per_tile(N_local, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));
+  residual_local(); // has answers in dsd_Ax
   mpi_x.reduce_fadds(py, @ptrcast([*]f32, &Ax), @ptrcast([*]f32, &residual_tile),
                      M_local, bcast_residual_task_id); // reduce across rows towards left
 }
