@@ -68,22 +68,22 @@ def jacobi_iteration_alt(A, b, x, omega, iterations):
 # b = np.array([1, 2, 0, 1], dtype=np.float32)
 # x = np.ones(4, dtype=np.float32)
 
-A = np.array([[4, 1,  3,  3],
-              [4, 1, 0, 1],
-              [2, 2, 0, 4],
-              [0, 4, 0, 3]], dtype=np.float32)
-b = np.array([0,0,0,3], dtype=np.float32)
-x = np.array([2,3,4,4], dtype=np.float32)
+# A = np.array([[4, 1,  3,  3],
+#               [4, 1, 0, 1],
+#               [2, 2, 0, 4],
+#               [0, 4, 0, 3]], dtype=np.float32)
+# b = np.array([0,0,0,3], dtype=np.float32)
+# x = np.array([2,3,4,4], dtype=np.float32)
 
-iterations = 1
-jacobi_omega = 1.0
-input_x = np.copy(x)
-input_x_alt = np.copy(x)
-print("Input x:", input_x)
-print("Input x alt:", input_x_alt)
+# iterations = 1
+# jacobi_omega = 1.0
+# input_x = np.copy(x)
+# input_x_alt = np.copy(x)
+# print("Input x:", input_x)
+# print("Input x alt:", input_x_alt)
 
-smoothed_x = jacobi_iteration(A, b, input_x, jacobi_omega, iterations)
-smoothed_x_alt = jacobi_iteration_alt(A, b, input_x_alt, jacobi_omega, iterations)
+# smoothed_x = jacobi_iteration(A, b, input_x, jacobi_omega, iterations)
+# smoothed_x_alt = jacobi_iteration_alt(A, b, input_x_alt, jacobi_omega, iterations)
 
-print("Smoothed x:", smoothed_x)
-print("Smoothed x alt:", smoothed_x_alt)
+# print("Smoothed x:", smoothed_x)
+# print("Smoothed x alt:", smoothed_x_alt)

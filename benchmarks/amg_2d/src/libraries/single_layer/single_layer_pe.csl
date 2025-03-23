@@ -91,13 +91,9 @@ var Ax = @zeros([M_local]f32);  //Ax
 var Rx = @zeros([R_M_local]f32);  // Rr
 var residual_tile = @zeros([M_local]f32);
 var term_2 = @zeros([M_local]f32);
-var term_2_sum = @zeros([M_local]f32);
 var D_inv = @zeros([M_local]f32); // vector of diagonals of A_tile
-var identity_tile = @zeros([M_local]f32);
 var w_dinv_a_x = @zeros([M_local]f32);
 var i_into_x = @zeros([M_local]f32);
-
-
 
 // output
 var b_next = @zeros([R_M_local]f32);  // rightmost Column
@@ -112,7 +108,6 @@ const dsd_Ax = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> Ax[i]});
 const dsd_Rx = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> Rx[i]});
 const dsd_residual_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> residual_tile[i]});
 const dsd_D_inv = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> D_inv[i] });
-const dsd_identity_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> identity_tile[i] });
 const dsd_term_2 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> term_2[i] });
 var dsd_w_dinv_a_x = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> w_dinv_a_x[i] });
 var dsd_i_into_x = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> i_into_x[i] });
@@ -155,7 +150,7 @@ fn jacobi_local(iterations: i16) void {
     if (px == py) { // good speedup.
       @fmovs(dsd_i_into_x, dsd_x_tile); // I*x = x
       // save some operatioons can be effective if PE grid large enough.
-    }
+    } // otherwise, 0.0
 
     @fsubs(dsd_term_2, dsd_i_into_x, dsd_w_dinv_a_x); // tmp = I*x - omega * D_inv * Ax
 
@@ -184,7 +179,6 @@ fn initialize() void {
   if (px == py) {  
     // now D_inv, is 1/A_tile for px==py and bcast to other PEs.
     @map(inverse_callback, dsd_A_diag, dsd_D_inv);
-    @fmovs(dsd_identity_tile, 1.0);
   }
   mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, compute_jacobi_task_id);
 }
