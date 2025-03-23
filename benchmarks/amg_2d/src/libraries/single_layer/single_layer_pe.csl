@@ -55,7 +55,7 @@ const compute_restriction_task_id:local_task_id = @get_local_task_id(18);
 const bcast_jacobi_task_id:local_task_id = @get_local_task_id(25);
 
 
-
+const math_lib = @import_module("<math>");
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 // The default values of queue IDs and DSR IDs of collectives_2d are applied implicitly.
 // See mpi_x and mpi_y of gemm-collectives_2d/pe.csl for default values of queue and DSR IDs.
@@ -94,7 +94,6 @@ var Rx = @zeros([R_M_local]f32);  // Rr
 var residual_tile = @zeros([M_local]f32);
 var term_2 = @zeros([M_local]f32);
 var term_2_sum = @zeros([M_local]f32);
-var identity = @zeros([M_local*N_local]f32);
 var D_inv = @zeros([M_local*N_local]f32);
 
 // output
@@ -108,6 +107,8 @@ const dsd_b_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> b_til
 const dsd_Ax = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> Ax[i]});
 const dsd_Rx = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> Rx[i]});
 const dsd_residual_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> residual_tile[i]});
+const dsd_A_diag = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*N_local + i] });
+const dsd_D_inv = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> D_inv[i*N_local + i] });
 
 // Pointers and advertised outside
 var ptr_x : [*]f32 = &x_tile;
@@ -146,7 +147,14 @@ fn jacobi_local(iterations: i16) void {
           // Calculate matrix-vector product (A*x)
           for (@range(i16, N_local)) |j| {
               a_into_x_rsum += A_tile[i*N_local + j] * x_tile[j];  // vector
-              i_into_x_rsum += identity[i*N_local + j] * x_tile[j]; // vector
+          }
+          // optimization: I * vector is always vector.
+          // This assumes the M_local == N_local.
+          // so if PEs are not square, this will break, so needs padding.
+          if (px == py) {
+            i_into_x_rsum = x_tile[i];  // I*x = x
+          } else {
+            i_into_x_rsum = 0.0;
           }
           term_2[i] = i_into_x_rsum - omega[0] * d_inv * a_into_x_rsum;
         } else {
@@ -160,18 +168,21 @@ fn jacobi_local(iterations: i16) void {
   }
 }
 
+fn printme(val: anytype) void {
+  simprint.fmt_with_coords("x[i] = {f}", .{ val });
+}
+
+fn printdsd(dsd: anytype) void {
+  // @map(printme, dsd);
+
+}
+
 fn initialize() void {
-  if (px == py) {
-    // Identity matrix
-    for (@range(i16, M_local)) |i| {
-      identity[i*N_local + i] = 1.0;
-    }
+  if (px == py) {  
     // now D_inv, is 1/A_tile for px==py and bcast to other PEs.
     for (@range(i16, M_local)) |i| {
       if (A_tile[i*N_local + i] != 0.0) {
-        D_inv[i*N_local + i] = 1.0 / A_tile[i*N_local + i];
-      } else {
-        D_inv[i*N_local + i] = 0.0; // handle nan case. 1/0 = nan
+        D_inv[i*N_local + i] = math_lib.inv(A_tile[i*N_local + i]); // use math library.
       }
     }
   }

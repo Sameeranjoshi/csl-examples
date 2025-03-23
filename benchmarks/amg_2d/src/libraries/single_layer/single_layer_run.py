@@ -183,5 +183,5 @@ print("Copied back result.")
 
 print("b_next_host calculated: ", b_next_host)
 print("b_next_device calculated: ", b_next_device)
-np.testing.assert_allclose(b_next_host, b_next_device, atol=0.01, rtol=1e-2)
+np.testing.assert_allclose(b_next_host, b_next_device, atol=0.0, rtol=1e-4)
 print("SUCCESS")
