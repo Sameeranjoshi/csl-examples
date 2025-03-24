@@ -84,6 +84,7 @@ var R_tile = @zeros([R_M_local*R_N_local]f32);
 var x_tile = @zeros([N_local]f32);
 var b_tile = @zeros([M_local]f32);
 var omega = @zeros([1]f32);
+var iterations = @constants([1]i32, 0); // default is 0 iteration.
 
 // temporary variables on each PE.
 // The product of Ax or Rx or any other matrix-vector product.
@@ -94,6 +95,8 @@ var term_2 = @zeros([M_local]f32);
 var D_inv = @zeros([M_local]f32); // vector of diagonals of A_tile
 var w_dinv_a_x = @zeros([M_local]f32);
 var i_into_x = @zeros([M_local]f32);
+var iter_count: i32 = 0;
+
 
 // output
 var b_next = @zeros([R_M_local]f32);  // rightmost Column
@@ -119,6 +122,7 @@ var ptr_A : [*]f32 = &A_tile;
 var ptr_R : [*]f32 = &R_tile;
 var ptr_b_next : [*]f32 = &b_next;
 var ptr_omega: [*]f32 = &omega;
+var ptr_iter: [*]i32 = &iterations;
 
 // temp variables
 // Updated at runtime to store x and y IDs of PE reported by collectives library
@@ -139,10 +143,7 @@ fn compute_mv_per_tile(N_tile: i16, dsd_mv_tile: anytype, dsd_matrix_tile: anyty
 // x_tile[i] = (1.0 - omega) * temp_tile[i] + omega * (b_tile[i] - rsum) / diag;
 // The diagonal PEs add the term_1 so that we don't have to gather on diag PE.
 
-fn jacobi_local(iterations: i16) void {
-  for (@range(i16, iterations)) |iter| {
-
-
+fn jacobi_local() void {
     compute_mv_per_tile(N_local, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax(vector) = Ax(matrix * vector)
     @fmuls(dsd_w_dinv_a_x, dsd_D_inv, dsd_Ax); // tmp = D_inv * Ax (vector * vector)
     @fmuls(dsd_w_dinv_a_x, omega[0], dsd_w_dinv_a_x); // tmp = w * D_inv * Ax (scalar * vector)
@@ -159,7 +160,6 @@ fn jacobi_local(iterations: i16) void {
       @fmuls(dsd_w_dinv_a_x, omega[0], dsd_w_dinv_a_x); // tmp = omega * D_inv * b (scalar * vector)
       @fadds(dsd_term_2, dsd_w_dinv_a_x, dsd_term_2); // term_2 = omega * D_inv * b + term_2
     }
-  }
 }
 
 // Ax = A_local * x_local
@@ -189,14 +189,15 @@ fn main() void {
   mpi_y.init();
   px = mpi_x.pe_id;
   py = mpi_y.pe_id;
-
-  initialize();
+  if ( iter_count < iterations[0]) {  // case when iterations is 0, so no jacobi.
+    initialize();
+  } else {
+    @activate(compute_residual_task_id);  // don't calculate Jacobi straight to residual.
+  }
 }
 
 task compute_jacobi() void {
-  var iterations: i16 = 1;
-  jacobi_local(iterations);  // updates term_2
-
+  jacobi_local();  // updates term_2
   // notice the py instead of 0.
   mpi_x.reduce_fadds(py, @ptrcast([*]f32, &term_2), @ptrcast([*]f32, &x_tile),
                      M_local, bcast_jacobi_task_id); // reduce across rows toward
@@ -210,9 +211,15 @@ task bcast_jacobi() void {
 // r = b - Ax
 // row_sum = sum(Ax)
 task compute_residual() void {
-  residual_local(); // has answers in dsd_Ax
-  mpi_x.reduce_fadds(py, @ptrcast([*]f32, &Ax), @ptrcast([*]f32, &residual_tile),
+  iter_count += 1;
+  if (iter_count < iterations[0]) {
+    simprint.fmt_with_coords("iter_count = {d}", .{@as(u32, iter_count)});
+    @activate(compute_jacobi_task_id);
+  } else {
+    residual_local(); // has answers in dsd_Ax
+    mpi_x.reduce_fadds(py, @ptrcast([*]f32, &Ax), @ptrcast([*]f32, &residual_tile),
                      M_local, bcast_residual_task_id); // reduce across rows towards left
+  }
 }
 
 // bcast(residual_tile) to all PEs.
@@ -250,5 +257,6 @@ comptime {
   @export_symbol(ptr_R, "R");
   @export_symbol(ptr_b_next, "b_next");
   @export_symbol(ptr_omega, "omega");
+  @export_symbol(ptr_iter, "iterations");
   @export_symbol(main);
 }

@@ -65,8 +65,9 @@ assert restrict_cols == matrix_rows, "restrict_cols must be equal to matrix_rows
 
 # Compute expected result
 x_copy = X.copy()
-omega_host = 1.0
-X_smooth_host = jacobi_iteration(A, B, x_copy, omega_host, 1)
+omega_host = 1.0/3.0
+iterations_host = 5
+X_smooth_host = jacobi_iteration(A, B, x_copy, omega_host, iterations_host)
 residual = B - (A @ X_smooth_host)
 print("residual:\n", residual)
 # Reshape residual to be a column vector for matrix multiplication
@@ -89,6 +90,7 @@ symbol_b_next = runner.get_id("b_next")
 symbol_x_smooth = runner.get_id("x_smooth")
 symbol_x_smooth_src = runner.get_id("x_smooth_src")
 symbol_omega = runner.get_id("omega")
+symbol_iterations = runner.get_id("iterations")
 
 runner.load()
 runner.run()
@@ -155,10 +157,15 @@ runner.memcpy_h2d_rowbcast(symbol_b, B, 0, 0, kernel_cols, kernel_rows, per_pe_r
 # omega
 # make the size of omega equal to the number of PEs.
 omega = np.zeros(kernel_rows * kernel_cols, dtype=np.float32)
-omega[:] = 1.0
+omega[:] = omega_host
 runner.memcpy_h2d(symbol_omega, omega, 0, 0, kernel_cols, kernel_rows, 1,
                             streaming=False, data_type=memcpy_dtype, nonblock=False, order=memcpy_order)
 
+# iterations
+iterations = np.zeros(kernel_rows * kernel_cols, dtype=np.int32)
+iterations[:] = iterations_host
+runner.memcpy_h2d(symbol_iterations, iterations, 0, 0, kernel_cols, kernel_rows, 1,
+                            streaming=False, data_type=memcpy_dtype, nonblock=False, order=memcpy_order)
 
 print("Launching kernel...")
 # Record start time
