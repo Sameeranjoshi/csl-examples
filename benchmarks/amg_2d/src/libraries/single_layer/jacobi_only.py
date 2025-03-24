@@ -87,3 +87,130 @@ def jacobi_iteration_alt(A, b, x, omega, iterations):
 
 # print("Smoothed x:", smoothed_x)
 # print("Smoothed x alt:", smoothed_x_alt)
+
+
+
+
+
+########################################
+########################################
+import numpy as np
+
+
+def pad_A(A, kernel_rows, kernel_cols):
+    # Only pad if dimensions are not divisible by kernel size
+    if A.shape[0] % kernel_rows == 0 and A.shape[1] % kernel_cols == 0:
+        A_padded = A
+    else:
+        pad_rows = kernel_rows - A.shape[0] % kernel_rows if A.shape[0] % kernel_rows != 0 else 0
+        pad_cols = kernel_cols - A.shape[1] % kernel_cols if A.shape[1] % kernel_cols != 0 else 0
+        A_padded = np.pad(A, ((0, pad_rows), (0, pad_cols)), mode='constant', constant_values=0)
+    return A_padded
+def pad_1d(vector, padded_size):
+    if vector.shape[0] == 1:
+        # Add zeros to reach padded_size
+        pad_size = padded_size - vector.shape[0]
+        # Reshape vector to column vector before padding
+        vector = vector.reshape(-1, 1)
+        vector_padded = np.pad(vector, ((0, pad_size), (0, 0)), mode='constant', constant_values=0)
+    else:
+        # Add zeros to reach padded_size
+        pad_size = padded_size - vector.shape[0]
+        # Reshape vector to column vector before padding
+        vector = vector.reshape(-1, 1)
+        vector_padded = np.pad(vector, ((0, pad_size), (0, 0)), mode='constant', constant_values=0)
+    return vector_padded
+
+# layouts
+# Row-Row Layout: Row-major blocks, Row-major inside blocks
+def row_row_layout(A, kernel_rows, kernel_cols):
+    A_vsplit = np.vsplit(A, kernel_rows)  # Split into kernel_rows blocks
+    A_blocks = []
+
+    for block in A_vsplit:
+        A_block = np.hsplit(block, kernel_cols)
+        A_block_row_major = [b.ravel() for b in A_block]
+        A_blocks.extend(A_block_row_major)
+
+    return np.concatenate(A_blocks)
+
+# Row-Col Layout: Split A into blocks, store each block in column-major order
+def row_col_layout(A, kernel_rows, kernel_cols):
+    A_vsplit = np.vsplit(A, kernel_rows)  # Split into kernel_rows blocks
+    A_blocks_col_major = []
+
+    for block in A_vsplit:
+        # Split each row block into column blocks
+        A_block = np.hsplit(block, kernel_cols)
+        # Convert each sub-block to column-major order by transposing and flattening
+        A_block_col_major = [b.T.ravel() for b in A_block]
+        A_blocks_col_major.extend(A_block_col_major)  # Add blocks one after another
+
+    # Concatenate all blocks
+    return np.concatenate(A_blocks_col_major)
+
+# Col-Row Layout: Column-major blocks, Row-major inside blocks
+def col_row_layout(A, kernel_rows, kernel_cols):
+    A_hsplit = np.hsplit(A, kernel_cols)  # Split into kernel_cols blocks first
+    A_blocks = []
+
+    for block in A_hsplit:
+        A_block = np.vsplit(block, kernel_rows)
+        A_block_row_major = [b.ravel() for b in A_block]
+        A_blocks.extend(A_block_row_major)
+
+    return np.concatenate(A_blocks)
+
+# Col-Col Layout: Column-major blocks, Column-major inside blocks
+def col_col_layout(A, kernel_rows, kernel_cols):
+    A_hsplit = np.hsplit(A, kernel_cols)  # Split into kernel_cols blocks first
+    A_blocks = []
+
+    for block in A_hsplit:
+        A_block = np.vsplit(block, kernel_rows)
+        A_block_col_major = [b.T.ravel() for b in A_block]
+        A_blocks.extend(A_block_col_major)
+
+    return np.concatenate(A_blocks)
+
+
+########################################
+# Sample matrix A
+M, N = 4, 4  # Matrix dimensions
+kernel_rows = 3
+kernel_cols = 3
+
+A = np.arange(M*N, dtype=np.float32).reshape(M,N).astype(np.float32)
+X = np.arange(N, dtype=np.float32).reshape(N,1).astype(np.float32)
+B = np.arange(M, dtype=np.float32).reshape(M,1).astype(np.float32)
+
+A_padded = pad_A(A, kernel_rows, kernel_cols)
+[padded_M, padded_N] = A_padded.shape
+# create padded X and B
+X_padded = pad_1d(X, padded_N)
+B_padded = pad_1d(B, padded_M)
+
+
+# Test all layouts
+print("kernel_rows:", kernel_rows, "kernel_cols:", kernel_cols)
+print("Original A shape:", A.shape, "--> Padded A shape:", A_padded.shape)
+print("Original X shape:", X.shape, "--> Padded X shape:", X_padded.shape)
+print("Original B shape:", B.shape, "--> Padded B shape:", B_padded.shape)
+
+# layouts
+A_row_row = row_row_layout(A_padded, kernel_rows, kernel_cols)
+A_row_col = row_col_layout(A_padded, kernel_rows, kernel_cols)
+A_col_row = col_row_layout(A_padded, kernel_rows, kernel_cols)
+A_col_col = col_col_layout(A_padded, kernel_rows, kernel_cols)
+
+print("\nRow-Row Layout (Row-major blocks, Row-major inside blocks):")
+print(A_row_row)
+
+print("\nRow-Col Layout (Row-major blocks, Column-major inside blocks):")
+print(A_row_col)
+
+print("\nCol-Row Layout (Column-major blocks, Row-major inside blocks):")
+print(A_col_row)
+
+print("\nCol-Col Layout (Column-major blocks, Column-major inside blocks):")
+print(A_col_col)
