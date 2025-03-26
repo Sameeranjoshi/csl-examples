@@ -36,12 +36,13 @@ declare -A configs=(
     # ["config8"]="64 64 64 64 4 4 11 6 out/out_A64_64_R64_64_PE4_4"
     # ["config9"]="64 64 64 64 2 2 9 4 out/out_A64_64_R64_64_PE2_2"
 
-    ["config10"]="16 16 16 16 8 8 15 10 out/out_A16_16_R16_16_PE8_8"
+    # ["config10"]="16 16 16 16 8 8 15 10 out/out_A16_16_R16_16_PE8_8"
     # ["config11"]="16 16 16 16 4 4 11 6 out/out_A16_16_R16_16_PE4_4"
     # ["config12"]="16 16 16 16 2 2 9 4 out/out_A16_16_R16_16_PE2_2"
 
     # expriments
     # ["config13"]="4 4 4 4 4 4 11 6 out/out_A4_4_R4_4_PE4_4"
+    ["config14"]="4 4 4 4 2 2 9 4 out/out_A4_4_R4_4_PE2_2"
 
 )
 
@@ -76,6 +77,7 @@ run_config() {
 
     # Run Python script
     cs_python single_layer_run.py --name ${out_name}
+    # cs_python test_memcpy.py --M ${A_rows} --N ${A_cols} --kernel_rows ${kernel_rows} --kernel_cols ${kernel_cols} --name ${out_name}
     
     echo "Completed configuration: $out_name"
     echo "Moving sim* files to out directory"

@@ -180,46 +180,46 @@ def col_col_layout(A, kernel_rows, kernel_cols):
 # 3. Layouts
 ########################################
 
-# Sample matrix A
-import sys
-M = int(sys.argv[1])
-N = int(sys.argv[2])  # Matrix dimensions
-kernel_rows = int(sys.argv[3])
-kernel_cols = int(sys.argv[4])
+# # Sample matrix A
+# import sys
+# M = int(sys.argv[1])
+# N = int(sys.argv[2])  # Matrix dimensions
+# kernel_rows = int(sys.argv[3])
+# kernel_cols = int(sys.argv[4])
 
-A = np.arange(M*N, dtype=np.float32).reshape(M,N).astype(np.float32)
-X = np.arange(N, dtype=np.float32).reshape(N,1).astype(np.float32)
-B = np.arange(M, dtype=np.float32).reshape(M,1).astype(np.float32)
+# A = np.arange(M*N, dtype=np.float32).reshape(M,N).astype(np.float32)
+# X = np.arange(N, dtype=np.float32).reshape(N,1).astype(np.float32)
+# B = np.arange(M, dtype=np.float32).reshape(M,1).astype(np.float32)
 
-A_padded = pad_A(A, kernel_rows, kernel_cols)
-[padded_M, padded_N] = A_padded.shape
-X_padded = pad_1d(X, padded_N)
-B_padded = pad_1d(B, padded_M)
+# A_padded = pad_A(A, kernel_rows, kernel_cols)
+# [padded_M, padded_N] = A_padded.shape
+# X_padded = pad_1d(X, padded_N)
+# B_padded = pad_1d(B, padded_M)
 
-# per PE - floor division operator (//) rounds down to nearest integer
-per_pe_M = padded_M // kernel_rows  # Floor division - rounds down padded matrix rows / kernel rows
-per_pe_N = padded_N // kernel_cols  # Floor division - rounds down padded matrix cols / kernel cols
+# # per PE - floor division operator (//) rounds down to nearest integer
+# per_pe_M = padded_M // kernel_rows  # Floor division - rounds down padded matrix rows / kernel rows
+# per_pe_N = padded_N // kernel_cols  # Floor division - rounds down padded matrix cols / kernel cols
 
-# Test all layouts
-print("kernel_rows:", kernel_rows, "kernel_cols:", kernel_cols)
-print("Original A shape:", A.shape, "--> Padded A shape:", A_padded.shape, "per PE shape:", (per_pe_M, per_pe_N))
-print("Original X shape:", X.shape, "--> Padded X shape:", X_padded.shape)
-print("Original B shape:", B.shape, "--> Padded B shape:", B_padded.shape)
+# # Test all layouts
+# print("kernel_rows:", kernel_rows, "kernel_cols:", kernel_cols)
+# print("Original A shape:", A.shape, "--> Padded A shape:", A_padded.shape, "per PE shape:", (per_pe_M, per_pe_N))
+# print("Original X shape:", X.shape, "--> Padded X shape:", X_padded.shape)
+# print("Original B shape:", B.shape, "--> Padded B shape:", B_padded.shape)
 
-# layouts
-A_row_row = row_row_layout(A_padded, kernel_rows, kernel_cols)
-A_row_col = row_col_layout(A_padded, kernel_rows, kernel_cols)
-A_col_row = col_row_layout(A_padded, kernel_rows, kernel_cols)
-A_col_col = col_col_layout(A_padded, kernel_rows, kernel_cols)
+# # layouts
+# A_row_row = row_row_layout(A_padded, kernel_rows, kernel_cols)
+# A_row_col = row_col_layout(A_padded, kernel_rows, kernel_cols)
+# A_col_row = col_row_layout(A_padded, kernel_rows, kernel_cols)
+# A_col_col = col_col_layout(A_padded, kernel_rows, kernel_cols)
 
-print("\nRow-Row Layout (Row-major blocks, Row-major inside blocks):")
-print(A_row_row)
+# print("\nRow-Row Layout (Row-major blocks, Row-major inside blocks):")
+# print(A_row_row)
 
-print("\nRow-Col Layout (Row-major blocks, Column-major inside blocks):")
-print(A_row_col)
+# print("\nRow-Col Layout (Row-major blocks, Column-major inside blocks):")
+# print(A_row_col)
 
-print("\nCol-Row Layout (Column-major blocks, Row-major inside blocks):")
-print(A_col_row)
+# print("\nCol-Row Layout (Column-major blocks, Row-major inside blocks):")
+# print(A_col_row)
 
-print("\nCol-Col Layout (Column-major blocks, Column-major inside blocks):")
-print(A_col_col)
+# print("\nCol-Col Layout (Column-major blocks, Column-major inside blocks):")
+# print(A_col_col)
