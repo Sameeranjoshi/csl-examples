@@ -183,6 +183,49 @@ fn initialize() void {
   mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, compute_jacobi_task_id);
 }
 
+fn layout_print() void {
+  simprint.print_string("PE (0,0) \n");
+  // print A
+  for (A_tile) |val, i| {
+      simprint.fmt_with_coords("A_tile[{d}] = {f}", .{ i, val });
+  }
+  if (px==0 and py==0) {
+    simprint.print_string("PE (0,0) \n");
+    // print A
+    for (A_tile) |val, i| {
+        simprint.fmt_with_coords("A_tile[{d}] = {f}", .{ i, val });
+    }
+    
+  }
+  if (px==0 and py==1) {
+    simprint.print_string("PE (0,1) \n");
+    // print A
+    for (A_tile) |val, i| {
+        simprint.fmt_with_coords("A_tile[{d}] = {f}", .{ i, val });
+    }
+    
+  }
+  if (px==1 and py==0) {
+    simprint.print_string("PE (1,0) \n");
+    // print A
+    for (A_tile) |val, i| {
+        simprint.fmt_with_coords("A_tile[{d}] = {f}", .{ i, val });
+    }
+    
+  }
+  if (px==1 and py==1) {
+    simprint.print_string("PE (1,1) \n");
+    // print A
+    for (A_tile) |val, i| {
+        simprint.fmt_with_coords("A_tile[{d}] = {f}", .{ i, val });
+    }
+    
+  }
+  sys_mod.unblock_cmd_stream();
+  @activate(EXIT);
+  // print R
+}
+
 // Entrypoint into kernel
 fn main() void {
   mpi_x.init();
@@ -259,4 +302,5 @@ comptime {
   @export_symbol(ptr_omega, "omega");
   @export_symbol(ptr_iter, "iterations");
   @export_symbol(main);
+  @export_symbol(layout_print); // prints layout of A
 }

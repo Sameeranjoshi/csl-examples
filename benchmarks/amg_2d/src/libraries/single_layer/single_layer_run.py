@@ -170,7 +170,7 @@ runner.memcpy_h2d(symbol_iterations, iterations, 0, 0, kernel_cols, kernel_rows,
 print("Launching kernel...")
 # Record start time
 
-
+# runner.launch("layout_print", nonblock=False)
 # Run the kernel
 runner.launch("main", nonblock=False)
 
