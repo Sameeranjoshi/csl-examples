@@ -13,23 +13,11 @@
 // limitations under the License.
 
 
-// color/ task ID map
-//
-//  ID var             ID var              ID var               ID var
-//   0 c2d_x_color_0    9 EXIT             18 compute_restriction  27 reserved (memcpy)
-//   1 c2d_x_color_1   10                  19 restrict_compute     28 reserved (memcpy)
-//   2 c2d_y_color_0   11                  20 bcast_residual       29 reserved (memcpy)
-//   3 c2d_y_color_1   12 compute_residual 21 reserved (memcpy)   30 reserved (memcpy)
-//   4                 13 bcast_residual   22 reserved (memcpy)   31 reserved
-//   5 compute_jacobi  14 c2d_x_entrypt_0  23 reserved (memcpy)   32
-//   6 compute_residual15 c2d_x_entrypt_1  24 broadcast_residual  33
-//   7                 16 c2d_y_entrypt_0  25 bcast_jacobi        34
-//   8                 17 c2d_y_entrypt_1  26                     35
-
 // params
 param memcpy_params: comptime_struct;
 param c2d_params: comptime_struct;
 param layer_params: comptime_struct;
+param sync_params: comptime_struct;
 
 
 const M: i16 = layer_params.M; // Height of local matrix, or num rows per PE
@@ -47,12 +35,12 @@ const layer_kernel_cols: i16 = layer_params.layer_kernel_cols;
 const layer_index: i16 = layer_params.layer_index;
 
 // Task IDs
-const EXIT:local_task_id = @get_local_task_id(9);
-const compute_jacobi_task_id:local_task_id = @get_local_task_id(5);
-const compute_residual_task_id:local_task_id = @get_local_task_id(12);
-const bcast_residual_task_id:local_task_id = @get_local_task_id(13);
-const compute_restriction_task_id:local_task_id = @get_local_task_id(18);
-const bcast_jacobi_task_id:local_task_id = @get_local_task_id(25);
+const EXIT:local_task_id = layer_params.layer_task_id[0];
+const compute_jacobi_task_id:local_task_id = layer_params.layer_task_id[1];
+const compute_residual_task_id:local_task_id = layer_params.layer_task_id[2];
+const bcast_residual_task_id:local_task_id = layer_params.layer_task_id[3];
+const compute_restriction_task_id:local_task_id = layer_params.layer_task_id[4];
+const bcast_jacobi_task_id:local_task_id = layer_params.layer_task_id[5];
 
 
 const math_lib = @import_module("<math>");

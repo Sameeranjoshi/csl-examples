@@ -12,22 +12,22 @@ mkdir -p out
 declare -A configs=(    # don't scale beyond 32 PEs, crashes.
     # expriments
     ["config1"]="4 4 4 4 2 2 9 4 out/out_A4_4_R4_4_PE2_2"
-    ["config2"]="4 4 4 4 4 4 11 6 out/out_A4_4_R4_4_PE4_4"
+    # ["config2"]="4 4 4 4 4 4 11 6 out/out_A4_4_R4_4_PE4_4"
 
-    ["config3"]="16 16 16 16 2 2 9 4 out/out_A16_16_R16_16_PE2_2"
-    ["config4"]="16 16 16 16 4 4 11 6 out/out_A16_16_R16_16_PE4_4"
-    ["config5"]="16 16 16 16 8 8 15 10 out/out_A16_16_R16_16_PE8_8"
+    # ["config3"]="16 16 16 16 2 2 9 4 out/out_A16_16_R16_16_PE2_2"
+    # ["config4"]="16 16 16 16 4 4 11 6 out/out_A16_16_R16_16_PE4_4"
+    # ["config5"]="16 16 16 16 8 8 15 10 out/out_A16_16_R16_16_PE8_8"
 
-    ["config6"]="64 64 64 64 2 2 9 4 out/out_A64_64_R64_64_PE2_2"
-    ["config7"]="64 64 64 64 4 4 11 6 out/out_A64_64_R64_64_PE4_4"
-    ["config8"]="64 64 64 64 8 8 15 10 out/out_A64_64_R64_64_PE8_8"
-    ["config9"]="64 64 64 64 16 16 23 18 out/out_A64_64_R64_64_PE16_16"
-    ["config10"]="64 64 64 64 32 32 39 34 out/out_A64_64_R64_64_PE32_32"
+    # ["config6"]="64 64 64 64 2 2 9 4 out/out_A64_64_R64_64_PE2_2"
+    # ["config7"]="64 64 64 64 4 4 11 6 out/out_A64_64_R64_64_PE4_4"
+    # ["config8"]="64 64 64 64 8 8 15 10 out/out_A64_64_R64_64_PE8_8"
+    # ["config9"]="64 64 64 64 16 16 23 18 out/out_A64_64_R64_64_PE16_16"
+    # ["config10"]="64 64 64 64 32 32 39 34 out/out_A64_64_R64_64_PE32_32"
 
-    ["config11"]="128 128 128 128 4 4 11 6 out/out_A128_128_R128_128_PE4_4"
-    ["config12"]="128 128 128 128 8 8 15 10 out/out_A128_128_R128_128_PE8_8"
+    # ["config11"]="128 128 128 128 4 4 11 6 out/out_A128_128_R128_128_PE4_4"
+    # ["config12"]="128 128 128 128 8 8 15 10 out/out_A128_128_R128_128_PE8_8"
 
-    ["config13"]="256 256 256 256 8 8 15 10 out/out_A256_256_R256_256_PE8_8"
+    # ["config13"]="256 256 256 256 8 8 15 10 out/out_A256_256_R256_256_PE8_8"
 
 )
 # declare -A configs=(
