@@ -116,6 +116,7 @@ symbol_x_smooth_src = runner.get_id("x_smooth_src")
 symbol_omega = runner.get_id("omega")
 symbol_iterations = runner.get_id("iterations")
 symbol_time_memcpy = runner.get_id("time_memcpy")
+symbol_time_ref = runner.get_id("time_ref")
 
 runner.load()
 runner.run()
@@ -195,28 +196,33 @@ runner.memcpy_h2d(symbol_iterations, iterations, 0, 0, kernel_cols, kernel_rows,
 print("Initializing hardware timing...")
 print("Step 1: Enable timer")
 runner.launch("f_enable_timer", nonblock=False)
-print("Step 2: Record initial timestamp (tic)")
+# print("Step 2: sync")
+# runner.launch("f_sync", nonblock=False)
+print("Step 3: Record initial timestamp (tic)")
 runner.launch("f_tic", nonblock=True)
-print("Step 3: Launching kernel...")
+print("Step 4: Launching kernel...")
 runner.launch("main", nonblock=False) # Run the kernel
-print("Step 4: toc() records time_end")
+print("Step 5: toc() records time_end")
 runner.launch("f_toc", nonblock=False)
-print("Step 5: prepare (time_start, time_end)")
+print("Step 6: prepare (time_start, time_end)")
 runner.launch("f_memcpy_timestamps", nonblock=False)
-print("Step 6: Retrieve timing data")
+print("Step 7: prepare reference clock")
+runner.call("f_reference_timestamps", [], nonblock=False)
+print("Step 8: Retrieve timing data")
     
 time_memcpy_1d_f32 = np.zeros(kernel_rows*kernel_cols*3, np.float32)
 runner.memcpy_d2h(time_memcpy_1d_f32, symbol_time_memcpy, 0, 0, kernel_cols, kernel_rows, 3,
     streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.ROW_MAJOR, nonblock=False)
 time_memcpy_hwl = np.reshape(time_memcpy_1d_f32, (kernel_rows, kernel_cols, 3), order='C')
+# time_ref is of type u16[3], packed into two f32
+time_ref_1d_f32 = np.zeros(kernel_rows*kernel_cols*2, np.float32)
+runner.memcpy_d2h(time_ref_1d_f32, symbol_time_ref, 0, 0, kernel_cols, kernel_rows, 2,
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.ROW_MAJOR, nonblock=False)
+time_ref_hwl = np.reshape(time_ref_1d_f32, (kernel_rows, kernel_cols, 2), order='C')
+# print("time_ref_hwl:\n", time_ref_hwl)
 
-# time_memcpy_hwl = oned_to_hwl_colmajor(kernel_rows, kernel_cols, 6, time_memcpy_hwl_1d, np.uint16)
-# time_ref_1d = np.zeros(kernel_cols*kernel_rows*3, np.uint32)
-# runner.memcpy_d2h(time_ref_1d, symbol_time_ref_u16, 0, 0, kernel_cols, kernel_rows, 3,
-#     streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.ROW_MAJOR, nonblock=False)
-# time_ref_hwl = oned_to_hwl_colmajor(kernel_rows, kernel_cols, 3, time_ref_1d, np.uint16)
-# TOPRIGHT PE
-print("Step 7: Copied back result.")
+# RIGHTMOST COLUMN
+print("Step 9: Copied back result.")
 b_next_device = np.zeros(restrict_rows, dtype=np.float32)
 runner.memcpy_d2h(b_next_device, symbol_b_next, kernel_cols-1, 0, 1, kernel_rows, per_pe_restrict_rows,
                   streaming=False, data_type=memcpy_dtype, nonblock=False,
@@ -226,7 +232,7 @@ runner.stop()
 
 # Record end time and calculate duration
 end_time = time.time()
-print("Step 8: Time logs")
+print("Step 10: Time logs")
 time_logs(kernel_rows, kernel_cols, time_memcpy_hwl, start_time, end_time, filename=f"./single_layer_timing_runs.csv", folder=args.name)
 
 # print("b_next_host calculated: ", b_next_host)

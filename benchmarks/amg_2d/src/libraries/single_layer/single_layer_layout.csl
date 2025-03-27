@@ -96,10 +96,13 @@ const c2d_struct = .{
     .x_entrypoints = .{C2D_X_ENTRYPOINT_0, C2D_X_ENTRYPOINT_1},
     .y_entrypoints = .{C2D_Y_ENTRYPOINT_0, C2D_Y_ENTRYPOINT_1},
 };
-const sync_module = @import_module( "./../sync/layout.csl", .{
+const sync_module = @import_module( "../../../../row-col-broadcast/src/sync/layout.csl", .{
     .colors = [5]color{C0, C1, C2, C3, C4},
     .entrypoints = [4]local_task_id{STARTUP, SYNC_Y, SYNC_BCAST, EXIT_SYNC},
+    .width = layer_kernel_cols,
+    .height = layer_kernel_rows
     });
+
 const c2d = @import_module("<collectives_2d/params>");
 const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = layer_kernel_cols,
@@ -134,7 +137,8 @@ layout {
     const memcpy_params = memcpy.get_params(Px);
     while (Py < Py_end) : (Py += 1) {
       const c2d_params = c2d.get_params(Px, Py, c2d_struct);
-      const syncParams = sync_module.get_params(Px, Py, layer_start_x, layer_start_y, layer_kernel_cols, layer_kernel_rows);
+      // const syncParams = sync_module.get_params(Px, Py, layer_start_x, layer_start_y, layer_kernel_cols, layer_kernel_rows);
+      const syncParams = sync_module.get_params(Px, Py);
       const layer_params: comptime_struct = current_layer_params;
 
       @set_tile_code(Px, Py, "single_layer_pe.csl", .{
@@ -159,9 +163,12 @@ layout {
 
   // timing
   @export_name("time_memcpy", [*]f32, true);
+  @export_name("time_ref", [*]f32, true);
   @export_name("f_enable_timer", fn()void);
   @export_name("f_tic", fn()void);
   @export_name("f_toc", fn()void);
   @export_name("f_memcpy_timestamps", fn()void);
+  @export_name("f_sync", fn()void);
+  @export_name("f_reference_timestamps", fn()void);
 
 }
