@@ -20,11 +20,35 @@ import json
 import time
 import numpy as np
 from jacobi_only import jacobi_iteration, jacobi_iteration_alt
+import time_utils as time_ut
+from util import (
+    hwl_2_oned_colmajor,
+    oned_to_hwl_colmajor,
+    laplacian,
+    csr_7_pt_stencil,
+)
 
 from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime     # pylint: disable=no-name-in-module
 from cerebras.sdk.runtime.sdkruntimepybind import MemcpyDataType # pylint: disable=no-name-in-module
 from cerebras.sdk.runtime.sdkruntimepybind import MemcpyOrder    # pylint: disable=no-name-in-module
-  
+
+def time_logs(h, w, time_memcpy_hwl, start_time, end_time, filename="timing_data.csv", folder={}):
+    cpu_time = end_time - start_time    # measures the (memcpy + kernel time + sdkruntime setup) using CPU time
+    perf_metrics = {}
+    folder_name = folder.split('/')[-1] if '/' in folder else folder
+    problem_size = '_'.join(folder_name.split('_')[1:5])  # Get A16_16_R16_16
+    pe_size = '_'.join(folder_name.split('_')[5:])       # Get PE2_2
+    perf_metrics['input'] = problem_size
+    perf_metrics['PE'] = pe_size
+    perf_metrics['cpu_time_seconds'] = cpu_time
+    
+    # Get timing data for this layer
+    timing_data_per_layer = time_ut.time_analysis_noref(h, w, time_memcpy_hwl)
+    perf_metrics['cycles'] = timing_data_per_layer['cycles']
+    perf_metrics['time_us'] = timing_data_per_layer['time_us']
+    df = time_ut.write_performance_data(perf_metrics, filename=filename)
+    return df
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--name", help="the test name")
 parser.add_argument("--cmaddr", help="IP:port for CS system")
@@ -69,7 +93,7 @@ omega_host = 1.0/3.0
 iterations_host = 5
 X_smooth_host = jacobi_iteration(A, B, x_copy, omega_host, iterations_host)
 residual = B - (A @ X_smooth_host)
-print("residual:\n", residual)
+# print("residual:\n", residual)
 # Reshape residual to be a column vector for matrix multiplication
 b_next_host = R @ residual
 
@@ -91,6 +115,7 @@ symbol_x_smooth = runner.get_id("x_smooth")
 symbol_x_smooth_src = runner.get_id("x_smooth_src")
 symbol_omega = runner.get_id("omega")
 symbol_iterations = runner.get_id("iterations")
+symbol_time_memcpy = runner.get_id("time_memcpy")
 
 runner.load()
 runner.run()
@@ -167,28 +192,44 @@ iterations[:] = iterations_host
 runner.memcpy_h2d(symbol_iterations, iterations, 0, 0, kernel_cols, kernel_rows, 1,
                             streaming=False, data_type=memcpy_dtype, nonblock=False, order=memcpy_order)
 
-print("Launching kernel...")
-# Record start time
+print("Initializing hardware timing...")
+print("Step 1: Enable timer")
+runner.launch("f_enable_timer", nonblock=False)
+print("Step 2: Record initial timestamp (tic)")
+runner.launch("f_tic", nonblock=True)
+print("Step 3: Launching kernel...")
+runner.launch("main", nonblock=False) # Run the kernel
+print("Step 4: toc() records time_end")
+runner.launch("f_toc", nonblock=False)
+print("Step 5: prepare (time_start, time_end)")
+runner.launch("f_memcpy_timestamps", nonblock=False)
+print("Step 6: Retrieve timing data")
+    
+time_memcpy_1d_f32 = np.zeros(kernel_rows*kernel_cols*3, np.float32)
+runner.memcpy_d2h(time_memcpy_1d_f32, symbol_time_memcpy, 0, 0, kernel_cols, kernel_rows, 3,
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.ROW_MAJOR, nonblock=False)
+time_memcpy_hwl = np.reshape(time_memcpy_1d_f32, (kernel_rows, kernel_cols, 3), order='C')
 
-# runner.launch("layout_print", nonblock=False)
-# Run the kernel
-runner.launch("main", nonblock=False)
-
+# time_memcpy_hwl = oned_to_hwl_colmajor(kernel_rows, kernel_cols, 6, time_memcpy_hwl_1d, np.uint16)
+# time_ref_1d = np.zeros(kernel_cols*kernel_rows*3, np.uint32)
+# runner.memcpy_d2h(time_ref_1d, symbol_time_ref_u16, 0, 0, kernel_cols, kernel_rows, 3,
+#     streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.ROW_MAJOR, nonblock=False)
+# time_ref_hwl = oned_to_hwl_colmajor(kernel_rows, kernel_cols, 3, time_ref_1d, np.uint16)
 # TOPRIGHT PE
+print("Step 7: Copied back result.")
 b_next_device = np.zeros(restrict_rows, dtype=np.float32)
 runner.memcpy_d2h(b_next_device, symbol_b_next, kernel_cols-1, 0, 1, kernel_rows, per_pe_restrict_rows,
                   streaming=False, data_type=memcpy_dtype, nonblock=False,
                   order=memcpy_order)
 
 runner.stop()
+
 # Record end time and calculate duration
 end_time = time.time()
-duration = end_time - start_time
-print(f"Kernel execution time: {duration:.3f} seconds")
+print("Step 8: Time logs")
+time_logs(kernel_rows, kernel_cols, time_memcpy_hwl, start_time, end_time, filename=f"./single_layer_timing_runs.csv", folder=args.name)
 
-print("Copied back result.")
-
-print("b_next_host calculated: ", b_next_host)
-print("b_next_device calculated: ", b_next_device)
+# print("b_next_host calculated: ", b_next_host)
+# print("b_next_device calculated: ", b_next_device)
 np.testing.assert_allclose(b_next_host, b_next_device, atol=0.0, rtol=1e-4)
 print("SUCCESS")

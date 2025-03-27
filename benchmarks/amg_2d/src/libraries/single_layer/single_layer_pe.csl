@@ -76,6 +76,7 @@ const mpi_y = @import_module("<collectives_2d/pe>", .{
     .src1_dsr_ids = [1]u16{2}
     });
 const simprint = @import_module("<simprint>", .{ .enable = true });
+const timestamp = @import_module("<time>");
 
 //x, b, A, R will be partitioned using 2D Block decomposition.
 // input
@@ -101,6 +102,13 @@ var iter_count: i32 = 0;
 // output
 var b_next = @zeros([R_M_local]f32);  // rightmost Column
 
+
+// Timing variables
+// time_buf_f32[0:2] = {tscStartBuffer, tscEndBuffer}
+var time_buf_f32 = @zeros([3]f32);
+var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
+var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
+
 // DSDs
 const dsd_A_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*@as(i16, N_local)] }); // 1 row of A_tile
 const dsd_A_diag = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*N_local + i] });
@@ -123,12 +131,60 @@ var ptr_R : [*]f32 = &R_tile;
 var ptr_b_next : [*]f32 = &b_next;
 var ptr_omega: [*]f32 = &omega;
 var ptr_iter: [*]i32 = &iterations;
+var ptr_time_memcpy: [*]f32 = &time_buf_f32;
 
 // temp variables
 // Updated at runtime to store x and y IDs of PE reported by collectives library
 var px: u16;
 var py: u16;
 
+// timing
+
+fn f_enable_timer() void {
+    timestamp.enable_tsc();
+    // the user must unblock cmd color for every PE
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_tic() void {
+    timestamp.get_timestamp(&tscStartBuffer);
+
+    // the user must unblock cmd color for every PE
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_toc() void {
+    timestamp.get_timestamp(&tscEndBuffer);
+
+    // the user must unblock cmd color for every PE
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_memcpy_timestamps() void {
+    // time_buf_f32[0] = {tscStartBuffer[1], tscStartBuffer[0]}
+    // time_buf_f32[1] = {tscEndBuffer[0], tscStartBuffer[2]}
+    // time_buf_f32[2] = {tscEndBuffer[2], tscEndBuffer[1]}
+    var lo_ : u16 = 0;
+    var hi_ : u16 = 0;
+    var word : u32 = 0;
+
+    lo_ = tscStartBuffer[0];
+    hi_ = tscStartBuffer[1];
+    time_buf_f32[0] = @bitcast(f32, (@as(u32,hi_) << @as(u16,16)) | @as(u32, lo_) );
+
+    lo_ = tscStartBuffer[2];
+    hi_ = tscEndBuffer[0];
+    time_buf_f32[1] = @bitcast(f32, (@as(u32,hi_) << @as(u16,16)) | @as(u32, lo_) );
+
+    lo_ = tscEndBuffer[1];
+    hi_ = tscEndBuffer[2];
+    time_buf_f32[2] = @bitcast(f32, (@as(u32,hi_) << @as(u16,16)) | @as(u32, lo_) );
+
+    // the user must unblock cmd color for every PE
+    sys_mod.unblock_cmd_stream();
+}
+
+// AMG
 fn compute_mv_per_tile(N_tile: i16, dsd_mv_tile: anytype, dsd_matrix_tile: anytype, vector_tile_data: [*]const f32) void {
   @fmovs(dsd_mv_tile, 0.0); // this can cause error if not initialized.
   for (@range(i16, N_tile)) |j| {
@@ -303,4 +359,12 @@ comptime {
   @export_symbol(ptr_iter, "iterations");
   @export_symbol(main);
   @export_symbol(layout_print); // prints layout of A
+
+  // timing
+  @export_symbol(ptr_time_memcpy, "time_memcpy");
+  @export_symbol(f_enable_timer);
+  @export_symbol(f_tic);
+  @export_symbol(f_toc);
+  @export_symbol(f_memcpy_timestamps);
+
 }

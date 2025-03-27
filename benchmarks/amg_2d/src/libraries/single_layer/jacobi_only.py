@@ -16,7 +16,7 @@ def jacobi_iteration(A, b, x, omega, iterations):
             if A[i, i] != 0:
                 x[i] = (1 - omega) * tmp[i] + omega * (b[i] - rsum) / A[i, i]
         
-        print(f"Iteration {iter+1}, x: {x}")
+        # print(f"Iteration {iter+1}, x: {x}")
     
     return x
 
