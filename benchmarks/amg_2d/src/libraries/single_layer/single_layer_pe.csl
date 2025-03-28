@@ -272,6 +272,13 @@ fn layout_print() void {
     for (A_tile) |val, i| {
         simprint.fmt_with_coords("A_tile[{d}] = {f}", .{ i, val });
     }
+    // print shapes of A_tile, x_tile, b_tile, R_tile
+    simprint.fmt_with_coords("A_tile shape: {d}x{d}", .{ @as(u32, M_local), @as(u32, N_local) });
+    simprint.fmt_with_coords("x_tile shape: {d}", .{ @as(u32, N_local) });
+    simprint.fmt_with_coords("b_tile shape: {d}", .{ @as(u32, M_local) });
+    simprint.fmt_with_coords("R_tile shape: {d}x{d}", .{ @as(u32, R_M_local), @as(u32, R_N_local) });
+    // print b_next shape
+    simprint.fmt_with_coords("b_next shape: {d}", .{ @as(u32, R_M_local) });
     
   }
   if (px==0 and py==1) {
@@ -299,7 +306,7 @@ fn layout_print() void {
     
   }
   sys_mod.unblock_cmd_stream();
-  @activate(EXIT);
+  // @activate(EXIT);
   // print R
 }
 
@@ -318,6 +325,10 @@ fn main() void {
 
 task compute_jacobi() void {
   jacobi_local();  // updates term_2
+  simprint.print_string("term_2\n");
+  for (term_2) |val, i| {
+    simprint.fmt_with_coords("term_2[{d}] = {f}", .{ i, val });
+  }  
   // notice the py instead of 0.
   mpi_x.reduce_fadds(py, @ptrcast([*]f32, &term_2), @ptrcast([*]f32, &x_tile),
                      M_local, bcast_jacobi_task_id); // reduce across rows toward
@@ -359,6 +370,9 @@ task compute_restriction() void {
 }
 
 task f_exit() void {
+  for (b_next) |val, i| {
+    simprint.fmt_with_coords("b_next[{d}] = {f}", .{ i, val });
+  }
   sys_mod.unblock_cmd_stream();
 }
 

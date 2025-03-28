@@ -97,7 +97,7 @@ def jacobi_iteration_alt(A, b, x, omega, iterations):
 import numpy as np
 
 
-def pad_A(A, kernel_rows, kernel_cols):
+def pad_A(A, kernel_rows, kernel_cols, variable_name):
     # Only pad if dimensions are not divisible by kernel size
     if A.shape[0] % kernel_rows == 0 and A.shape[1] % kernel_cols == 0:
         A_padded = A
@@ -105,21 +105,37 @@ def pad_A(A, kernel_rows, kernel_cols):
         pad_rows = kernel_rows - A.shape[0] % kernel_rows if A.shape[0] % kernel_rows != 0 else 0
         pad_cols = kernel_cols - A.shape[1] % kernel_cols if A.shape[1] % kernel_cols != 0 else 0
         A_padded = np.pad(A, ((0, pad_rows), (0, pad_cols)), mode='constant', constant_values=0)
+    print(f"{variable_name} padded from {A.shape[0]}x{A.shape[1]} to {A_padded.shape[0]}x{A_padded.shape[1]}")
     return A_padded
-def pad_1d(vector, padded_size):
-    if vector.shape[0] == 1:
-        # Add zeros to reach padded_size
-        pad_size = padded_size - vector.shape[0]
-        # Reshape vector to column vector before padding
-        vector = vector.reshape(-1, 1)
-        vector_padded = np.pad(vector, ((0, pad_size), (0, 0)), mode='constant', constant_values=0)
-    else:
-        # Add zeros to reach padded_size
-        pad_size = padded_size - vector.shape[0]
-        # Reshape vector to column vector before padding
-        vector = vector.reshape(-1, 1)
-        vector_padded = np.pad(vector, ((0, pad_size), (0, 0)), mode='constant', constant_values=0)
+
+def pad_1d(vector, padded_size, variable_name="vector"):
+    """
+    Pads a 1D NumPy array with zeros to reach the specified padded_size.
+
+    Args:
+        vector (np.ndarray): The 1D input NumPy array.
+        padded_size (int): The desired size of the padded array.
+        variable_name (str, optional): Name of the variable for printing. Defaults to "vector".
+
+    Returns:
+        np.ndarray: The 1D padded NumPy array.
+    """
+    if vector.ndim != 1:
+        raise ValueError(f"Input '{variable_name}' must be a 1D array. Got shape: {vector.shape}")
+
+    pad_size = padded_size - vector.shape[0]
+    if pad_size < 0:
+        raise ValueError(f"padded_size ({padded_size}) cannot be smaller than the vector size ({vector.shape[0]}) for '{variable_name}'.")
+
+    vector_padded = np.pad(vector, (0, pad_size), mode='constant', constant_values=0)
+    print(f"{variable_name} padded from {vector.shape[0]} to {vector_padded.shape[0]}")
     return vector_padded
+
+# write an unpad function 
+def unpad_A(A, kernel_rows, kernel_cols):
+    return A[:A.shape[0]//kernel_rows, :A.shape[1]//kernel_cols]
+def unpad_1d(vector, padded_size):
+    return vector[:padded_size]
 
 # layouts
 # Row-Row Layout: Row-major blocks, Row-major inside blocks

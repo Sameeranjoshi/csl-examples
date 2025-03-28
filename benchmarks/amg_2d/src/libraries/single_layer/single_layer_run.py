@@ -19,7 +19,7 @@ import argparse
 import json
 import time
 import numpy as np
-from jacobi_only import jacobi_iteration, jacobi_iteration_alt
+from jacobi_only import jacobi_iteration, jacobi_iteration_alt, unpad_1d
 import time_utils as time_ut
 from util import (
     hwl_2_oned_colmajor,
@@ -27,6 +27,7 @@ from util import (
     laplacian,
     csr_7_pt_stencil,
 )
+from jacobi_only import pad_A, pad_1d
 
 from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime     # pylint: disable=no-name-in-module
 from cerebras.sdk.runtime.sdkruntimepybind import MemcpyDataType # pylint: disable=no-name-in-module
@@ -52,6 +53,10 @@ def time_logs(h, w, time_memcpy_hwl, start_time, end_time, filename="timing_data
 parser = argparse.ArgumentParser()
 parser.add_argument("--name", help="the test name")
 parser.add_argument("--cmaddr", help="IP:port for CS system")
+parser.add_argument("--A_rows", help="the number of rows of A")
+parser.add_argument("--A_cols", help="the number of cols of A")
+parser.add_argument("--R_rows", help="the number of rows of R")
+parser.add_argument("--R_cols", help="the number of cols of R")
 args = parser.parse_args()
 
 # Get params from compile metadata
@@ -60,11 +65,17 @@ with open(f"{args.name}/out.json", encoding='utf-8') as json_file:
 # Kernel rectangle and matrix dimensions from compile parameters
 kernel_rows = int(compile_data['params']['layer_kernel_rows'])
 kernel_cols = int(compile_data['params']['layer_kernel_cols'])
-matrix_rows = int(compile_data['params']['layer_rows_A']) 
-matrix_cols = int(compile_data['params']['layer_cols_A'])
-restrict_rows = int(compile_data['params']['layer_rows_R'])
-restrict_cols = int(compile_data['params']['layer_cols_R'])
-
+# TODO: Use .json file as params in run.py, for now use arguments from .py.
+# matrix_rows = int(compile_data['params']['layer_rows_A']) 
+matrix_rows = int(args.A_rows)
+# matrix_cols = int(compile_data['params']['layer_cols_A'])
+matrix_cols = int(args.A_cols)
+# restrict_rows = int(compile_data['params']['layer_rows_R'])
+restrict_rows = int(args.R_rows)
+# restrict_cols = int(compile_data['params']['layer_cols_R'])
+restrict_cols = int(args.R_cols)
+# print all the params
+print(f"matrix_rows: {matrix_rows}, matrix_cols: {matrix_cols}, restrict_rows: {restrict_rows}, restrict_cols: {restrict_cols}, kernel_rows: {kernel_rows}, kernel_cols: {kernel_cols}")
 # Create tensors for A, X, B.
 # Use a deterministic seed so that CI results are predictable
 np.random.seed(seed=7)
@@ -81,10 +92,14 @@ X = np.random.rand(matrix_cols).astype(np.float32)
 B = np.random.rand(matrix_rows).astype(np.float32)
 R = np.random.rand(restrict_rows, restrict_cols).astype(np.float32)
 
-
 # check if R_rows = layer_rows_A
 # Add more.
-assert restrict_cols == matrix_rows, "restrict_cols must be equal to matrix_rows, example:(4,49) x (49,1) = (4,1)"
+assert restrict_cols == matrix_rows, "restrict_cols must be equal to matrix_rows, example:(R_Coarse,R_Fine) x (R_Fine,..) = (R_Coarse,..)"
+assert matrix_rows == matrix_cols, "matrix should be square"    # This is strictly required for Ax=b.
+# assert kernel_rows == kernel_cols, "kernel should be square(Limitation of current padding implementation)"
+
+# Delete the variables to prevent accidental use
+# del matrix_rows, matrix_cols, restrict_rows, restrict_cols
 
 
 # Compute expected result
@@ -99,6 +114,8 @@ b_next_host = R @ residual
 
 
 # DEVICE
+# Padding
+
 start_time = time.time()
 # Specify path to ELF files, set up runner
 runner = SdkRuntime(args.name, cmaddr=args.cmaddr)
@@ -111,8 +128,6 @@ symbol_R = runner.get_id("R")
 symbol_x = runner.get_id("x")
 symbol_b = runner.get_id("b")
 symbol_b_next = runner.get_id("b_next") 
-symbol_x_smooth = runner.get_id("x_smooth")
-symbol_x_smooth_src = runner.get_id("x_smooth_src")
 symbol_omega = runner.get_id("omega")
 symbol_iterations = runner.get_id("iterations")
 symbol_time_memcpy = runner.get_id("time_memcpy")
@@ -123,11 +138,34 @@ runner.run()
 
 print("Copying data...")
 # Compute number of rows and cols of A on each PE
-per_pe_rows = matrix_rows // kernel_rows
-per_pe_cols = matrix_cols // kernel_cols
+print("Padded the input matrices")
+A_padded = pad_A(A, kernel_rows, kernel_cols, variable_name="A")
+[padded_matrix_rows, padded_matrix_cols] = A_padded.shape
+X_padded = pad_1d(X, padded_matrix_cols, variable_name="X")
+B_padded = pad_1d(B, padded_matrix_rows, variable_name="B")
+R_padded = pad_A(R, kernel_rows, kernel_cols, variable_name="R")
+[padded_restrict_rows, padded_restrict_cols] = R_padded.shape
 
-per_pe_restrict_rows = restrict_rows // kernel_rows
-per_pe_restrict_cols = restrict_cols // kernel_cols
+# # per PE - floor division operator (//) rounds down to nearest integer
+per_pe_rows = padded_matrix_rows // kernel_rows  # Floor division - rounds down padded matrix rows / kernel rows
+per_pe_cols = padded_matrix_cols // kernel_cols  # Floor division - rounds down padded matrix cols / kernel cols
+per_pe_restrict_rows = padded_restrict_rows // kernel_rows
+per_pe_restrict_cols = padded_restrict_cols // kernel_cols
+
+
+# # HOST
+# # Compute expected result
+# x_copy = X_padded.copy()
+# A_copy = A_padded.copy()
+# R_copy = R_padded.copy()
+# B_copy = B_padded.copy()
+# omega_host = 1.0/3.0
+# iterations_host = 5
+# X_smooth_host = jacobi_iteration_alt(A_copy, B_copy, x_copy, omega_host, iterations_host)
+# residual = B_copy - (A_copy @ X_smooth_host)
+# print(f"R_copy shape: {R_copy.shape}")
+# print(f"residual shape: {residual.shape}")
+# b_next_host = R_copy @ residual
 
 # This transformation on A creates a flattened array so that the matrix can
 # be mapped onto the PEs using MemcpyOrder.ROW_MAJOR copy ordering.
@@ -162,8 +200,8 @@ per_pe_restrict_cols = restrict_cols // kernel_cols
 #   3. splits 3D array into kernel_rows subarrays, along the horizontal axis
 #   4. stacks them into a 4D array, with kernel_row as 0th dimension
 #   5. flattens into a 1D array
-data = np.stack(np.split(np.stack(np.split(A, kernel_cols, axis=1)), kernel_rows, axis=1)).ravel()
-data_R = np.stack(np.split(np.stack(np.split(R, kernel_cols, axis=1)), kernel_rows, axis=1)).ravel()
+data = np.stack(np.split(np.stack(np.split(A_padded, kernel_cols, axis=1)), kernel_rows, axis=1)).ravel()
+data_R = np.stack(np.split(np.stack(np.split(R_padded, kernel_cols, axis=1)), kernel_rows, axis=1)).ravel()
 # Copy flattened A array onto PEs
 runner.memcpy_h2d(symbol_A, data, 0, 0, kernel_cols, kernel_rows, per_pe_rows * per_pe_cols,
                   streaming=False, data_type=memcpy_dtype, nonblock=False,
@@ -173,11 +211,11 @@ runner.memcpy_h2d(symbol_R, data_R, 0, 0, kernel_cols, kernel_rows, per_pe_restr
                   order=memcpy_order)
 
 # x is across rows and b is across cols
-runner.memcpy_h2d_colbcast(symbol_x, X, 0, 0, kernel_cols, kernel_rows, per_pe_cols,
+runner.memcpy_h2d_colbcast(symbol_x, X_padded, 0, 0, kernel_cols, kernel_rows, per_pe_cols,
                   streaming=False, data_type=memcpy_dtype, nonblock=False, order=memcpy_order)
 
 # B will be distributed but the diagonal will only process the first term.
-runner.memcpy_h2d_rowbcast(symbol_b, B, 0, 0, kernel_cols, kernel_rows, per_pe_rows,
+runner.memcpy_h2d_rowbcast(symbol_b, B_padded, 0, 0, kernel_cols, kernel_rows, per_pe_rows,
                   streaming=False, data_type=memcpy_dtype, nonblock=False, order=memcpy_order)
 
 # omega
@@ -201,6 +239,7 @@ runner.launch("f_enable_timer", nonblock=False)
 print("Step 3: Record initial timestamp (tic)")
 runner.launch("f_tic", nonblock=True)
 print("Step 4: Launching kernel...")
+# runner.launch("layout_print", nonblock=False)
 runner.launch("main", nonblock=False) # Run the kernel
 print("Step 5: toc() records time_end")
 runner.launch("f_toc", nonblock=False)
@@ -223,11 +262,12 @@ time_ref_hwl = np.reshape(time_ref_1d_f32, (kernel_rows, kernel_cols, 2), order=
 
 # RIGHTMOST COLUMN
 print("Step 9: Copied back result.")
-b_next_device = np.zeros(restrict_rows, dtype=np.float32)
+b_next_device = np.zeros(padded_restrict_rows, dtype=np.float32)
 runner.memcpy_d2h(b_next_device, symbol_b_next, kernel_cols-1, 0, 1, kernel_rows, per_pe_restrict_rows,
                   streaming=False, data_type=memcpy_dtype, nonblock=False,
                   order=memcpy_order)
-
+b_next_device = unpad_1d(b_next_device, restrict_rows)
+# print("b_next_device shape:", b_next_device.shape)
 runner.stop()
 
 # Record end time and calculate duration

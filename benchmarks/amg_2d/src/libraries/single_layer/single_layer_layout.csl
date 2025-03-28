@@ -38,18 +38,18 @@ param layer_kernel_cols : i16; // Width of kernel
 param layer_index: i16; // index of the layer
 
 
-comptime {
-  // Number of matrix rows must be multiple of kernel rectangle height
-  @comptime_assert(layer_rows_A % layer_kernel_rows == 0);
-  // Number of matrix cols must be multiple of kernel rectangle width
-  @comptime_assert(layer_cols_A % layer_kernel_cols == 0);
-  // at least R_N should be same as A_M
-  @comptime_assert(layer_cols_R == layer_rows_A);
-  // If we do this this becomes a GMG with a very structured lowering, 
-  // keep for now.
-  @comptime_assert(layer_rows_R % layer_kernel_rows == 0);
-  @comptime_assert(layer_cols_R % layer_kernel_cols == 0);
-}
+// comptime {
+//   // Number of matrix rows must be multiple of kernel rectangle height
+//   @comptime_assert(layer_rows_A % layer_kernel_rows == 0);
+//   // Number of matrix cols must be multiple of kernel rectangle width
+//   @comptime_assert(layer_cols_A % layer_kernel_cols == 0);
+//   // at least R_N should be same as A_M
+//   @comptime_assert(layer_cols_R == layer_rows_A);
+//   // If we do this this becomes a GMG with a very structured lowering, 
+//   // keep for now.
+//   @comptime_assert(layer_rows_R % layer_kernel_rows == 0);
+//   @comptime_assert(layer_cols_R % layer_kernel_cols == 0);
+// }
 
 // Local matrix dimensions
 const LOCAL_rows_A: i16 = layer_rows_A / layer_kernel_rows; // Number of rows per PE
@@ -108,7 +108,7 @@ const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = layer_kernel_cols,
     .height = layer_kernel_rows
 });
-const current_layer_params = .{        
+const current_layer_params = .{
         .M = layer_rows_A,
         .N = layer_cols_A,
         .M_local = LOCAL_rows_A,
