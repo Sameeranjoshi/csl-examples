@@ -161,6 +161,13 @@ def run_command(command):
         print("Error occurred:", e.stderr)
 
 def generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_cols, total_levels, generated_layout_file, run_args):
+      # Generates below command.
+      # cslc ./src/layout_amg.csl --arch=wse2 --fabric-dims=27,12 --fabric-offsets=4,1 \
+      # --params=total_pe_rows:10,total_pe_cols:20,total_levels:2 \
+      # --params=layer_M_0:50,layer_N_0:50,layer_R_M_0:10,layer_R_N_0:50,layer_start_x_0:0,layer_start_y_0:0,layer_pe_cols_0:10,layer_pe_rows_0:10,layer_index_0:0 \
+      # --params=layer_M_1:10,layer_N_1:10,layer_R_M_1:10,layer_R_N_1:10,layer_start_x_1:10,layer_start_y_1:0,layer_pe_cols_1:10,layer_pe_rows_1:10,layer_index_1:1 \
+      # --memcpy --channels=1 --width-west-buf=0 --width-east-buf=0 --max-inlined-iterations=1000000 -o out
+      
     # Mostly doesn't change
     cslc, layout_file, arch = "cslc", generated_layout_file , "wse2"
 
@@ -279,7 +286,7 @@ def generate_dynamic_layout(run_args, ml, layer_coordinates_map:Optional[dict]=N
   
   print("Precompile disabled, compiling based on problem size.")
   layout_command, fabric_dimensions = generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_cols, tot_level_minus_one, generated_layout_file, run_args)
-  ut.visualize_layout_with_empty(fabric_dimensions, layer_coordinates_map, layer_param_map, total_pe_cols, total_pe_rows, filename)
+  # ut.visualize_layout_with_empty(fabric_dimensions, layer_coordinates_map, layer_param_map, total_pe_cols, total_pe_rows, filename)
   print("############################################################")
   print("Generating blueprint layout with :\n")
   print(layout_command)
