@@ -239,24 +239,27 @@ def print_table_shapes(levels):
     level_data = []
     for idx, level in enumerate(levels):
         level_info = {'level': idx}
-
         # Handle A
         if hasattr(level, 'A') and level.A is not None:
-            level_info[f'A_shape({level.A.dtype})'] = f"{level.A.shape}"
+            format_str = level.A.format if hasattr(level.A, 'format') else 'dense'
+            level_info[f'A_shape({level.A.dtype},{format_str})'] = f"{level.A.shape}"
         else:
             level_info['A_shape'] = "N/A"
 
         # Handle B
         if hasattr(level, 'B') and level.B is not None:
-            level_info[f'B_shape({level.B.dtype})'] = f"{level.B.shape}"
+            format_str = level.B.format if hasattr(level.B, 'format') else 'dense'
+            level_info[f'B_shape({level.B.dtype},{format_str})'] = f"{level.B.shape}"
 
         # Handle P
         if hasattr(level, 'P') and level.P is not None:
-            level_info[f'P_shape({level.P.dtype})'] = f"{level.P.shape}"
+            format_str = level.P.format if hasattr(level.P, 'format') else 'dense'
+            level_info[f'P_shape({level.P.dtype},{format_str})'] = f"{level.P.shape}"
 
         # Handle R
         if hasattr(level, 'R') and level.R is not None:
-            level_info[f'R_shape({level.R.dtype})'] = f"{level.R.shape}"
+            format_str = level.R.format if hasattr(level.R, 'format') else 'dense'
+            level_info[f'R_shape({level.R.dtype},{format_str})'] = f"{level.R.shape}"
 
         # Handle presmoother
         if hasattr(level, 'presmoother') and level.presmoother:

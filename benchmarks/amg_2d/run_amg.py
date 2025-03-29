@@ -31,6 +31,7 @@ import warnings
 
 from mapper_layouts.different_layouts import *
 import time_utils as time_ut
+from src.libraries.single_layer.jacobi_only import pad_A, pad_1d
  
 def calculate_fabric_dimensions(width, height, width_west_buf, width_east_buf):
   # fabric-offsets = 1,1
@@ -162,8 +163,7 @@ def run_command(command):
 def generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_cols, total_levels, generated_layout_file, run_args):
     # Mostly doesn't change
     cslc, layout_file, arch = "cslc", generated_layout_file , "wse2"
-    extra_args = "--max-inlined-iterations=1000000"
-    elf_folder = run_args.elffolder
+
     # Can Change based on problem size.
     channels, width_west_buf, width_east_buf = 1, 0, 0
     assert channels <= 16, "only support up to 16 I/O channels"
@@ -189,6 +189,8 @@ def generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_col
     all_layer_params = " ".join(layer_params_list)
 
     # Other fixed parameters
+    extra_args = "--max-inlined-iterations=1000000"
+    elf_folder = run_args.elffolder
     fixed_params = f"--memcpy --channels={channels} --width-west-buf={width_west_buf} --width-east-buf={width_east_buf} {extra_args} -o {elf_folder}"
 
     # Construct the final command
@@ -210,7 +212,7 @@ def create_layer_param_map(ml, layer_coordinates_input=None):
   
   # default mapping.
   if layer_coordinates_input is None:
-    print("Layer coordinates not provided, using default linear placement across columns.")
+    print("Layer coordinates not provided, using default linear placement across columns(1x1) always works.")
     layer_coordinates_input = {
       i: {
         "layer_start_x": i,  # default linear placement to right/px
@@ -231,12 +233,14 @@ def create_layer_param_map(ml, layer_coordinates_input=None):
       raise ValueError(f"Layer {i} should have positive x coordinate.")
     if layer_coordinates_input[i]['layer_start_y'] < 0:
       raise ValueError(f"Layer {i} should have positive y coordinate.")
+    if layer_coordinates_input[i]['layer_pe_cols'] != layer_coordinates_input[i]['layer_pe_rows']:
+      raise ValueError(f"Layer {i} should have square PE dimensions.")
     # update the map.
     
 
   # AMG problem specific layers.
   for level_index in range(total_levels):  # not the coarsest level
-    A, R = ml.levels[level_index].A.toarray(), ml.levels[level_index].R.toarray()
+    A, R = ml.levels[level_index].A, ml.levels[level_index].R
     [M,N] = A.shape
     [R_M, R_N] = R.shape
     
@@ -275,7 +279,7 @@ def generate_dynamic_layout(run_args, ml, layer_coordinates_map:Optional[dict]=N
   
   print("Precompile disabled, compiling based on problem size.")
   layout_command, fabric_dimensions = generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_cols, tot_level_minus_one, generated_layout_file, run_args)
-  # ut.visualize_layout_with_empty(fabric_dimensions, layer_coordinates_map, layer_param_map, total_pe_cols, total_pe_rows, filename)
+  ut.visualize_layout_with_empty(fabric_dimensions, layer_coordinates_map, layer_param_map, total_pe_cols, total_pe_rows, filename)
   print("############################################################")
   print("Generating blueprint layout with :\n")
   print(layout_command)
@@ -373,11 +377,15 @@ def generate_input1(M, N):
     b0 = np.full(shape=M*1, fill_value=3.0,dtype=np.float32)
     return A0,x0,b0
 
-def generate_input2(M, N):
-    A = pyamg.gallery.poisson((M, N), dtype=np.float32, format='csr')  # 2D
+def generate_input2(M, N, type=np.float32):
+    A = pyamg.gallery.poisson((M, N), dtype=type, format='csr')  # 2D
     b = np.ones((A.shape[0]))                      # RHS
     x = np.zeros((A.shape[1]))                      # initial guess
-    return A, x, b
+
+    A0 = A.astype(type)
+    x0 = x.astype(type)  # Do this compulsorily to make the data 32bit.
+    b0 = b.astype(type)
+    return A0, x0, b0
 
 def host_calculations(v_cycle_data):
 
@@ -437,26 +445,35 @@ def device_calculations(v_cycle_data):
     run_args, logs_dir = parse_args()
     
     ############################################################
+    # Get the layout for AMG layers given by user.
+    ############################################################
+    layer_coordinates_map = amg_2_layers
+    ############################################################
+    # TODO: When doing sparse remove this.
+    # Pad the data and make it dense.
+    ############################################################
+    pad_and_make_dense(layer_coordinates_map, v_cycle_data)
+        
+    ############################################################
     # unpack data
     ############################################################
     # unpack the input data
-    ml = v_cycle_data["ml"]
+    ml = v_cycle_data["ml"] # Changed to dense and padded.
     setup_config = v_cycle_data["setup_config"]
-    x_level = v_cycle_data["x_level"]
-    b_level = v_cycle_data["b_level"]
+    x_level = v_cycle_data["x_level"] # Changed to dense and padded.
+    b_level = v_cycle_data["b_level"] # Changed to dense and padded.
     max_iterations = v_cycle_data["max_iterations"]
     tol = v_cycle_data["tol"]
-
+    
     ############################################################
     # CREATE DYNAMIC LAYOUT
     ############################################################
-    layer_coordinates_map = amg_2_layers
     layer_param_map, layer_coordinates_map, total_pe_cols, total_pe_rows = generate_dynamic_layout(run_args, ml, layer_coordinates_map, filename="images/amg_2_layers.png")
 
     ############################################################
     # Setup simulator
     ############################################################
-    simulator = SdkRuntime(run_args.elffolder, cmaddr=run_args.cmaddr)
+    # simulator = SdkRuntime(run_args.elffolder, cmaddr=run_args.cmaddr)
     start = time.time()
     simulator.load()
     end = time.time()
@@ -706,6 +723,32 @@ def device_calculations(v_cycle_data):
     residual_device = np.linalg.norm(ml.levels[0].A @ x_solution_device - b_level[0])
     return b_solution_device, x_solution_device, residual_device
 
+def pad_and_make_dense(layer_coordinates_map, v_cycle_data):
+    """Pad matrices and vectors to match PE dimensions and convert sparse to dense"""
+    ml = v_cycle_data["ml"]
+    x_level = v_cycle_data["x_level"] 
+    b_level = v_cycle_data["b_level"]
+    
+    for level_index in range(len(ml.levels) -1):
+        coords = layer_coordinates_map[level_index]
+        kernel_rows = coords['layer_pe_rows']
+        kernel_cols = coords['layer_pe_cols']
+        
+        # Pad and convert matrices to dense
+        ml.levels[level_index].A = pad_A(ml.levels[level_index].A.toarray(), kernel_rows, kernel_cols, variable_name=f"A_{level_index}")
+        if level_index < len(ml.levels)-1:  
+            ml.levels[level_index].R = pad_A(ml.levels[level_index].R.toarray(), kernel_rows, kernel_cols, variable_name=f"R_{level_index}")
+            ml.levels[level_index].P = pad_A(ml.levels[level_index].P.toarray(), kernel_rows, kernel_cols, variable_name=f"P_{level_index}")
+        
+        # Pad vectors
+        if x_level[level_index] is not None:
+            [padded_matrix_rows, padded_matrix_cols] = ml.levels[level_index].A.shape
+            x_level[level_index] = pad_1d(x_level[level_index], padded_matrix_cols, variable_name=f"x_{level_index}")
+        if b_level[level_index] is not None:
+            [padded_matrix_rows, padded_matrix_cols] = ml.levels[level_index].A.shape
+            b_level[level_index] = pad_1d(b_level[level_index], padded_matrix_rows, variable_name=f"b_{level_index}")
+                
+
 def main():
   random.seed(127)
 
@@ -715,17 +758,13 @@ def main():
   N = 7
   M = 7
   eps = 1.e-2
-  max_iterations = 20
+  max_iterations = 1
     
-  A0, x0, b0 = generate_input2(M, N)
-  A0 = A0.astype(np.float32)
-  x0 = x0.astype(np.float32)  # Do this compulsorily to make the data 32bit.
-  b0 = b0.astype(np.float32)
-  
+  A0, x0, b0 = generate_input2(M, N, type=np.float32)
   nrm_b = np.linalg.norm(b0, 2)
   relative_tol = eps * nrm_b # relative tolerance
   
-  checkinput(A0, b0, x0, relative_tol, max_iterations)
+  checkinput(A0, b0, x0, relative_tol, max_iterations)  # Runs solvers from pyamg and scipy.
 
   # print data
   print("Input problem size:", M, N)
@@ -760,7 +799,7 @@ def main():
   x_level[0] = np.copy(x0)
   b_level[0] = np.copy(b0)  
   for i in range(V_levels - 1): # We know this
-    x_level[i+1] = np.zeros((ml.levels[i].R.shape[0], 1), dtype=np.float32)
+    x_level[i+1] = np.zeros(ml.levels[i].R.shape[0], dtype=np.float32) # Changed to 1D array
     
   v_cycle_data = {
     "ml": ml,
