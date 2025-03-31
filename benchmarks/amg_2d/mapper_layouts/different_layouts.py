@@ -133,5 +133,5 @@ amg_paper_layout = {
 
 amg_2_layers = {
     0: {"layer_start_x": 0, "layer_start_y": 0, "layer_pe_cols": 2, "layer_pe_rows": 2},  # Part 1 - Green
-    1: {"layer_start_x": 2, "layer_start_y": 0, "layer_pe_cols": 2, "layer_pe_rows": 2},  # Part 2 - Red
+    # 1: {"layer_start_x": 2, "layer_start_y": 0, "layer_pe_cols": 2, "layer_pe_rows": 2},  # Part 2 - Red
 }

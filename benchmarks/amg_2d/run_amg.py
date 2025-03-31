@@ -31,7 +31,7 @@ import warnings
 
 from mapper_layouts.different_layouts import *
 import time_utils as time_ut
-from src.libraries.single_layer.jacobi_only import pad_A, pad_1d
+from src.libraries.single_layer.jacobi_only import pad_A, pad_1d, unpad_1d
  
 def calculate_fabric_dimensions(width, height, width_west_buf, width_east_buf):
   # fabric-offsets = 1,1
@@ -235,6 +235,8 @@ def create_layer_param_map(ml, layer_coordinates_input=None):
     #   raise ValueError(f"It looks like layer {i} provided is not in input problem layers(most likely more coordinates than AMG Levels size.)")
 
   # error checks
+  if len(layer_coordinates_input) != total_levels:
+    raise ValueError(f"The number of layers provided in layer_coordinates_input should be equal to the total number of levels.")
   for i in range(len(layer_coordinates_input)):
     if layer_coordinates_input[i]['layer_start_x'] < 0:
       raise ValueError(f"Layer {i} should have positive x coordinate.")
@@ -385,7 +387,7 @@ def generate_input1(M, N):
     b0 = np.full(shape=M*1, fill_value=3.0,dtype=np.float32)
     return A0,x0,b0
 
-def generate_input2(M, N, type=np.float32):
+def generate_input2(M, N, type=np.float32):  
     A = pyamg.gallery.poisson((M, N), dtype=type, format='csr')  # 2D
     b = np.ones((A.shape[0]))                      # RHS
     x = np.zeros((A.shape[1]))                      # initial guess
@@ -419,6 +421,8 @@ def host_calculations(v_cycle_data):
     for i, level in enumerate(ml.levels[:-1]):
       level = ml.levels[i]  # current level
       b_coarse_layer, x_coarse_layer = amg.each_layer_solver_down(level, x_level, b_level, ml, setup_config, i)
+      print("b_coarse_layer:", b_coarse_layer)
+      print("x_coarse_layer:", x_coarse_layer)
       b_level[i + 1] = b_coarse_layer  # Directly store in the next level
       x_level[i + 1] = x_coarse_layer  # Directly store in the next level
 
@@ -477,11 +481,14 @@ def device_calculations(v_cycle_data):
     # CREATE DYNAMIC LAYOUT
     ############################################################
     layer_param_map, layer_coordinates_map, total_pe_cols, total_pe_rows = generate_dynamic_layout(run_args, ml, layer_coordinates_map, filename="images/amg_2_layers.png")
-
+    print("layer_coordinates_map:", layer_coordinates_map)
+    print("layer_param_map:", layer_param_map)
+    print("total_pe_cols:", total_pe_cols)
+    print("total_pe_rows:", total_pe_rows)
     ############################################################
     # Setup simulator
     ############################################################
-    # simulator = SdkRuntime(run_args.elffolder, cmaddr=run_args.cmaddr)
+    simulator = SdkRuntime(run_args.elffolder, cmaddr=run_args.cmaddr)
     start = time.time()
     simulator.load()
     end = time.time()
@@ -501,6 +508,14 @@ def device_calculations(v_cycle_data):
     memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
     memcpy_order = MemcpyOrder.ROW_MAJOR
     
+    def do_memcpy_h2d_bcast(symbol, data, px, py, w, h, size, is_rowbcast=True):
+        if is_rowbcast:
+            simulator.memcpy_h2d_rowbcast(symbol, data, px, py, w, h, size, streaming=False,
+                                order=memcpy_order, data_type=memcpy_dtype, nonblock=False)
+        else:
+            simulator.memcpy_h2d_colbcast(symbol, data, px, py, w, h, size, streaming=False,
+                                order=memcpy_order, data_type=memcpy_dtype, nonblock=False)
+            
     # Helper function for memcpy operations
     def do_memcpy(symbol, data, px, py, w, h, size, is_h2d=True):
         if is_h2d:
@@ -514,15 +529,15 @@ def device_calculations(v_cycle_data):
 
     # Cache commonly used symbols
     symbols = {
-        'b_coarse': simulator.get_id("b_coarse"),
         'A': simulator.get_id("A"),
+        'R': simulator.get_id("R"),
         'x': simulator.get_id("x"), 
         'b': simulator.get_id("b"),
-        'R': simulator.get_id("R"),
-        'x_coarse': simulator.get_id("x_coarse"),
-        'P': simulator.get_id("P"),
-        'time_buf_u16': simulator.get_id("time_buf_u16"),
-        'time_ref_u16': simulator.get_id("time_ref_u16")
+        'b_next': simulator.get_id("b_next"),
+        'omega': simulator.get_id("omega"),
+        'iterations': simulator.get_id("iterations"),
+        'time_memcpy': simulator.get_id("time_memcpy"),
+        'time_ref': simulator.get_id("time_ref")
     }
 
     ############################################################
@@ -543,14 +558,31 @@ def device_calculations(v_cycle_data):
         total_levels = 2 * one_side_levels - 1
         center_index = one_side_levels - 1
         
-        for total_level_index in range(total_levels):
+        for total_level_index in range(one_side_levels): # only perform down cycle.(total_levels->center_index)
             if total_level_index == center_index:
+                ############################################################
+                # Store original dimensions before unpadding - HACK.
+                unpadded_x_shape = ml.levels[-1].A.shape[1]
+                unpadded_b_shape = ml.levels[-1].A.shape[0]
+                padded_x_shape = x_level[-1].shape[0]
+                padded_b_shape = b_level[-1].shape[0]
+                # Unpad x and b for coarse level calculations
+                x_level[-1] = unpad_1d(x_level[-1], unpadded_x_shape)
+                b_level[-1] = unpad_1d(b_level[-1], unpadded_b_shape)
+                
+                # Convert A to CSR format for coarse solver
+                ml.levels[-1].A = sp.csr_matrix(ml.levels[-1].A)
+                ############################################################
+                
                 print("\n" + "-"*40)
                 print(f"│ COARSE SOLVE AT LEVEL {one_side_levels-1}")
                 print("-"*40)
                 x_coarsest_device = x_level[-1]
-                A_coarse = ml.levels[-1].A.toarray()
+                A_coarse = ml.levels[-1].A
                 b_coarse = b_level[-1]
+                print("A_coarse:", A_coarse)
+                print("b_coarse:", b_coarse)
+                print("x_coarsest_device:", x_coarsest_device)
 
                 print("Matrix Dimensions:")
                 print(f"  A: {A_coarse.shape}")
@@ -558,6 +590,13 @@ def device_calculations(v_cycle_data):
 
                 solver_callable_host = amg.scipy_direct_solver
                 x_coarsest_device[:] = solver_callable_host(ml.levels[-1].A, b_level[-1])
+                print("x_coarsest_device solved:", x_coarsest_device)
+                
+                ############################################################
+                # Pad x and b back to their original dimensions, HACK - get rid of this.
+                x_level[-1] = pad_1d(x_level[-1], padded_x_shape, variable_name="x_level[-1]")
+                b_level[-1] = pad_1d(b_level[-1], padded_b_shape, variable_name="b_level[-1]")
+                ############################################################
                 continue
 
             is_downward = total_level_index < center_index
@@ -580,35 +619,102 @@ def device_calculations(v_cycle_data):
             ############################################################
             # GET LAYER DATA & VERIFY DIMENSIONS
             ############################################################
-            level = ml.levels[level_index]
-            if is_downward:
-                A, R = level.A.toarray(), level.R.toarray()
-                x, b = x_level[level_index], b_level[level_index]
-                M, N = A.shape
-                R_M, R_N = R.shape
-                
-                print("Matrix Dimensions:")
-                print(f"  A: {A.shape} | R: {R.shape}")
-                print(f"  x: {x.shape} | b: {b.shape}")
-                
-            elif is_upward:
-                A, P = level.A.toarray(), level.P.toarray()
-                x, b = x_level[level_index], b_level[level_index]
-                x_coarse = x_level[level_index + 1]
-                M, N = A.shape
-                R_N, R_M = P.shape
-                
-                print("Matrix Dimensions:")
-                print(f"  A: {A.shape} | P: {P.shape}")
-                print(f"  x: {x.shape} | x_coarse: {x_coarse.shape}")
-            
             coords = layer_coordinates_map[level_index]
             px, py = coords['layer_start_x'], coords['layer_start_y']
             w, h = coords['layer_pe_cols'], coords['layer_pe_rows']
             
             print("\nPE Configuration:")
             print(f"  Position: ({px}, {py}) | Size: {w}x{h}")
+            
+            # Data
+            level = ml.levels[level_index]
+            # common data.
+                        
+            if is_downward:
+                A, R = level.A, level.R                
+                M, N = A.shape
+                R_M, R_N = R.shape
+                x, b = x_level[level_index], b_level[level_index]                
+                omega = np.zeros(h*w, dtype=np.float32) # Will vary across layers.
+                iterations = np.zeros(h*w, dtype=np.int32)                
+                omega[:] = amg.get_omega_from_presmoother(setup_config)
+                iterations[:] = amg.get_iterations_from_presmoother(setup_config)
+                
+                print("Matrix Dimensions:")
+                print(f"  A: {A.shape} | R: {R.shape}")
+                print(f"  x: {x.shape} | b: {b.shape}")
+                print(f"  omega: {omega.shape} | iterations: {iterations.shape}")
+                
+                # Per PE Data Sizes
+                per_pe_rows = M // h
+                per_pe_cols = N // w                
+                per_pe_restrict_rows = R_M // h
+                per_pe_restrict_cols = R_N // w                
 
+                print(f"\nPer PE Data Sizes:")
+                print(f"  x: {per_pe_rows}x{1} | b: {per_pe_cols}x{1}")
+                print(f"  A: {per_pe_rows}x{per_pe_cols} | R: {per_pe_restrict_rows}x{per_pe_restrict_cols}")
+                                
+            elif is_upward:
+                A, P = level.A, level.P
+                M, N = A.shape
+                P_M, P_N = P.shape
+                x, b = x_level[level_index], b_level[level_index]
+                x_coarse = x_level[level_index + 1]
+                omega = np.zeros(h*w, dtype=np.float32) # Will vary across layers.
+                iterations = np.zeros(h*w, dtype=np.int32)                                          
+                omega[:] = amg.get_omega_from_postsmoother(setup_config)
+                iterations[:] = amg.get_iterations_from_postsmoother(setup_config)
+                
+                print("Matrix Dimensions:")
+                print(f"  A: {A.shape} | P: {P.shape}")
+                print(f"  x: {x.shape} | x_coarse: {x_coarse.shape}")
+                print(f"  omega: {omega.shape} | iterations: {iterations.shape}")
+
+                # Per PE Data Sizes
+                per_pe_rows = M // h
+                per_pe_cols = N // w                
+                per_pe_prolongation_rows = P_M // h
+                per_pe_prolongation_cols = P_N // w
+
+                print(f"\nPer PE Data Sizes:")
+                print(f"  x: {per_pe_rows}x{1} | b: {per_pe_cols}x{1}")
+                print(f"  A: {per_pe_rows}x{per_pe_cols} | R: {per_pe_restrict_rows}x{per_pe_restrict_cols}")
+                print(f"  P: {per_pe_prolongation_rows}x{per_pe_prolongation_cols}")
+            ############################################################
+            # TRANSFORM THE DATA TO MAP ON DEVICE.( single_layer_run.py ) 
+            ############################################################
+            # x is across rows and b is across cols (row major)
+            # A is across rows and cols (row major)
+            # R is across rows and cols (row major)
+            # P is across rows and cols (row major)
+            # b_next is across last col (row major)
+            
+            # As an example, consider A[4, 4], mapped onto a 2x2 grid of PEs:
+            #
+            #   Matrix A on host            2 x 2 PE grid, row major A submatrices
+            # +----+----+----+----+         +----------------+----------------+
+            # | 0  | 1  | 2  | 3  |         | PE (0, 0):     | PE (1, 0):     |
+            # +----+----+----+----+         |  0,  1,  4,  5 |  2,  3,  6,  7 |
+            # | 4  | 5  | 6  | 7  |         |                |                |
+            # +----+----+----+----+   --->  +----------------+----------------+
+            # | 8  | 9  | 10 | 11 |         | PE (0, 1):     | PE (1, 1):     |
+            # +----+----+----+----+         |  8,  9, 12, 13 | 10, 11, 14, 15 |
+            # | 12 | 13 | 14 | 15 |         |                |                |
+            # +----+----+----+----+         +----------------+----------------+
+            #
+            # So our input array for memcpy_h2d must be ordered as follows after ROW_MAJOR copy ordering.
+            # [ 0, 1, 4, 5, 2, 3, 6, 7, 8, 9, 12, 13, 10, 11, 14, 15 ]
+            
+            if is_downward:
+                A_transformed = np.stack(np.split(np.stack(np.split(A, h, axis=1)), w, axis=1)).ravel()
+                R_transformed = np.stack(np.split(np.stack(np.split(R, h, axis=1)), w, axis=1)).ravel() # h here means the number of divisions to make.
+            elif is_upward:
+                P_transformed = np.stack(np.split(np.stack(np.split(P, h, axis=1)), w, axis=1)).ravel()
+            x_transformed = x.flatten(order='C')  # ROW_MAJOR
+            b_transformed = b.flatten(order='C')  # ROW_MAJOR
+            
+            
             ############################################################
             # H2D TRANSFERS
             ############################################################
@@ -618,15 +724,19 @@ def device_calculations(v_cycle_data):
                 print(f"  Matrix A    : {M*N} elements")
                 print(f"  Matrix R    : {R_M*R_N} elements")
                 print(f"  Vector b    : {M*1} elements")
-                do_memcpy(symbols['x'], x, px, py, w, h, N*1, is_h2d=True)
-                do_memcpy(symbols['A'], A.flatten(order='C'), px, py, w, h, M*N, is_h2d=True)
-                do_memcpy(symbols['R'], R.flatten(order='C'), px, py, w, h, R_M*R_N, is_h2d=True)
-                do_memcpy(symbols['b'], b, px, py, w, h, M*1, is_h2d=True)
+                do_memcpy(symbols['A'], A_transformed, px, py, w, h, per_pe_rows*per_pe_cols, is_h2d=True)
+                do_memcpy(symbols['R'], R_transformed, px, py, w, h, per_pe_restrict_rows*per_pe_restrict_cols, is_h2d=True)
+                do_memcpy_h2d_bcast(symbols['x'], x_transformed, px, py, w, h, per_pe_cols*1, is_rowbcast=False) # x ->> across cols
+                do_memcpy_h2d_bcast(symbols['b'], b_transformed, px, py, w, h, per_pe_rows*1, is_rowbcast=True) # b ->> across rows
+                do_memcpy(symbols['omega'], omega, px, py, w, h, 1, is_h2d=True)
+                do_memcpy(symbols['iterations'], iterations, px, py, w, h, 1, is_h2d=True)
             elif is_upward:
-                print(f"  Matrix P    : {R_N*R_M} elements")
-                print(f"  Vector x_c  : {R_M*1} elements")
-                do_memcpy(symbols['P'], P.flatten(order='C'), px, py, w, h, R_N*R_M, is_h2d=True)
-                do_memcpy(symbols['x_coarse'], x_coarse, px, py, w, h, R_M*1, is_h2d=True)
+                print(f"  Matrix P    : {P_M*P_N} elements")
+                print(f"  Vector x_c  : {P_N*1} elements")
+                do_memcpy(symbols['P'], P_transformed, px, py, w, h, per_pe_prolongation_rows*per_pe_prolongation_cols, is_h2d=True)
+                do_memcpy(symbols['x_coarse'], x_coarse, px, py, w, h, per_pe_prolongation_cols*1, is_h2d=True) # TODO: FIXME, not sure still about this.
+                do_memcpy(symbols['omega'], omega, px, py, w, h, 1, is_h2d=True)
+                do_memcpy(symbols['iterations'], iterations, px, py, w, h, 1, is_h2d=True)
 
             ############################################################
             # COMPUTE
@@ -642,15 +752,14 @@ def device_calculations(v_cycle_data):
             
             print("\nComputation:")
             if is_downward:
-                omega = amg.get_omega_from_presmoother(setup_config)
-                iterations = amg.get_iterations_from_presmoother(setup_config)
-                print(f"Launching v_cycle_down with omega={omega}, iterations={iterations}, level_index={level_index}")
-                simulator.launch("v_cycle_down", np.float32(omega), np.int16(iterations), np.int16(level_index), nonblock=False)                
+                print(f"Launching single_layer with level_index={level_index}")
+                # simulator.launch("layout_print", nonblock=False)
+                simulator.launch("main", nonblock=False) # Run the kernel
+                # simulator.launch("v_cycle_down", np.float32(omega), np.int16(iterations), np.int16(level_index), nonblock=False)                
             else:
-                omega = amg.get_omega_from_postsmoother(setup_config)
-                iterations = amg.get_iterations_from_postsmoother(setup_config)
-                print(f"Launching v_cycle_up with omega={omega}, iterations={iterations}, level_index={level_index}")
-                simulator.launch("v_cycle_up", np.float32(omega), np.int16(iterations), np.int16(level_index), nonblock=False)                
+                print(f"Launching single_layer with level_index={level_index}")
+                #TODO: FIXME, not sure still about this.
+                # simulator.launch("v_cycle_up", np.float32(omega), np.int16(iterations), np.int16(level_index), nonblock=False)                
 
             print("Step 5: toc() records time_end")
             simulator.launch("f_toc", nonblock=False)
@@ -665,38 +774,51 @@ def device_calculations(v_cycle_data):
             print("\nMemory Transfers (D2H):")
             if is_downward:
                 print("  Copying b_coarse, x_smooth")
-                b_coarse_device = do_memcpy(symbols['b_coarse'], None, px, py, w, h, R_M*1, is_h2d=False)
-                x_smooth = do_memcpy(symbols['x'], None, px, py, w, h, N*1, is_h2d=False)
+                b_coarse_device = np.zeros(R_M, dtype=np.float32) # Fixed bug, of R_N VS R_M.
+                simulator.memcpy_d2h(b_coarse_device, symbols['b_next'], px + (w-1), py + 0, 1, h, per_pe_restrict_rows*1,
+                                    streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+                x_smooth = np.zeros(N, dtype=np.float32)  # shape of x and x_smooth is same.
+                simulator.memcpy_d2h(x_smooth, symbols['x'], px, py, w, 1, per_pe_cols*1,
+                                      streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
                 x_coarse_device = np.zeros_like(b_coarse_device)
+                print("x_coarse_device:", x_coarse_device)
+                print("b_coarse_device:", b_coarse_device)
+                print("x_smooth:", x_smooth)
                 
                 x_level[level_index] = x_smooth
                 b_level[level_index + 1] = b_coarse_device
                 x_level[level_index + 1] = x_coarse_device
             elif is_upward:
                 print("  Copying x")
-                x_level[level_index] = do_memcpy(symbols['x'], None, px, py, w, h, N*1, is_h2d=False)
+                x_level_device = np.zeros_like(N, dtype=np.float32)
+                simulator.memcpy_d2h(x_level_device, symbols['x'], px, py, w, 1, per_pe_cols*1, 
+                                     streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+                x_level[level_index] = x_level_device # This was complex, TODO: FIXME, not sure still about this.
 
             ############################################################
             # TIME TRANSFERS
             ############################################################
                
-            print("Step 7: Retrieve timing data")
-            time_memcpy_hwl_1d = np.zeros(w*h*6, np.uint32)
-            simulator.memcpy_d2h(time_memcpy_hwl_1d, symbols['time_buf_u16'], px, py, w, h, 6,
-                streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.ROW_MAJOR, nonblock=False)
-            time_memcpy_hwl = oned_to_hwl_colmajor(h, w, 6, time_memcpy_hwl_1d, np.uint16)
-            
-            time_ref_1d = np.zeros(w*h*3, np.uint32)
-            simulator.memcpy_d2h(time_ref_1d, symbols['time_ref_u16'], px, py, w, h, 3,
-                streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.ROW_MAJOR, nonblock=False)
-            time_ref_hwl = oned_to_hwl_colmajor(h, w, 3, time_ref_1d, np.uint16)
+            # print("Step 7: Retrieve timing data")
+            # time_memcpy_1d_f32 = np.zeros(h*w*3, np.float32)
+            # simulator.memcpy_d2h(time_memcpy_1d_f32, symbols['time_memcpy'], px, py, w, h, 3,
+            #     streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+            # time_memcpy_hwl = np.reshape(time_memcpy_1d_f32, (h, w, 3), order='C')
+            # # time_ref is of type u16[3], packed into two f32
+            # time_ref_1d_f32 = np.zeros(h*w*2, np.float32)
+            # simulator.memcpy_d2h(time_ref_1d_f32, symbols['time_ref'], px, py, w, h, 2,
+            #     streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+            # time_ref_hwl = np.reshape(time_ref_1d_f32, (h, w, 2), order='C')
             
             ############################################################
             # LOGGING
             ############################################################
             logs(run_args, logs_dir)
             print("\nAnalyzing timing data...")
-            time_logs(h, w, time_memcpy_hwl, time_ref_hwl, is_downward, level_index, iteration, timing_map_all_iterations)
+            print("Step 10: Time logs")
+            # time_logs(h, w, time_memcpy_hwl, time_ref_hwl, is_downward, level_index, iteration, timing_map_all_iterations)
+
+            # time_logs(h, w, time_memcpy_hwl, time_ref_hwl, is_downward, level_index, iteration, timing_map_all_iterations)
             
         ############################################################
         # CHECK CONVERGENCE
@@ -763,8 +885,8 @@ def main():
   print("############################################################")
   print("# INPUT DATA")
   print("############################################################")
-  N = 7
-  M = 7
+  N = 2
+  M = 2
   eps = 1.e-2
   max_iterations = 1
     

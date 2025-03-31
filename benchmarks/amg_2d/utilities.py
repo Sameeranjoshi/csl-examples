@@ -524,4 +524,5 @@ def visualize_layout_with_empty_plotly(fabric_dimensions, layer_coordinates_map,
     # Save as HTML
     # fig.write_html(filename)
     fig.write_image(filename)
+    print(f"Saved layout image to {filename}")
     fig.show()

@@ -17,7 +17,7 @@ set -e
 
 
 
-cs_python ./run_amg.py --logsdir logs --elffolder out --compile-only
+cs_python ./run_amg.py --logsdir logs --elffolder out
 # When using run-only you have to compile first.
 
 # # # # Run it

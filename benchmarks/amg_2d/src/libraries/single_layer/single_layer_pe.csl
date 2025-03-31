@@ -221,6 +221,7 @@ fn compute_mv_per_tile(N_tile: i16, dsd_mv_tile: anytype, dsd_matrix_tile: anyty
 // The diagonal PEs add the term_1 so that we don't have to gather on diag PE.
 
 fn jacobi_local() void {
+    simprint.print_string("jacobi_local\n");
     compute_mv_per_tile(N_local, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax(vector) = Ax(matrix * vector)
     @fmuls(dsd_w_dinv_a_x, dsd_D_inv, dsd_Ax); // tmp = D_inv * Ax (vector * vector)
     @fmuls(dsd_w_dinv_a_x, omega[0], dsd_w_dinv_a_x); // tmp = w * D_inv * Ax (scalar * vector)
@@ -241,6 +242,7 @@ fn jacobi_local() void {
 
 // Ax = A_local * x_local
 fn residual_local() void {
+  simprint.print_string("residual_local\n");
   compute_mv_per_tile(N_local, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax = A_tile * x_tile
 }
 
@@ -253,6 +255,7 @@ fn inverse_callback(val: f32) f32 {
 }
 
 fn initialize() void {
+  simprint.print_string("initialize\n");
   if (px == py) {  
     // now D_inv, is 1/A_tile for px==py and bcast to other PEs.
     @map(inverse_callback, dsd_A_diag, dsd_D_inv);
@@ -261,6 +264,7 @@ fn initialize() void {
 }
 
 fn layout_print() void {
+  simprint.print_string("layout_print\n");
   simprint.print_string("PE (0,0) \n");
   // print A
   for (A_tile) |val, i| {
@@ -312,6 +316,7 @@ fn layout_print() void {
 
 // Entrypoint into kernel
 fn main() void {
+  simprint.print_string("main\n");
   mpi_x.init();
   mpi_y.init();
   px = mpi_x.pe_id;
@@ -324,11 +329,11 @@ fn main() void {
 }
 
 task compute_jacobi() void {
+  simprint.print_string("compute_jacobi\n");
   jacobi_local();  // updates term_2
-  simprint.print_string("term_2\n");
-  for (term_2) |val, i| {
-    simprint.fmt_with_coords("term_2[{d}] = {f}", .{ i, val });
-  }  
+  // for (term_2) |val, i| {
+  //   simprint.fmt_with_coords("term_2[{d}] = {f}", .{ i, val });
+  // }  
   // notice the py instead of 0.
   mpi_x.reduce_fadds(py, @ptrcast([*]f32, &term_2), @ptrcast([*]f32, &x_tile),
                      M_local, bcast_jacobi_task_id); // reduce across rows toward
@@ -336,12 +341,14 @@ task compute_jacobi() void {
 
 // Gather the product into the diagonal PEs
 task bcast_jacobi() void {  
+  simprint.print_string("bcast_jacobi\n");
   mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local, compute_residual_task_id);
 }
 
 // r = b - Ax
 // row_sum = sum(Ax)
 task compute_residual() void {
+  simprint.print_string("compute_residual\n");
   iter_count += 1;
   if (iter_count < iterations[0]) {
     simprint.fmt_with_coords("iter_count = {d}", .{@as(u32, iter_count)});
@@ -355,6 +362,7 @@ task compute_residual() void {
 
 // bcast(residual_tile) to all PEs.
 task bcast_residual() void {
+  simprint.print_string("bcast_residual\n");
   if (px == py) {
     @fsubs(dsd_residual_tile, dsd_b_tile, dsd_residual_tile);  // r = b - Ax
   }
@@ -364,12 +372,14 @@ task bcast_residual() void {
 // Rx = R_tile*residual_tile
 // b_next = sum(Rx)
 task compute_restriction() void {
+  simprint.print_string("compute_restriction\n");
   compute_mv_per_tile(R_N_local, dsd_Rx, dsd_R_tile, @ptrcast([*]const f32, &residual_tile));
   mpi_x.reduce_fadds(layer_kernel_cols-1, @ptrcast([*]f32, &Rx), @ptrcast([*]f32, &b_next),
                      R_M_local, EXIT); // reduce across rows towards left
 }
 
 task f_exit() void {
+  simprint.print_string("f_exit\n");
   for (b_next) |val, i| {
     simprint.fmt_with_coords("b_next[{d}] = {f}", .{ i, val });
   }
