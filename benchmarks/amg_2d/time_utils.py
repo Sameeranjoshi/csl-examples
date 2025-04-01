@@ -4,6 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
+import os
 # import plotly.express as px
 # import plotly.graph_objects as go
 # from plotly.subplots import make_subplots
@@ -31,6 +32,73 @@ def cast_uint32(x):
 
   return val
 
+def time_analysis_noref(height, width, time_memcpy_hwl):
+    # time_start = start time of H2D/D2H
+    time_start = np.zeros((height, width)).astype(int)
+    # time_end = end time of H2D/D2H
+    time_end = np.zeros((height, width)).astype(int)
+    word = np.zeros(3).astype(np.uint16)
+    for w in range(width):
+        for h in range(height):
+            hex_t0 = int(float_to_hex(time_memcpy_hwl[(h, w, 0)]), base=16)
+            hex_t1 = int(float_to_hex(time_memcpy_hwl[(h, w, 1)]), base=16)
+            hex_t2 = int(float_to_hex(time_memcpy_hwl[(h, w, 2)]), base=16)
+            word[0] = hex_t0 & 0x0000FFFF
+            word[1] = (hex_t0 >> 16) & 0x0000FFFF
+            word[2] = hex_t1 & 0x0000FFFF
+            time_start[(h, w)] = make_u48(word)
+            word[0] = (hex_t1 >> 16) & 0x0000FFFF
+            word[1] = hex_t2 & 0x0000FFFF
+            word[2] = (hex_t2 >> 16) & 0x0000FFFF
+            time_end[(h, w)] = make_u48(word)
+
+    # # time_ref = reference clock
+    # time_ref = np.zeros((height, width)).astype(int)
+    # word = np.zeros(3).astype(np.uint16)
+    # for w in range(width):
+    #     for h in range(height):
+    #         hex_t0 = int(float_to_hex(time_ref_hwl[(h, w, 0)]), base=16)
+    #         hex_t1 = int(float_to_hex(time_ref_hwl[(h, w, 1)]), base=16)
+    #         word[0] = hex_t0 & 0x0000FFFF
+    #         word[1] = (hex_t0 >> 16) & 0x0000FFFF
+    #         word[2] = hex_t1 & 0x0000FFFF
+    #         time_ref[(h, w)] = make_u48(word)
+    # # adjust the reference clock by the propagation delay
+    # for py in range(height):
+    #     for px in range(width):
+    #         time_ref[(py, px)] = time_ref[(py, px)] - (px + py)
+
+    # # shift time_start and time_end by time_ref
+    # time_start = time_start - time_ref
+    # time_end = time_end - time_ref
+
+
+    # cycles_send = time_end[(h,w)] - time_start[(h,w)]
+    # 850MHz --> 1 cycle = (1/0.85) ns = (1/0.85)*1.e-3 us
+    # time_send = (cycles_send / 0.85) *1.e-3 us
+    # bandwidth = (((wvlts-1) * 4)/time_send) MBS
+    # wvlts = pw * ph * pe_length
+    # Find the earliest start time across all PEs
+    min_time_start = time_start.min()
+    
+    # Find the latest end time across all PEs
+    max_time_end = time_end.max() 
+    
+    # Calculate total cycles from first PE starting to last PE finishing
+    cycles_send = max_time_end - min_time_start
+    
+    # Convert cycles to microseconds:
+    # - Hardware runs at 850MHz (0.85 GHz)
+    # - 1 cycle = 1/0.85 nanoseconds
+    # - Multiply by 1e-3 to convert nanoseconds to microseconds
+    time_send = (cycles_send / 0.85) * 1.0e-3
+    return {
+        'cycles': np.mean(cycles_send),
+        'time_us': np.mean(time_send),
+        # 'time_start': time_start,
+        # 'time_end': time_end,
+    }
+       
 def timing_analysis_2d(height, width, time_memcpy_hwl, time_ref_hwl):
     """
     Timing analysis for 2D AMG problem
@@ -117,6 +185,24 @@ def write_timing_data(timing_map, filename="timing_data.csv"):
     df = pd.DataFrame(rows)
     df.to_csv(filename, index=False)
     print(f"Timing data written to {filename}")
+    return df
+
+def write_performance_data(perf_metrics, filename="timing_data.csv"):
+    perf_metrics_list = [perf_metrics]
+    df = pd.DataFrame(perf_metrics_list)
+    
+    # Check if file exists to determine mode and header
+    file_exists = os.path.isfile(filename)
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    # Write DataFrame to CSV file
+    with open(filename, 'a' if file_exists else 'w') as f:
+        if not file_exists:
+            df.to_csv(f, index=False)
+        else:
+            df.to_csv(f, index=False, header=False)
+
+    action = "appended to" if file_exists else "written to"
+    print(f"\tTiming data {action} {filename}")
     return df
 
 ## Experimental all the following functions

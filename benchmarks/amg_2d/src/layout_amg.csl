@@ -23,7 +23,7 @@
 //   5 collective_x_color_right 14 C2D_X_ENTRYPOINT_1     23 reserved (memcpy)      32
 //   6 collective_x_color_left  15 C2D_Y_ENTRYPOINT_0     24 COMPUTE_RESTRICTION    33
 //   7 collective_y_color_down  16 C2D_Y_ENTRYPOINT_1     25 BCAST_JACOBI           34
-//   8 collective_y_color_up    17 EXIT                   26                        35
+//   8 collective_y_color_up    17 EXIT                   26 BCAST_PROLONGATION     35
 
 
 // fixed parameters
@@ -96,6 +96,7 @@ const COMPUTE_RESIDUAL: local_task_id = @get_local_task_id(19);
 const BCAST_RESIDUAL: local_task_id = @get_local_task_id(20);
 const COMPUTE_RESTRICTION: local_task_id = @get_local_task_id(24);
 const BCAST_JACOBI: local_task_id = @get_local_task_id(25);
+const BCAST_PROLONGATION: local_task_id = @get_local_task_id(26);
 
 // memcpy and sync across all the layers.
 // Don't use the sync module from libraries/sync/ - It's modified version.
@@ -165,7 +166,7 @@ layout {
             .layer_kernel_rows = layer_kernel_rows,
             .layer_kernel_cols = layer_kernel_cols,
             .layer_index = layer_index,
-            .layer_task_id = [6]local_task_id{EXIT, COMPUTE_JACOBI, COMPUTE_RESIDUAL, BCAST_RESIDUAL, COMPUTE_RESTRICTION, BCAST_JACOBI},
+            .layer_task_id = [7]local_task_id{EXIT, COMPUTE_JACOBI, COMPUTE_RESIDUAL, BCAST_RESIDUAL, COMPUTE_RESTRICTION, BCAST_JACOBI, BCAST_PROLONGATION},
         };
 
 
@@ -237,9 +238,12 @@ layout {
     // export symbol names
     @export_name("A", [*]f32, true);
     @export_name("R", [*]f32, true);
+    @export_name("P", [*]f32, true);
     @export_name("x", [*]f32, true);
+    @export_name("x_coarse", [*]f32, true);
     @export_name("b", [*]f32, true);
     @export_name("main", fn()void);
+    @export_name("v_cycle_up", fn()void);
     @export_name("b_next", [*]f32, true);
     @export_name("omega", [*]f32, true);
     @export_name("iterations", [*]i32, true);

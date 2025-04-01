@@ -41,7 +41,7 @@ const compute_residual_task_id:local_task_id = layer_params.layer_task_id[2];
 const bcast_residual_task_id:local_task_id = layer_params.layer_task_id[3];
 const compute_restriction_task_id:local_task_id = layer_params.layer_task_id[4];
 const bcast_jacobi_task_id:local_task_id = layer_params.layer_task_id[5];
-
+const bcast_prolongation_task_id:local_task_id = layer_params.layer_task_id[6];
 
 const math_lib = @import_module("<math>");
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
@@ -76,7 +76,9 @@ const sync_mod = @import_module( "../../../../row-col-broadcast/src/sync/pe.csl"
 // input
 var A_tile = @zeros([M_local*N_local]f32);
 var R_tile = @zeros([R_M_local*R_N_local]f32);
+var P_tile = @zeros([R_N_local*R_M_local]f32);  // transpose of R_tile
 var x_tile = @zeros([N_local]f32);
+var x_coarse = @zeros([R_M_local]f32);  // P @ x_coarse( So x_coarse has to match 2nd dim of P.)
 var b_tile = @zeros([M_local]f32);
 var omega = @zeros([1]f32);
 var iterations = @constants([1]i32, 0); // default is 0 iteration.
@@ -85,6 +87,7 @@ var iterations = @constants([1]i32, 0); // default is 0 iteration.
 // The product of Ax or Rx or any other matrix-vector product.
 var Ax = @zeros([M_local]f32);  //Ax
 var Rx = @zeros([R_M_local]f32);  // Rr
+var Px = @zeros([R_N_local]f32);  // Px = P @ x_coarse
 var residual_tile = @zeros([M_local]f32);
 var term_2 = @zeros([M_local]f32);
 var D_inv = @zeros([M_local]f32); // vector of diagonals of A_tile
@@ -106,13 +109,15 @@ var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
 
 
 // DSDs
-const dsd_A_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*@as(i16, N_local)] }); // 1 row of A_tile
+const dsd_A_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*@as(i16, N_local)] }); // 1 col of A_tile
 const dsd_A_diag = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*N_local + i] });
-const dsd_R_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> R_tile[i*@as(i16, R_N_local)] }); // 1 row of R_tile
+const dsd_R_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> R_tile[i*@as(i16, R_N_local)] }); // 1 col of R_tile
+const dsd_P_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_N_local} -> P_tile[i*@as(i16, R_M_local)] }); // 1 col of P_tile
 const dsd_x_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N_local} -> x_tile[i]});
 const dsd_b_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> b_tile[i]});
 const dsd_Ax = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> Ax[i]});
 const dsd_Rx = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> Rx[i]});
+const dsd_Px = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_N_local} -> Px[i]});
 const dsd_residual_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> residual_tile[i]});
 const dsd_D_inv = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> D_inv[i] });
 const dsd_term_2 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> term_2[i] });
@@ -124,6 +129,8 @@ var ptr_x : [*]f32 = &x_tile;
 var ptr_b : [*]f32 = &b_tile;
 var ptr_A : [*]f32 = &A_tile;
 var ptr_R : [*]f32 = &R_tile;
+var ptr_P : [*]f32 = &P_tile;
+var ptr_x_coarse : [*]f32 = &x_coarse;
 var ptr_b_next : [*]f32 = &b_next;
 var ptr_omega: [*]f32 = &omega;
 var ptr_iter: [*]i32 = &iterations;
@@ -134,7 +141,7 @@ var ptr_time_ref: [*]f32 = &time_ref_f32;
 // Updated at runtime to store x and y IDs of PE reported by collectives library
 var px: u16;
 var py: u16;
-
+var is_v_cycle_up: bool = false;
 // timing
 
 fn f_enable_timer() void {
@@ -265,53 +272,22 @@ fn initialize() void {
 
 fn layout_print() void {
   simprint.print_string("layout_print\n");
-  simprint.print_string("PE (0,0) \n");
-  // print A
-  for (A_tile) |val, i| {
-      simprint.fmt_with_coords("A_tile[{d}] = {f}", .{ i, val });
-  }
-  if (px==0 and py==0) {
-    simprint.print_string("PE (0,0) \n");
-    // print A
-    for (A_tile) |val, i| {
-        simprint.fmt_with_coords("A_tile[{d}] = {f}", .{ i, val });
+  if (px == py) {
+    // print x_tile
+    for (x_tile) |val, i| {
+      simprint.fmt_with_coords("x_tile[{d}] = {f}", .{ i, val });
     }
-    // print shapes of A_tile, x_tile, b_tile, R_tile
-    simprint.fmt_with_coords("A_tile shape: {d}x{d}", .{ @as(u32, M_local), @as(u32, N_local) });
-    simprint.fmt_with_coords("x_tile shape: {d}", .{ @as(u32, N_local) });
-    simprint.fmt_with_coords("b_tile shape: {d}", .{ @as(u32, M_local) });
-    simprint.fmt_with_coords("R_tile shape: {d}x{d}", .{ @as(u32, R_M_local), @as(u32, R_N_local) });
-    // print b_next shape
-    simprint.fmt_with_coords("b_next shape: {d}", .{ @as(u32, R_M_local) });
-    
-  }
-  if (px==0 and py==1) {
-    simprint.print_string("PE (0,1) \n");
-    // print A
-    for (A_tile) |val, i| {
-        simprint.fmt_with_coords("A_tile[{d}] = {f}", .{ i, val });
+    // print P_tile
+    for (P_tile) |val, i| {
+      simprint.fmt_with_coords("P_tile[{d}] = {f}", .{ i, val });
     }
-    
-  }
-  if (px==1 and py==0) {
-    simprint.print_string("PE (1,0) \n");
-    // print A
-    for (A_tile) |val, i| {
-        simprint.fmt_with_coords("A_tile[{d}] = {f}", .{ i, val });
+    // print x_coarse
+    for (x_coarse) |val, i| {
+      simprint.fmt_with_coords("x_coarse[{d}] = {f}", .{ i, val });
     }
-    
-  }
-  if (px==1 and py==1) {
-    simprint.print_string("PE (1,1) \n");
-    // print A
-    for (A_tile) |val, i| {
-        simprint.fmt_with_coords("A_tile[{d}] = {f}", .{ i, val });
-    }
-    
   }
   sys_mod.unblock_cmd_stream();
   // @activate(EXIT);
-  // print R
 }
 
 // Entrypoint into kernel
@@ -348,15 +324,20 @@ task bcast_jacobi() void {
 // r = b - Ax
 // row_sum = sum(Ax)
 task compute_residual() void {
-  simprint.print_string("compute_residual\n");
   iter_count += 1;
   if (iter_count < iterations[0]) {
     simprint.fmt_with_coords("iter_count = {d}", .{@as(u32, iter_count)});
     @activate(compute_jacobi_task_id);
   } else {
-    residual_local(); // has answers in dsd_Ax
-    mpi_x.reduce_fadds(py, @ptrcast([*]f32, &Ax), @ptrcast([*]f32, &residual_tile),
+    if (is_v_cycle_up) {
+      simprint.print_string("Finished v-cycle up\n");
+      @activate(EXIT);
+    } else {  // v-cycle down, keep computing further.
+      simprint.print_string("compute_residual\n");
+      residual_local(); // has answers in dsd_Ax
+      mpi_x.reduce_fadds(py, @ptrcast([*]f32, &Ax), @ptrcast([*]f32, &residual_tile),
                      M_local, bcast_residual_task_id); // reduce across rows towards left
+    }
   }
 }
 
@@ -380,10 +361,39 @@ task compute_restriction() void {
 
 task f_exit() void {
   simprint.print_string("f_exit\n");
-  for (b_next) |val, i| {
-    simprint.fmt_with_coords("b_next[{d}] = {f}", .{ i, val });
-  }
+  // for (b_next) |val, i| {
+  //   simprint.fmt_with_coords("b_next[{d}] = {f}", .{ i, val });
+  // }
+  // for (x_tile) |val, i| {
+  //   simprint.fmt_with_coords("x_tile_final[{d}] = {f}", .{ i, val });
+  // }
+
   sys_mod.unblock_cmd_stream();
+}
+
+// Rx = R_tile*residual_tile
+// b_next = sum(Rx)
+fn compute_prolongation() void {
+  simprint.print_string("compute_prolongation\n");
+  compute_mv_per_tile(R_M_local, dsd_Px, dsd_P_tile, @ptrcast([*]const f32, &x_coarse));
+}
+
+// 1. x' = x' + P @ x_coarse
+// 2. x* = smooth (x')
+fn v_cycle_up() void {
+  simprint.print_string("v_cycle_up\n");
+  // set a global boolean flag to true.
+  is_v_cycle_up = true;
+  iter_count = 0; // reset iter_count
+
+  compute_prolongation(); // has answers in dsd_Px
+  mpi_x.reduce_fadds(py, @ptrcast([*]f32, &Px), @ptrcast([*]f32, &x_tile),
+                     R_N_local, bcast_prolongation_task_id); // reduce across rows towards left  
+}
+
+task bcast_prolongation() void {
+  simprint.print_string("bcast_prolongation\n");
+  mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local, compute_jacobi_task_id);
 }
 
 comptime {
@@ -393,16 +403,20 @@ comptime {
 
   @bind_local_task(bcast_jacobi, bcast_jacobi_task_id);
   @bind_local_task(bcast_residual, bcast_residual_task_id);
+  @bind_local_task(bcast_prolongation, bcast_prolongation_task_id);
   @bind_local_task(f_exit, EXIT);
 
   @export_symbol(ptr_A, "A");
   @export_symbol(ptr_x, "x");
   @export_symbol(ptr_b, "b");
   @export_symbol(ptr_R, "R");
+  @export_symbol(ptr_P, "P");
+  @export_symbol(ptr_x_coarse, "x_coarse");
   @export_symbol(ptr_b_next, "b_next");
   @export_symbol(ptr_omega, "omega");
   @export_symbol(ptr_iter, "iterations");
   @export_symbol(main);
+  @export_symbol(v_cycle_up);
   @export_symbol(layout_print); // prints layout of A
 
   // timing

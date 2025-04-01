@@ -100,6 +100,24 @@ def time_logs(h, w, time_memcpy_hwl, time_ref_hwl, is_downward, level_index, ite
     # Update timing data for this level
     timing_map_all_iterations[iteration][direction][level_index] = timing_data_per_layer
 
+# New time logs.
+def time_logs_new(h, w, time_memcpy_hwl, start_time, end_time, is_downward, level_index, timing_map_all_iterations, filename="timing_data.csv"):
+    cpu_time = end_time - start_time    # measures the (memcpy + kernel time + sdkruntime setup) using CPU time
+    perf_metrics = {}
+
+    perf_metrics['PE'] = f"PE{h}_{w}"
+    perf_metrics['cpu_time_seconds'] = cpu_time
+    direction = "down" if is_downward else "up"
+    perf_metrics['direction'] = direction
+    perf_metrics['level_index'] = level_index
+    
+    # Get timing data for this layer
+    timing_data_per_layer = time_ut.time_analysis_noref(h, w, time_memcpy_hwl)
+    perf_metrics['cycles'] = timing_data_per_layer['cycles']
+    perf_metrics['time_us'] = timing_data_per_layer['time_us']
+    df = time_ut.write_performance_data(perf_metrics, filename=filename)
+    return df
+  
   # 1. memory usage per pe.
   # Calculate memory usage per PE based on array sizes
 
@@ -531,9 +549,11 @@ def device_calculations(v_cycle_data):
     symbols = {
         'A': simulator.get_id("A"),
         'R': simulator.get_id("R"),
+        'P': simulator.get_id("P"),
         'x': simulator.get_id("x"), 
         'b': simulator.get_id("b"),
         'b_next': simulator.get_id("b_next"),
+        'x_coarse': simulator.get_id("x_coarse"),
         'omega': simulator.get_id("omega"),
         'iterations': simulator.get_id("iterations"),
         'time_memcpy': simulator.get_id("time_memcpy"),
@@ -558,7 +578,8 @@ def device_calculations(v_cycle_data):
         total_levels = 2 * one_side_levels - 1
         center_index = one_side_levels - 1
         
-        for total_level_index in range(one_side_levels): # only perform down cycle.(total_levels->center_index)
+        for total_level_index in range(total_levels): # only perform down cycle.(total_levels->center_index)
+            start_time = time.time()
             if total_level_index == center_index:
                 ############################################################
                 # Store original dimensions before unpadding - HACK.
@@ -733,10 +754,10 @@ def device_calculations(v_cycle_data):
             elif is_upward:
                 print(f"  Matrix P    : {P_M*P_N} elements")
                 print(f"  Vector x_c  : {P_N*1} elements")
-                do_memcpy(symbols['P'], P_transformed, px, py, w, h, per_pe_prolongation_rows*per_pe_prolongation_cols, is_h2d=True)
-                do_memcpy(symbols['x_coarse'], x_coarse, px, py, w, h, per_pe_prolongation_cols*1, is_h2d=True) # TODO: FIXME, not sure still about this.
+                do_memcpy(symbols['P'], P_transformed, px, py, w, h, per_pe_prolongation_rows*per_pe_prolongation_cols, is_h2d=True)  # 2D distribution.
+                do_memcpy_h2d_bcast(symbols['x_coarse'], x_coarse, px, py, w, h, per_pe_prolongation_cols*1, is_rowbcast=False) # 2D distribution.(Across cols bcast)
                 do_memcpy(symbols['omega'], omega, px, py, w, h, 1, is_h2d=True)
-                do_memcpy(symbols['iterations'], iterations, px, py, w, h, 1, is_h2d=True)
+                do_memcpy(symbols['iterations'], iterations, px, py, w, h, 1, is_h2d=True)  # Note this may be different across Up and down cycle and not redundant.
 
             ############################################################
             # COMPUTE
@@ -757,7 +778,9 @@ def device_calculations(v_cycle_data):
                 simulator.launch("main", nonblock=False) # Run the kernel
                 # simulator.launch("v_cycle_down", np.float32(omega), np.int16(iterations), np.int16(level_index), nonblock=False)                
             else:
-                print(f"Launching single_layer with level_index={level_index}")
+                print(f"Launching single_layer V Up with level_index={level_index}")
+                simulator.launch("layout_print", nonblock=False)
+                simulator.launch("v_cycle_up", nonblock=False)
                 #TODO: FIXME, not sure still about this.
                 # simulator.launch("v_cycle_up", np.float32(omega), np.int16(iterations), np.int16(level_index), nonblock=False)                
 
@@ -790,36 +813,33 @@ def device_calculations(v_cycle_data):
                 x_level[level_index + 1] = x_coarse_device
             elif is_upward:
                 print("  Copying x")
-                x_level_device = np.zeros_like(N, dtype=np.float32)
+                x_level_device = np.zeros(N, dtype=np.float32)
                 simulator.memcpy_d2h(x_level_device, symbols['x'], px, py, w, 1, per_pe_cols*1, 
                                      streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
-                x_level[level_index] = x_level_device # This was complex, TODO: FIXME, not sure still about this.
+                x_level[level_index] = x_level_device
 
             ############################################################
             # TIME TRANSFERS
             ############################################################
                
-            # print("Step 7: Retrieve timing data")
-            # time_memcpy_1d_f32 = np.zeros(h*w*3, np.float32)
-            # simulator.memcpy_d2h(time_memcpy_1d_f32, symbols['time_memcpy'], px, py, w, h, 3,
-            #     streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
-            # time_memcpy_hwl = np.reshape(time_memcpy_1d_f32, (h, w, 3), order='C')
-            # # time_ref is of type u16[3], packed into two f32
-            # time_ref_1d_f32 = np.zeros(h*w*2, np.float32)
-            # simulator.memcpy_d2h(time_ref_1d_f32, symbols['time_ref'], px, py, w, h, 2,
-            #     streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
-            # time_ref_hwl = np.reshape(time_ref_1d_f32, (h, w, 2), order='C')
+            print("Step 7: Retrieve timing data")
+            time_memcpy_1d_f32 = np.zeros(h*w*3, np.float32)
+            simulator.memcpy_d2h(time_memcpy_1d_f32, symbols['time_memcpy'], px, py, w, h, 3,
+                streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+            time_memcpy_hwl = np.reshape(time_memcpy_1d_f32, (h, w, 3), order='C')
+            # time_ref is of type u16[3], packed into two f32
+            time_ref_1d_f32 = np.zeros(h*w*2, np.float32)
+            simulator.memcpy_d2h(time_ref_1d_f32, symbols['time_ref'], px, py, w, h, 2,
+                streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+            time_ref_hwl = np.reshape(time_ref_1d_f32, (h, w, 2), order='C')
             
             ############################################################
             # LOGGING
             ############################################################
-            logs(run_args, logs_dir)
-            print("\nAnalyzing timing data...")
+            end_time = time.time()
             print("Step 10: Time logs")
-            # time_logs(h, w, time_memcpy_hwl, time_ref_hwl, is_downward, level_index, iteration, timing_map_all_iterations)
-
-            # time_logs(h, w, time_memcpy_hwl, time_ref_hwl, is_downward, level_index, iteration, timing_map_all_iterations)
-            
+            print("\nAnalyzing timing data...")
+            time_logs_new(h, w, time_memcpy_hwl, start_time, end_time, is_downward, level_index, timing_map_all_iterations, filename=f"./v_cycle_single_layer_timing.csv")
         ############################################################
         # CHECK CONVERGENCE
         ############################################################
