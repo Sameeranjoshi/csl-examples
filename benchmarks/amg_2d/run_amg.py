@@ -439,8 +439,6 @@ def host_calculations(v_cycle_data):
     for i, level in enumerate(ml.levels[:-1]):
       level = ml.levels[i]  # current level
       b_coarse_layer, x_coarse_layer = amg.each_layer_solver_down(level, x_level, b_level, ml, setup_config, i)
-      print("b_coarse_layer:", b_coarse_layer)
-      print("x_coarse_layer:", x_coarse_layer)
       b_level[i + 1] = b_coarse_layer  # Directly store in the next level
       x_level[i + 1] = x_coarse_layer  # Directly store in the next level
 
@@ -499,10 +497,6 @@ def device_calculations(v_cycle_data):
     # CREATE DYNAMIC LAYOUT
     ############################################################
     layer_param_map, layer_coordinates_map, total_pe_cols, total_pe_rows = generate_dynamic_layout(run_args, ml, layer_coordinates_map, filename="images/amg_2_layers.png")
-    print("layer_coordinates_map:", layer_coordinates_map)
-    print("layer_param_map:", layer_param_map)
-    print("total_pe_cols:", total_pe_cols)
-    print("total_pe_rows:", total_pe_rows)
     ############################################################
     # Setup simulator
     ############################################################
@@ -774,15 +768,10 @@ def device_calculations(v_cycle_data):
             print("\nComputation:")
             if is_downward:
                 print(f"Launching single_layer with level_index={level_index}")
-                # simulator.launch("layout_print", nonblock=False)
                 simulator.launch("main", nonblock=False) # Run the kernel
-                # simulator.launch("v_cycle_down", np.float32(omega), np.int16(iterations), np.int16(level_index), nonblock=False)                
             else:
                 print(f"Launching single_layer V Up with level_index={level_index}")
-                simulator.launch("layout_print", nonblock=False)
                 simulator.launch("v_cycle_up", nonblock=False)
-                #TODO: FIXME, not sure still about this.
-                # simulator.launch("v_cycle_up", np.float32(omega), np.int16(iterations), np.int16(level_index), nonblock=False)                
 
             print("Step 5: toc() records time_end")
             simulator.launch("f_toc", nonblock=False)
@@ -804,9 +793,6 @@ def device_calculations(v_cycle_data):
                 simulator.memcpy_d2h(x_smooth, symbols['x'], px, py, w, 1, per_pe_cols*1,
                                       streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
                 x_coarse_device = np.zeros_like(b_coarse_device)
-                print("x_coarse_device:", x_coarse_device)
-                print("b_coarse_device:", b_coarse_device)
-                print("x_smooth:", x_smooth)
                 
                 x_level[level_index] = x_smooth
                 b_level[level_index + 1] = b_coarse_device
@@ -908,7 +894,7 @@ def main():
   N = 2
   M = 2
   eps = 1.e-2
-  max_iterations = 1
+  max_iterations = 2
     
   A0, x0, b0 = generate_input2(M, N, type=np.float32)
   nrm_b = np.linalg.norm(b0, 2)

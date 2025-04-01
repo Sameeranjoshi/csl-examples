@@ -55,13 +55,6 @@ def each_layer_solver_up(level, x_level, b_level, ml, setup_config, level_id, x_
     b = b_level[level_id]
 
     x += P @ x_lower_level  # Prolongation
-    # print P
-    print("P:", P)
-    print("x_lower_level:", x_lower_level)
-    print("P @ x_lower_level:", P @ x_lower_level)
-    
-    print("x already on tile:", x)
-    print("x_up_x_px(x+= P @ x_lower_level):", x)
     ut.jacobi_csr(A, x, b, omega=get_omega_from_postsmoother(setup_config), iterations=get_iterations_from_postsmoother(setup_config))
     
     return x    

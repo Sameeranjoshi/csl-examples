@@ -90,6 +90,7 @@ var Rx = @zeros([R_M_local]f32);  // Rr
 var Px = @zeros([R_N_local]f32);  // Px = P @ x_coarse
 var residual_tile = @zeros([M_local]f32);
 var term_2 = @zeros([M_local]f32);
+var px_sum_tile = @zeros([N_local]f32);
 var D_inv = @zeros([M_local]f32); // vector of diagonals of A_tile
 var w_dinv_a_x = @zeros([M_local]f32);
 var i_into_x = @zeros([M_local]f32);
@@ -121,6 +122,7 @@ const dsd_Px = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_N_local} -> Px[i]})
 const dsd_residual_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> residual_tile[i]});
 const dsd_D_inv = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> D_inv[i] });
 const dsd_term_2 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> term_2[i] });
+const dsd_px_sum_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N_local} -> px_sum_tile[i] });
 var dsd_w_dinv_a_x = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> w_dinv_a_x[i] });
 var dsd_i_into_x = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> i_into_x[i] });
 
@@ -307,9 +309,6 @@ fn main() void {
 task compute_jacobi() void {
   simprint.print_string("compute_jacobi\n");
   jacobi_local();  // updates term_2
-  // for (term_2) |val, i| {
-  //   simprint.fmt_with_coords("term_2[{d}] = {f}", .{ i, val });
-  // }  
   // notice the py instead of 0.
   mpi_x.reduce_fadds(py, @ptrcast([*]f32, &term_2), @ptrcast([*]f32, &x_tile),
                      M_local, bcast_jacobi_task_id); // reduce across rows toward
@@ -361,13 +360,6 @@ task compute_restriction() void {
 
 task f_exit() void {
   simprint.print_string("f_exit\n");
-  // for (b_next) |val, i| {
-  //   simprint.fmt_with_coords("b_next[{d}] = {f}", .{ i, val });
-  // }
-  // for (x_tile) |val, i| {
-  //   simprint.fmt_with_coords("x_tile_final[{d}] = {f}", .{ i, val });
-  // }
-
   sys_mod.unblock_cmd_stream();
 }
 
@@ -385,14 +377,15 @@ fn v_cycle_up() void {
   // set a global boolean flag to true.
   is_v_cycle_up = true;
   iter_count = 0; // reset iter_count
-
   compute_prolongation(); // has answers in dsd_Px
-  mpi_x.reduce_fadds(py, @ptrcast([*]f32, &Px), @ptrcast([*]f32, &x_tile),
+  mpi_x.reduce_fadds(py, @ptrcast([*]f32, &Px), @ptrcast([*]f32, &px_sum_tile),
                      R_N_local, bcast_prolongation_task_id); // reduce across rows towards left  
 }
 
 task bcast_prolongation() void {
-  simprint.print_string("bcast_prolongation\n");
+  if (px == py) {
+      @fadds(dsd_x_tile, dsd_x_tile, dsd_px_sum_tile);  // x_tile = x_tile + Px
+  }
   mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local, compute_jacobi_task_id);
 }
 
