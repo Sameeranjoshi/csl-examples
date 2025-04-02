@@ -144,6 +144,7 @@ var ptr_time_ref: [*]f32 = &time_ref_f32;
 var px: u16;
 var py: u16;
 var is_v_cycle_up: bool = false;
+var v_cycle_iteration: i32 = 0;
 // timing
 
 fn f_enable_timer() void {
@@ -273,32 +274,48 @@ fn initialize() void {
 }
 
 fn layout_print() void {
-  simprint.print_string("layout_print\n");
-  if (px == py) {
+  simprint.fmt_with_coords("layout_print iteration: {d}\n", .{@as(u32, v_cycle_iteration)});
+  simprint.print_string("\n");
     // print x_tile
     for (x_tile) |val, i| {
       simprint.fmt_with_coords("x_tile[{d}] = {f}", .{ i, val });
     }
-    // print P_tile
-    for (P_tile) |val, i| {
-      simprint.fmt_with_coords("P_tile[{d}] = {f}", .{ i, val });
+    // A_tile
+    for (A_tile) |val, i| {
+      simprint.fmt_with_coords("A_tile[{d}] = {f}", .{ i, val });
     }
-    // print x_coarse
-    for (x_coarse) |val, i| {
-      simprint.fmt_with_coords("x_coarse[{d}] = {f}", .{ i, val });
+    // b_tile
+    for (b_tile) |val, i| {
+      simprint.fmt_with_coords("b_tile[{d}] = {f}", .{ i, val });
     }
-  }
+    // R_tile 
+    for (R_tile) |val, i| {
+      simprint.fmt_with_coords("R_tile[{d}] = {f}", .{ i, val });
+    }
+    // b_next
+    for (b_tile) |val, i| {
+      simprint.fmt_with_coords("b_tile[{d}] = {f}", .{ i, val });
+    }
   sys_mod.unblock_cmd_stream();
   // @activate(EXIT);
+}
+
+fn init_params() void {
+  mpi_x.init();
+  mpi_y.init();
+  px = mpi_x.pe_id;
+  py = mpi_y.pe_id;
+  v_cycle_iteration += 1;
+  is_v_cycle_up = false;
+  iter_count = 0;  
 }
 
 // Entrypoint into kernel
 fn main() void {
   simprint.print_string("main\n");
-  mpi_x.init();
-  mpi_y.init();
-  px = mpi_x.pe_id;
-  py = mpi_y.pe_id;
+  init_params();
+
+
   if ( iter_count < iterations[0]) {  // case when iterations is 0, so no jacobi.
     initialize();
   } else {

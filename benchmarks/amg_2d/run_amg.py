@@ -101,21 +101,22 @@ def time_logs(h, w, time_memcpy_hwl, time_ref_hwl, is_downward, level_index, ite
     timing_map_all_iterations[iteration][direction][level_index] = timing_data_per_layer
 
 # New time logs.
-def time_logs_new(h, w, time_memcpy_hwl, start_time, end_time, is_downward, level_index, timing_map_all_iterations, filename="timing_data.csv"):
+def time_logs_new(h, w, time_memcpy_hwl, start_time, end_time, is_downward, level_index, iteration, timing_map_all_iterations, filename="timing_data.csv"):
     cpu_time = end_time - start_time    # measures the (memcpy + kernel time + sdkruntime setup) using CPU time
     perf_metrics = {}
+    # Get timing data for this layer
+    timing_data_per_layer = time_ut.time_analysis_noref(h, w, time_memcpy_hwl)
 
-    perf_metrics['PE'] = f"PE{h}_{w}"
-    perf_metrics['cpu_time_seconds'] = cpu_time
+    perf_metrics['iteration'] = iteration        
     direction = "down" if is_downward else "up"
     perf_metrics['direction'] = direction
     perf_metrics['level_index'] = level_index
-    
-    # Get timing data for this layer
-    timing_data_per_layer = time_ut.time_analysis_noref(h, w, time_memcpy_hwl)
+    perf_metrics['PE'] = f"PE{h}_{w}"
+    perf_metrics['cpu_time_seconds'] = cpu_time
     perf_metrics['cycles'] = timing_data_per_layer['cycles']
     perf_metrics['time_us'] = timing_data_per_layer['time_us']
     df = time_ut.write_performance_data(perf_metrics, filename=filename)
+    
     return df
   
   # 1. memory usage per pe.
@@ -307,7 +308,7 @@ def generate_dynamic_layout(run_args, ml, layer_coordinates_map:Optional[dict]=N
   print("Precompile disabled, compiling based on problem size.")
   layout_command, fabric_dimensions = generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_cols, tot_level_minus_one, generated_layout_file, run_args)
   # ut.visualize_layout_with_empty(fabric_dimensions, layer_coordinates_map, layer_param_map, total_pe_cols, total_pe_rows, filename)
-  ut.visualize_layout_with_empty_plotly(fabric_dimensions, layer_coordinates_map, layer_param_map, total_pe_cols, total_pe_rows, filename)
+  # ut.visualize_layout_with_empty_plotly(fabric_dimensions, layer_coordinates_map, layer_param_map, total_pe_cols, total_pe_rows, filename)
   print("############################################################")
   print("Generating blueprint layout with :\n")
   print(layout_command)
@@ -435,6 +436,7 @@ def host_calculations(v_cycle_data):
   # Iteration parameters
   
   for iteration in range(max_iterations):
+    print("Iteration:", iteration)
     # V down
     for i, level in enumerate(ml.levels[:-1]):
       level = ml.levels[i]  # current level
@@ -458,15 +460,17 @@ def host_calculations(v_cycle_data):
     # Check convergence
     residual = b_level[0] - ml.levels[0].A @ x_level[0]
     residual_norm = np.linalg.norm(residual)
+    print(f"Residual: {residual_norm:.6e}, tol: {tol:.6e}, iteration: {iteration}")
     if residual_norm <= tol:
       print(f"Converged at iteration {iteration} with residual norm {residual_norm}")
       break
-    
+    print("After each iteration solver:")
+    amg.debugprint(ml.levels, b_level, x_level)
 
   b_solution, x_solution = b_level[0], x_level[0]
   print("After final solver:")
   amg.debugprint(ml.levels, b_level, x_level)
-  residual_host= np.linalg.norm(ml.levels[0].A @ x_solution - b_solution)
+  residual_host= np.linalg.norm(ml.levels[0].A @ x_solution - b_solution)  
   return b_solution, x_solution, residual_host
 
 def device_calculations(v_cycle_data):
@@ -825,7 +829,10 @@ def device_calculations(v_cycle_data):
             end_time = time.time()
             print("Step 10: Time logs")
             print("\nAnalyzing timing data...")
-            time_logs_new(h, w, time_memcpy_hwl, start_time, end_time, is_downward, level_index, timing_map_all_iterations, filename=f"./v_cycle_single_layer_timing.csv")
+            time_logs_new(h, w, time_memcpy_hwl, start_time, end_time, is_downward, level_index, iteration, timing_map_all_iterations, filename=f"./v_cycle_single_layer_timing.csv")
+            
+        print("After each iteration:")
+        amg.debugprint(ml.levels, b_level, x_level)
         ############################################################
         # CHECK CONVERGENCE
         ############################################################
@@ -833,7 +840,7 @@ def device_calculations(v_cycle_data):
         print("\n" + "="*40)
         print(f"ITERATION {iteration} SUMMARY")
         print("="*40)
-        print(f"Residual: {residual:.6e}")
+        print(f"Residual: {residual:.6e}, tol: {tol:.6e}")
         if residual <= tol:
             print("Convergence achieved!")
         print("="*40 + "\n")
@@ -893,8 +900,8 @@ def main():
   print("############################################################")
   N = 2
   M = 2
-  eps = 1.e-2
-  max_iterations = 2
+  eps = 1.e-5
+  max_iterations = 20
     
   A0, x0, b0 = generate_input2(M, N, type=np.float32)
   nrm_b = np.linalg.norm(b0, 2)
