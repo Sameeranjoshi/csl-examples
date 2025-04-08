@@ -42,12 +42,13 @@ const STATE_DOWN_CYCLE: i16 = 2;
 const STATE_UP_CYCLE: i16 = 3;
 const STATE_EXIT: i16 = 4;
 const STATE_COMPUTE_JACOBI: i16 = 5;
-const STATE_CHECK_JACOBI_ITERATION: i16 = 6;
-const STATE_COMPUTE_RESIDUAL: i16 = 7;
-const STATE_BCAST_RESIDUAL: i16 = 8;
-const STATE_COMPUTE_RESTRICTION: i16 = 9;
-const STATE_PROLONGATION: i16 = 10;
-const STATE_BCAST_PROLONGATION: i16 = 11;
+const STATE_BCAST_JACOBI: i16 = 6;
+const STATE_CHECK_JACOBI_ITERATION: i16 = 7;
+const STATE_COMPUTE_RESIDUAL: i16 = 8;
+const STATE_BCAST_RESIDUAL: i16 = 9;
+const STATE_COMPUTE_RESTRICTION: i16 = 10;
+const STATE_PROLONGATION: i16 = 11;
+const STATE_BCAST_PROLONGATION: i16 = 12;
 
 
 const math_lib = @import_module("<math>");
@@ -336,6 +337,11 @@ fn compute_jacobi() void {
                      M_local, STATE_MACHINE); // reduce across rows toward
 }
 
+fn bcast_jacobi() void {
+  cur_state = next_state;
+  mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local, STATE_MACHINE);
+}
+
 // Compute residual
 fn compute_residual() void {
   simprint.print_string("compute_residual\n");
@@ -397,8 +403,13 @@ task f_state() void {
   } else if (STATE_COMPUTE_JACOBI == cur_state) {
     simprint.print_string("STATE_COMPUTE_JACOBI\n");
     iter_count += 1;
-    next_state = STATE_CHECK_JACOBI_ITERATION;
+    next_state = STATE_BCAST_JACOBI;
     compute_jacobi();
+
+  } else if (STATE_BCAST_JACOBI == cur_state) {
+    simprint.print_string("STATE_BCAST_JACOBI\n");
+    next_state = STATE_CHECK_JACOBI_ITERATION;
+    bcast_jacobi();
 
   } else if (STATE_CHECK_JACOBI_ITERATION == cur_state) {
     simprint.print_string("STATE_CHECK_JACOBI_ITERATION\n");
