@@ -35,13 +35,19 @@ const layer_kernel_cols: i16 = layer_params.layer_kernel_cols;
 const layer_index: i16 = layer_params.layer_index;
 
 // Task IDs
-const EXIT:local_task_id = layer_params.layer_task_id[0];
-const compute_jacobi_task_id:local_task_id = layer_params.layer_task_id[1];
-const compute_residual_task_id:local_task_id = layer_params.layer_task_id[2];
-const bcast_residual_task_id:local_task_id = layer_params.layer_task_id[3];
-const compute_restriction_task_id:local_task_id = layer_params.layer_task_id[4];
-const bcast_jacobi_task_id:local_task_id = layer_params.layer_task_id[5];
-const bcast_prolongation_task_id:local_task_id = layer_params.layer_task_id[6];
+const STATE_MACHINE: local_task_id = layer_params.layer_task_id[0];
+const STATE_INIT: i16 = 0;
+const STATE_DOWN_CYCLE: i16 = 1;
+const STATE_UP_CYCLE: i16 = 2;
+const STATE_EXIT: i16 = 3;
+const STATE_COMPUTE_JACOBI: i16 = 4;
+const STATE_CHECK_JACOBI_ITERATION: i16 = 5;
+const STATE_COMPUTE_RESIDUAL: i16 = 6;
+const STATE_BCAST_RESIDUAL: i16 = 7;
+const STATE_COMPUTE_RESTRICTION: i16 = 8;
+const STATE_PROLONGATION: i16 = 9;
+const STATE_BCAST_PROLONGATION: i16 = 10;
+
 
 const math_lib = @import_module("<math>");
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
@@ -145,8 +151,10 @@ var px: u16;
 var py: u16;
 var is_v_cycle_up: bool = false;
 var v_cycle_iteration: i32 = 0;
-// timing
+var cur_state: i16 = 0;// State tracking variables
+var next_state: i16 = 0;
 
+// timing
 fn f_enable_timer() void {
     timestamp.enable_tsc();
     // the user must unblock cmd color for every PE
@@ -266,11 +274,12 @@ fn inverse_callback(val: f32) f32 {
 
 fn initialize() void {
   simprint.print_string("initialize\n");
-  if (px == py) {  
+  if (px == py) {
     // now D_inv, is 1/A_tile for px==py and bcast to other PEs.
     @map(inverse_callback, dsd_A_diag, dsd_D_inv);
   }
-  mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, compute_jacobi_task_id);
+  cur_state = next_state; // This is set by the f_state function.
+  mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, STATE_MACHINE);
 }
 
 fn layout_print() void {
@@ -297,7 +306,6 @@ fn layout_print() void {
       simprint.fmt_with_coords("b_tile[{d}] = {f}", .{ i, val });
     }
   sys_mod.unblock_cmd_stream();
-  // @activate(EXIT);
 }
 
 fn init_params() void {
@@ -310,111 +318,154 @@ fn init_params() void {
   iter_count = 0;  
 }
 
-// Entrypoint into kernel
-fn main() void {
-  simprint.print_string("main\n");
-  init_params();
-
-
-  if ( iter_count < iterations[0]) {  // case when iterations is 0, so no jacobi.
-    initialize();
-  } else {
-    @activate(compute_residual_task_id);  // don't calculate Jacobi straight to residual.
-  }
+// State machine trigger function
+fn f_trigger_state_machine() void {
+    cur_state = next_state; // go to next state
+    @activate(STATE_MACHINE);   
 }
 
-task compute_jacobi() void {
+// Compute Jacobi iteration
+fn compute_jacobi() void {
   simprint.print_string("compute_jacobi\n");
   jacobi_local();  // updates term_2
   // notice the py instead of 0.
+  cur_state = next_state;
   mpi_x.reduce_fadds(py, @ptrcast([*]f32, &term_2), @ptrcast([*]f32, &x_tile),
-                     M_local, bcast_jacobi_task_id); // reduce across rows toward
+                     M_local, STATE_MACHINE); // reduce across rows toward
 }
 
-// Gather the product into the diagonal PEs
-task bcast_jacobi() void {  
-  simprint.print_string("bcast_jacobi\n");
-  mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local, compute_residual_task_id);
-}
-
-// r = b - Ax
-// row_sum = sum(Ax)
-task compute_residual() void {
-  iter_count += 1;
-  if (iter_count < iterations[0]) {
-    simprint.fmt_with_coords("iter_count = {d}", .{@as(u32, iter_count)});
-    @activate(compute_jacobi_task_id);
-  } else {
-    if (is_v_cycle_up) {
-      simprint.print_string("Finished v-cycle up\n");
-      @activate(EXIT);
-    } else {  // v-cycle down, keep computing further.
-      simprint.print_string("compute_residual\n");
-      residual_local(); // has answers in dsd_Ax
-      mpi_x.reduce_fadds(py, @ptrcast([*]f32, &Ax), @ptrcast([*]f32, &residual_tile),
-                     M_local, bcast_residual_task_id); // reduce across rows towards left
-    }
-  }
+// Compute residual
+fn compute_residual() void {
+  simprint.print_string("compute_residual\n");
+  residual_local(); // has answers in dsd_Ax
+  cur_state = next_state;
+  mpi_x.reduce_fadds(py, @ptrcast([*]f32, &Ax), @ptrcast([*]f32, &residual_tile),
+                     M_local, STATE_MACHINE); // reduce across rows towards left
 }
 
 // bcast(residual_tile) to all PEs.
-task bcast_residual() void {
+fn bcast_residual() void {
   simprint.print_string("bcast_residual\n");
   if (px == py) {
     @fsubs(dsd_residual_tile, dsd_b_tile, dsd_residual_tile);  // r = b - Ax
   }
-  mpi_y.broadcast(px, @ptrcast([*]u32, &residual_tile), M_local, compute_restriction_task_id);
+  cur_state = next_state;
+  mpi_y.broadcast(px, @ptrcast([*]u32, &residual_tile), M_local, STATE_MACHINE);
 }
 
-// Rx = R_tile*residual_tile
-// b_next = sum(Rx)
-task compute_restriction() void {
+// Compute restriction
+fn compute_restriction() void {
   simprint.print_string("compute_restriction\n");
   compute_mv_per_tile(R_N_local, dsd_Rx, dsd_R_tile, @ptrcast([*]const f32, &residual_tile));
+  cur_state = next_state;
   mpi_x.reduce_fadds(layer_kernel_cols-1, @ptrcast([*]f32, &Rx), @ptrcast([*]f32, &b_next),
-                     R_M_local, EXIT); // reduce across rows towards left
+                     R_M_local, STATE_MACHINE); // reduce across rows towards left
 }
 
-task f_exit() void {
-  simprint.print_string("f_exit\n");
-  sys_mod.unblock_cmd_stream();
-}
-
-// Rx = R_tile*residual_tile
-// b_next = sum(Rx)
+// Compute prolongation
 fn compute_prolongation() void {
   simprint.print_string("compute_prolongation\n");
   compute_mv_per_tile(R_M_local, dsd_Px, dsd_P_tile, @ptrcast([*]const f32, &x_coarse));
+  cur_state = next_state;
+  mpi_x.reduce_fadds(py, @ptrcast([*]f32, &Px), @ptrcast([*]f32, &px_sum_tile),
+                     R_N_local, STATE_MACHINE); // reduce across rows towards left  
 }
 
-// 1. x' = x' + P @ x_coarse
-// 2. x* = smooth (x')
+fn bcast_prolongation() void {
+  simprint.print_string("bcast_prolongation\n");
+  if (px == py) {
+    @fadds(dsd_x_tile, dsd_x_tile, dsd_px_sum_tile);  // x_tile = x_tile + Px
+  }
+  cur_state = next_state;
+  mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local, STATE_MACHINE);
+}
+
+// State machine task
+task f_state() void {
+  if (STATE_INIT == cur_state) {
+    simprint.print_string("STATE_INIT\n");
+    next_state = STATE_COMPUTE_JACOBI;
+    initialize();
+
+  } else if (STATE_COMPUTE_JACOBI == cur_state) {
+    simprint.print_string("STATE_COMPUTE_JACOBI\n");
+    iter_count += 1;
+    next_state = STATE_CHECK_JACOBI_ITERATION;
+    compute_jacobi();
+
+  } else if (STATE_CHECK_JACOBI_ITERATION == cur_state) {
+    simprint.print_string("STATE_CHECK_JACOBI_ITERATION\n");
+    if (iter_count < iterations[0]) {
+      next_state = STATE_COMPUTE_JACOBI;
+    } else{
+      if (is_v_cycle_up) {
+        next_state = STATE_EXIT;
+      } else {
+        next_state = STATE_COMPUTE_RESIDUAL;
+      }
+    }
+    f_trigger_state_machine();
+
+  } else if (STATE_COMPUTE_RESIDUAL == cur_state) {
+    simprint.print_string("STATE_COMPUTE_RESIDUAL\n");
+    next_state = STATE_BCAST_RESIDUAL;
+    compute_residual();
+
+  } else if (STATE_BCAST_RESIDUAL == cur_state) {
+    simprint.print_string("STATE_BCAST_RESIDUAL\n");
+    next_state = STATE_COMPUTE_RESTRICTION;
+    bcast_residual();
+
+  } else if (STATE_COMPUTE_RESTRICTION == cur_state) {
+    simprint.print_string("STATE_COMPUTE_RESTRICTION\n");
+    next_state = STATE_EXIT;
+    compute_restriction();
+
+  } else if (STATE_PROLONGATION == cur_state) {
+    simprint.print_string("STATE_PROLONGATION\n");
+    next_state = STATE_BCAST_PROLONGATION;
+    compute_prolongation();
+
+  } else if (STATE_BCAST_PROLONGATION == cur_state) {
+    simprint.print_string("STATE_BCAST_PROLONGATION\n");
+    next_state = STATE_CHECK_JACOBI_ITERATION;
+    bcast_prolongation();
+  } 
+  else if (STATE_EXIT == cur_state) {
+    simprint.print_string("STATE_EXIT\n");
+    sys_mod.unblock_cmd_stream();
+
+  }
+  else {
+    @assert(false); // Error: unknown state
+    // assert() is ignored by HW, it could hang here
+    // To avoid a stall, trigger callback (the caveat is the wrong result)
+    sys_mod.unblock_cmd_stream();
+
+  }  
+}
+
+// Entrypoint into kernel
+fn v_cycle_down() void {
+  simprint.print_string("v_cycle_down\n");
+  init_params();
+  // The iterations will always be greater than 0, ensured in run_amg.py
+  cur_state = STATE_INIT;
+  @activate(STATE_MACHINE);
+}
+
+// V-cycle up function
 fn v_cycle_up() void {
   simprint.print_string("v_cycle_up\n");
   // set a global boolean flag to true.
   is_v_cycle_up = true;
   iter_count = 0; // reset iter_count
-  compute_prolongation(); // has answers in dsd_Px
-  mpi_x.reduce_fadds(py, @ptrcast([*]f32, &Px), @ptrcast([*]f32, &px_sum_tile),
-                     R_N_local, bcast_prolongation_task_id); // reduce across rows towards left  
-}
-
-task bcast_prolongation() void {
-  if (px == py) {
-      @fadds(dsd_x_tile, dsd_x_tile, dsd_px_sum_tile);  // x_tile = x_tile + Px
-  }
-  mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local, compute_jacobi_task_id);
+  cur_state = STATE_PROLONGATION;
+  @activate(STATE_MACHINE);
 }
 
 comptime {
-  @bind_local_task(compute_jacobi, compute_jacobi_task_id);
-  @bind_local_task(compute_residual, compute_residual_task_id);
-  @bind_local_task(compute_restriction, compute_restriction_task_id);
-
-  @bind_local_task(bcast_jacobi, bcast_jacobi_task_id);
-  @bind_local_task(bcast_residual, bcast_residual_task_id);
-  @bind_local_task(bcast_prolongation, bcast_prolongation_task_id);
-  @bind_local_task(f_exit, EXIT);
+  @bind_local_task(f_state, STATE_MACHINE);
 
   @export_symbol(ptr_A, "A");
   @export_symbol(ptr_x, "x");
@@ -425,7 +476,7 @@ comptime {
   @export_symbol(ptr_b_next, "b_next");
   @export_symbol(ptr_omega, "omega");
   @export_symbol(ptr_iter, "iterations");
-  @export_symbol(main);
+  @export_symbol(v_cycle_down);
   @export_symbol(v_cycle_up);
   @export_symbol(layout_print); // prints layout of A
 
@@ -438,5 +489,4 @@ comptime {
   @export_symbol(f_memcpy_timestamps);
   @export_symbol(f_sync);
   @export_symbol(f_reference_timestamps);
-  
 }

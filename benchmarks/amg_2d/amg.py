@@ -365,6 +365,10 @@ def get_iterations_from_postsmoother(smoothed_aggregation_solver_config):
     if postsmoother_config and isinstance(postsmoother_config, tuple):
         postsmoother_params = postsmoother_config[1]
         iterations = postsmoother_params.get('iterations', None)
+        # iterations has to be greater than 0.
+        if iterations is not None and iterations <= 0:
+            print("Postsmoother iterations must be greater than 0")
+            exit(1)
         return iterations
     else:
         print("Postsmoother iterations not found in configuration")
@@ -387,6 +391,10 @@ def get_iterations_from_presmoother(smoothed_aggregation_solver_config):
     if presmoother_config and isinstance(presmoother_config, tuple):
         presmoother_params = presmoother_config[1]
         iterations = presmoother_params.get('iterations', None)
+        # iterations has to be greater than 0.
+        if iterations is not None and iterations <= 0:
+            print("Presmoother iterations must be greater than 0")
+            exit(1)
         return iterations
     else:
         print("Presmoother iterations not found in configuration")

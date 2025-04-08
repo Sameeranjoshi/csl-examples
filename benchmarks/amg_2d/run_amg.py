@@ -649,7 +649,7 @@ def perform_downward_pass(simple_memcpy, simulator,symbols, level_index, level, 
     hardwareTimer.start()
     # Compute
     print("Step 4: Compute")
-    simulator.launch("main", nonblock=False)
+    simulator.launch("v_cycle_down", nonblock=False)
     # timer
     print("Step 5: Timer Stop")
     hardwareTimer.stop()
