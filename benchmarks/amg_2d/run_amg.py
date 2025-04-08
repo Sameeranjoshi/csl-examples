@@ -102,11 +102,11 @@ def time_logs(h, w, time_memcpy_hwl, time_ref_hwl, is_downward, level_index, ite
     timing_map_all_iterations[iteration][direction][level_index] = timing_data_per_layer
 
 # New time logs.
-def time_logs_new(h, w, time_memcpy_hwl, start_time, end_time, is_downward, level_index, iteration, filename="./reports/v_cycle_up_down.csv"):
+def time_logs_new(h, w, time_memcpy_hwl, time_ref_hwl, start_time, end_time, is_downward, level_index, iteration, filename="./reports/v_cycle_up_down.csv"):
     cpu_time = end_time - start_time    # measures the (memcpy + kernel time + sdkruntime setup) using CPU time
     perf_metrics = {}
     # Get timing data for this layer
-    timing_data_per_layer = time_ut.time_analysis_noref(h, w, time_memcpy_hwl)
+    timing_data_per_layer = time_ut.time_analysis_noref(h, w, time_memcpy_hwl, time_ref_hwl)
 
     perf_metrics['iteration'] = iteration        
     direction = "down" if is_downward else "up"
@@ -477,10 +477,11 @@ def host_calculations(v_cycle_data):
 class HardwareTimerManager:
     def __init__(self, simulator):
         self.simulator = simulator
+        self.simulator.launch("f_enable_timer", nonblock=False)
+        self.simulator.launch("f_sync", nonblock=False)
         
     def start(self):
         """Start hardware timer with proper synchronization"""
-        self.simulator.launch("f_enable_timer", nonblock=False)
         self.simulator.launch("f_tic", nonblock=True)  # Wait for tic to complete
         
     def stop(self):
@@ -634,7 +635,7 @@ def perform_downward_pass(simple_memcpy, simulator,symbols, level_index, level, 
     b_transformed = b.flatten(order='C')
     
     # H2D transfers
-    hardwareTimer = HardwareTimerManager(simulator)
+    hardwareTimer = HardwareTimerManager(simulator) # enable_timer, sync
     start_time = time.time()
     print("Step 2: H2D Transfers")
     simple_memcpy.do_memcpy_h2d(symbols['A'], A_transformed, px, py, w, h, per_pe_rows*per_pe_cols)
@@ -670,7 +671,7 @@ def perform_downward_pass(simple_memcpy, simulator,symbols, level_index, level, 
     # logging time
     print("Step 8: Logging Time")
     end_time = time.time()
-    time_logs_new(h, w, time_memcpy_hwl, start_time, end_time, is_downward=True, 
+    time_logs_new(h, w, time_memcpy_hwl, time_ref_hwl, start_time, end_time, is_downward=True, 
                   level_index=level_index, iteration=iteration, filename="./v_cycle_up_down.csv")
     
     return x_smooth, b_coarse_device, x_coarse_device
@@ -752,7 +753,7 @@ def perform_upward_pass(simple_memcpy, simulator, symbols, level_index, level, c
     # logging time
     print("Step 8: Logging Time")
     end_time = time.time()
-    time_logs_new(h, w, time_memcpy_hwl, start_time, end_time, is_downward=False, 
+    time_logs_new(h, w, time_memcpy_hwl, time_ref_hwl, start_time, end_time, is_downward=False, 
                   level_index=level_index, iteration=iteration, filename="./v_cycle_up_down.csv")
     
     return x_level_device

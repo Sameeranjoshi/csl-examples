@@ -32,7 +32,7 @@ def cast_uint32(x):
 
   return val
 
-def time_analysis_noref(height, width, time_memcpy_hwl):
+def time_analysis_noref(height, width, time_memcpy_hwl, time_ref_hwl):
     # time_start = start time of H2D/D2H
     time_start = np.zeros((height, width)).astype(int)
     # time_end = end time of H2D/D2H
@@ -52,25 +52,28 @@ def time_analysis_noref(height, width, time_memcpy_hwl):
             word[2] = (hex_t2 >> 16) & 0x0000FFFF
             time_end[(h, w)] = make_u48(word)
 
-    # # time_ref = reference clock
-    # time_ref = np.zeros((height, width)).astype(int)
-    # word = np.zeros(3).astype(np.uint16)
-    # for w in range(width):
-    #     for h in range(height):
-    #         hex_t0 = int(float_to_hex(time_ref_hwl[(h, w, 0)]), base=16)
-    #         hex_t1 = int(float_to_hex(time_ref_hwl[(h, w, 1)]), base=16)
-    #         word[0] = hex_t0 & 0x0000FFFF
-    #         word[1] = (hex_t0 >> 16) & 0x0000FFFF
-    #         word[2] = hex_t1 & 0x0000FFFF
-    #         time_ref[(h, w)] = make_u48(word)
-    # # adjust the reference clock by the propagation delay
-    # for py in range(height):
-    #     for px in range(width):
-    #         time_ref[(py, px)] = time_ref[(py, px)] - (px + py)
+    # time_ref = reference clock
+    time_ref = np.zeros((height, width)).astype(int)
+    word = np.zeros(3).astype(np.uint16)
+    for w in range(width):
+        for h in range(height):
+            hex_t0 = int(float_to_hex(time_ref_hwl[(h, w, 0)]), base=16)
+            hex_t1 = int(float_to_hex(time_ref_hwl[(h, w, 1)]), base=16)
+            word[0] = hex_t0 & 0x0000FFFF
+            word[1] = (hex_t0 >> 16) & 0x0000FFFF
+            word[2] = hex_t1 & 0x0000FFFF
+            time_ref[(h, w)] = make_u48(word)
+    # adjust the reference clock by the propagation delay, this is the manhatten distance for grid.
+    for py in range(height):
+        for px in range(width):
+            time_ref[(py, px)] = time_ref[(py, px)] - ((width+height-2)-(px + py))
 
+    # print(time_start)
+    # print(time_end)
+    # print(time_ref)
     # # shift time_start and time_end by time_ref
-    # time_start = time_start - time_ref
-    # time_end = time_end - time_ref
+    time_start = time_start - time_ref
+    time_end = time_end - time_ref
 
 
     # cycles_send = time_end[(h,w)] - time_start[(h,w)]

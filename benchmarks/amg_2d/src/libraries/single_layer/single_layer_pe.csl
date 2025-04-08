@@ -17,7 +17,7 @@
 param memcpy_params: comptime_struct;
 param c2d_params: comptime_struct;
 param layer_params: comptime_struct;
-param sync_params: comptime_struct;
+param reduce_params: comptime_struct;
 
 
 const M: i16 = layer_params.M; // Height of local matrix, or num rows per PE
@@ -36,17 +36,18 @@ const layer_index: i16 = layer_params.layer_index;
 
 // Task IDs
 const STATE_MACHINE: local_task_id = layer_params.layer_task_id[0];
-const STATE_INIT: i16 = 0;
-const STATE_DOWN_CYCLE: i16 = 1;
-const STATE_UP_CYCLE: i16 = 2;
-const STATE_EXIT: i16 = 3;
-const STATE_COMPUTE_JACOBI: i16 = 4;
-const STATE_CHECK_JACOBI_ITERATION: i16 = 5;
-const STATE_COMPUTE_RESIDUAL: i16 = 6;
-const STATE_BCAST_RESIDUAL: i16 = 7;
-const STATE_COMPUTE_RESTRICTION: i16 = 8;
-const STATE_PROLONGATION: i16 = 9;
-const STATE_BCAST_PROLONGATION: i16 = 10;
+const STATE_SYNC: i16 = 0;
+const STATE_INIT: i16 = 1;
+const STATE_DOWN_CYCLE: i16 = 2;
+const STATE_UP_CYCLE: i16 = 3;
+const STATE_EXIT: i16 = 4;
+const STATE_COMPUTE_JACOBI: i16 = 5;
+const STATE_CHECK_JACOBI_ITERATION: i16 = 6;
+const STATE_COMPUTE_RESIDUAL: i16 = 7;
+const STATE_BCAST_RESIDUAL: i16 = 8;
+const STATE_COMPUTE_RESTRICTION: i16 = 9;
+const STATE_PROLONGATION: i16 = 10;
+const STATE_BCAST_PROLONGATION: i16 = 11;
 
 
 const math_lib = @import_module("<math>");
@@ -71,12 +72,13 @@ const mpi_y = @import_module("<collectives_2d/pe>", .{
     });
 const simprint = @import_module("<simprint>", .{ .enable = true });
 const timestamp = @import_module("<time>");
-const sync_mod = @import_module( "../../../../row-col-broadcast/src/sync/pe.csl", @concat_structs(sync_params, .{
-     .f_callback = sys_mod.unblock_cmd_stream,
-     .input_queues=[3]u16{2, 3, 4},
-     .output_queues=[3]u16{2, 3, 4},
+const reduce_mod = @import_module( "../../../../csl-libs/allreduce/pe.csl", @concat_structs(reduce_params, .{
+     .f_callback = f_trigger_state_machine,
+     .queues = [1]u16{1},
+     .dest_dsr_ids = [1]u16{1},
+     .src0_dsr_ids = [1]u16{1},
+     .src1_dsr_ids = [1]u16{1}
      }));
-
 
 //x, b, A, R will be partitioned using 2D Block decomposition.
 // input
@@ -101,7 +103,7 @@ var D_inv = @zeros([M_local]f32); // vector of diagonals of A_tile
 var w_dinv_a_x = @zeros([M_local]f32);
 var i_into_x = @zeros([M_local]f32);
 var iter_count: i32 = 0;
-
+var dot = @zeros([1]f32);
 
 // output
 var b_next = @zeros([R_M_local]f32);  // rightmost Column
@@ -201,21 +203,21 @@ fn f_memcpy_timestamps() void {
 
 
 fn f_sync() void {
-    // sync all PEs and record the reference clock
-    sync_mod.f_sync();
+    cur_state = STATE_SYNC;
+    @activate(STATE_MACHINE);
 }
 
 fn f_reference_timestamps() void {
     // time_ref_f32[0] = {tscRefBuffer[1], tscRefBuffer[0]}
-    // time_ref_f32[1] = {0, tscRefBuffer[2]}
+    // // time_ref_f32[1] = {0, tscRefBuffer[2]}
     var lo_ : u16 = 0;
     var hi_ : u16 = 0;
 
-    lo_ = sync_mod.tscRefBuffer[0];
-    hi_ = sync_mod.tscRefBuffer[1];
+    lo_ = reduce_mod.tscRefBuffer[0];
+    hi_ = reduce_mod.tscRefBuffer[1];
     time_ref_f32[0] = @bitcast(f32, (@as(u32,hi_) << @as(u16,16)) | @as(u32, lo_) );
 
-    lo_ = sync_mod.tscRefBuffer[2];
+    lo_ = reduce_mod.tscRefBuffer[2];
     hi_ = 0;
     time_ref_f32[1] = @bitcast(f32, (@as(u32,hi_) << @as(u16,16)) | @as(u32, lo_) );
 
@@ -382,7 +384,12 @@ fn bcast_prolongation() void {
 
 // State machine task
 task f_state() void {
-  if (STATE_INIT == cur_state) {
+  if (STATE_SYNC == cur_state) {
+    simprint.print_string("STATE_SYNC\n");
+    next_state = STATE_EXIT;
+    reduce_mod.allreduce(1, &dot, reduce_mod.TYPE_BINARY_OP.ADD); // 1 = Row reduction
+
+  } else if (STATE_INIT == cur_state) {
     simprint.print_string("STATE_INIT\n");
     next_state = STATE_COMPUTE_JACOBI;
     initialize();
