@@ -29,35 +29,76 @@ from scipy.sparse import random
 import matplotlib.pyplot as plt
 import math
 import utilities as ut
+from time_utils import OperatorTiming
+import time
+from typing import Dict, Optional, Tuple, Any
 
-def each_layer_solver_down(level, x_level, b_level, ml, setup_config, level_id):
-    # print(f"Solving down on host layer: {level_id}")
+def each_layer_solver_down(level, x_level, b_level, ml, setup_config, level_id, hostprofiling):
+    """Handle downward pass operations for a single level with timing"""
+    timing = OperatorTiming()
+    level_start = time.time()
+    
     A, R = level.A, level.R
     # print("A format, A dtype:", A.format, A.dtype)
     # print("R format, R dtype:", R.format, R.dtype)
     x = x_level[level_id]
     b = b_level[level_id]
     
-    # ml.levels[level_id].presmoother(A, x, b)
-    ut.jacobi_csr(A, x, b, omega=get_omega_from_presmoother(setup_config), iterations=get_iterations_from_presmoother(setup_config))
+    # Time pre-smoothing
+    smooth_start = time.time()
+    ut.jacobi_csr(A, x, b, 
+                 omega=get_omega_from_presmoother(setup_config), 
+                 iterations=get_iterations_from_presmoother(setup_config))
+    timing.smoothing_time = time.time() - smooth_start
+    
+    # Time residual calculation
+    residual_start = time.time()
     r = b - A @ x   # residual
+    timing.residual_time = time.time() - residual_start
+    
+    # Time restriction
+    restrict_start = time.time()
     b_coarse = R @ r    # restrict
+    timing.restriction_time = time.time() - restrict_start
+    
     x_coarse = np.zeros_like(b_coarse)
+    
+    timing.total_time = time.time() - level_start
+    
+    # Add timing to profiler
+    hostprofiling.add_timing(level_id, timing, "down")
+    
+    return b_coarse, x_coarse, timing
 
-    return b_coarse, x_coarse
-
-def each_layer_solver_up(level, x_level, b_level, ml, setup_config, level_id, x_lower_level):
-    # print(f"Solving up on host layer: {level_id}")
+def each_layer_solver_up(level, x_level, b_level, ml, setup_config, level_id, x_lower_level, hostprofiling):
+    """Handle upward pass operations for a single level with timing"""
+    timing = OperatorTiming()
+    level_start = time.time()
+    
     A, P = level.A, level.P
     # print("A format UP, A dtype:", A.format, A.dtype)
     # print("P format UP, P dtype:", P.format, P.dtype)
     x = x_level[level_id]
     b = b_level[level_id]
 
+    # Time prolongation
+    prolong_start = time.time()
     x += P @ x_lower_level  # Prolongation
-    ut.jacobi_csr(A, x, b, omega=get_omega_from_postsmoother(setup_config), iterations=get_iterations_from_postsmoother(setup_config))
+    timing.prolongation_time = time.time() - prolong_start
     
-    return x    
+    # Time post-smoothing
+    smooth_start = time.time()
+    ut.jacobi_csr(A, x, b,
+                 omega=get_omega_from_postsmoother(setup_config),
+                 iterations=get_iterations_from_postsmoother(setup_config))
+    timing.smoothing_time = time.time() - smooth_start
+    
+    timing.total_time = time.time() - level_start
+    
+    # Add timing to profiler
+    hostprofiling.add_timing(level_id, timing, "up")
+    
+    return x, timing
 
 # only V cycle, iterative version
 def AMG_test(ml, setup_config, x_level, b_level, solver, max_level=10, max_coarse=2, max_ite=1):    
@@ -542,321 +583,3 @@ def rs_setup_only(A, x, b, solver, max_level=None, max_coarse=None):
     ml = ruge_stuben_solver(A, **ruge_stuben_config)
 
     return ml, ruge_stuben_config
-
-#########Visit later
-class smoother:
-    def __init__(self, level, x_input=None):
-        self.A = level.level_A
-        self.b = level.level_b
-        self.x = x_input
-        
-    def are_sparse_matrices_equal(self, A, B):
-        # Check if the shapes and the number of non-zero elements are the same
-        if A.shape != B.shape or A.nnz != B.nnz:
-            raise ValueError("Sparse matrices are not equal: shape or nnz mismatch")
-        
-        # Check if the data, indices, and indptr are the same
-        if not (A.data == B.data).all() or not (A.indices == B.indices).all() or not (A.indptr == B.indptr).all():
-            raise ValueError("Sparse matrices are not equal: data, indices, or indptr mismatch")
-    def pyamg_jacobi(self, max_iter=100, weight=1.0):
-        # """PyAMG Jacobi smoother."""
-        x_smooth = self.x.copy()    # trickier
-        pyamg_smoother.jacobi(self.A, x_smooth, self.b, max_iter, omega=weight)
-        return x_smooth
-    def pyamg_gauss_seidel(self, max_iter=100):
-        """PyAMG Gauss-Seidel smoother."""
-        x_smooth = self.x.copy()
-        pyamg_smoother.gauss_seidel(self.A, x_smooth, self.b, max_iter)
-        return x_smooth
-    def pyamg_sor(self, max_iter=100, weight=1.0):
-        """PyAMG SOR smoother."""
-        x_smooth = self.x.copy()
-        pyamg_smoother.sor(self.A, x_smooth, self.b, max_iter, omega=weight)
-        return x_smooth
-    def simple_jacobi(self, x0, max_iter=100):
-        # https://en.wikipedia.org/wiki/Jacobi_method
-        D = np.diag(self.A)  # Extract diagonal elements
-        # Compared to gauss seidel the diagonal is seperate.
-        L_plus_U = self.A - np.diagflat(D)  # Remainder of A (off-diagonal)
-
-        x = x0.copy()
-        for _ in range(max_iter):
-            x_new = (self.b - np.dot(L_plus_U, x)) / D  # x_new = D^(-1) * (b - (L + U) * x_old)
-            x = x_new
-            # Can add breaking conditions later.
-        return x
-    def gauss_seidel(self, x0, max_iter=100):
-        # https://en.wikipedia.org/wiki/Gauss%E2%80%93Seidel_method - element based formula
-        # Two ways:
-        # 1. x_new = L_inv * (b - U.x)
-        # 2. x_new = (b - L*x_new - U*x_old)/A_ii
-        """Gauss-Seidel smoother."""
-        UserWarning("This implementation is still 64 bits, need to change to 32 bits.")
-        n = self.A.shape[0]
-        x = np.zeros_like(self.b) if x0 is None else x0.copy()
-
-        for k in range(max_iter):
-            x_new = np.copy(x)
-            
-            for i in range(n):
-                LX_new = np.dot(self.A[i, :i], x_new[:i])  # Lower triangular
-                UX = np.dot(self.A[i, i+1:], x[i+1:])  # Upper triangular
-                x_new[i] = (self.b[i] - LX_new - UX) / self.A[i, i]
-
-            x = x_new
-
-        return x
-
-class AMGSolver:
-    class eachlevel:
-        def __init__(self): 
-            # protected variables
-            self._level_A = None
-            self._level_R = None
-            self._level_P = None
-            self._level_x = None
-            self._level_x_smooth = None
-            self._level_b = None
-            self._level_residual = None
-            ##
-        @property
-        def level_A(self):
-            return self._level_A
-
-        @level_A.setter
-        def level_A(self, A):
-            self._level_A = A
-            
-        @property
-        def level_R(self):
-            return self._level_R
-        
-        @level_R.setter
-        def level_R(self, R):
-            self._level_R = R
-        
-        @property
-        def level_P(self):
-            return self._level_P
-        
-        @level_P.setter
-        def level_P(self, P):
-            self._level_P = P
-        
-        @property
-        def level_x(self):
-            return self._level_x
-        
-        @level_x.setter
-        def level_x(self, x):
-            self._level_x = x
-            
-        @property
-        def level_x_smooth(self):
-            return self._level_x_smooth
-        
-        @level_x_smooth.setter
-        def level_x_smooth(self, x_smooth):
-            self._level_x_smooth = x_smooth
-            
-        @property
-        def level_b(self):
-            return self._level_b
-        
-        @level_b.setter
-        def level_b(self, b):
-            self._level_b = b
-        
-        @property
-        def level_residual(self):
-            return self._level_residual
-        
-        @level_residual.setter
-        def level_residual(self, r):
-            self._level_residual = r
-    
-    # coarse_solver = 'cg' or 'direct' or 'pyamg'
-    def __init__(self, A_initial, x_initial, b_initial, 
-                 maxlevels = 20, 
-                 maxiter_smoothing=100, 
-                 coarse_solver='cg', data_type=np.float32):
-        # protected variables
-        self._levels = []    # is a list of eachlevel objects.
-        if x_initial.dtype != data_type or b_initial.dtype != data_type or A_initial.dtype != data_type:
-            raise TypeError(f"x_initial dtype {x_initial.dtype} is not the same as data_type {data_type}.")
-        self._init_x = x_initial.copy()
-        self._init_b = b_initial.copy()
-        self._init_A = A_initial.copy()
-        # other parameters
-        self._maxiter_smoothing = maxiter_smoothing
-        self._coarse_solver = coarse_solver
-        self._maxlevels = maxlevels
-        self._dtype = data_type
-        
-        # setup 
-        self.build_levels()
-
-    def coarsen(self, current_level):
-        """Simple C/F splitting based on the diagonal dominance."""
-        n = current_level.level_A.shape[0]
-        coarse_idx = np.arange(0, n, 2)  # Select every second row as coarse
-        fine_idx = np.setdiff1d(np.arange(n), coarse_idx)
-        return coarse_idx, fine_idx
-
-    def restriction(self, fine_idx, coarse_idx):
-        """Simple direct injection restriction."""
-        n, nc = len(fine_idx), len(coarse_idx)
-        R = sp.lil_matrix((nc, n + nc), dtype=self._dtype)
-        for i, ci in enumerate(coarse_idx):
-            R[i, ci] = 1  # Direct injection
-        return R.tocsr()
-    
-    def restrict(self, R, r):
-        # Restrict the residual
-        r_coarse = R @ r
-        return r_coarse
-    
-    def calculate_residual(self, A, b, smooth_x):
-        # compute fine grid residual calculation
-        r = b - A @ smooth_x
-        return r
-    
-    def interpolation(self, R):
-        """Piecewise constant interpolation (transpose of restriction)."""
-        return R.T
-    
-    # setup phase( R, P, A, x)
-    def build_levels(self):
-        # build levels
-        # level 0 initials
-        for i in range(self._maxlevels):# allocate all level objects first.
-            level = AMGSolver.eachlevel()
-            # if it's the first level initialize it.
-            if i == 0:
-                level.level_A = self._init_A
-                level.level_x = self._init_x
-                level.level_b = self._init_b
-            
-            self._levels.append(level)
-            
-        # R, P, A_next
-        for i in range(self._maxlevels-1):  # overflow check
-            level = self._levels[i]
-            next_level = self._levels[i+1]
-            
-            # setup steps:
-            # 1. m-by-n restrict matrix.(R)
-            # 2. n-by-m prolongation matrix.(P)
-            # 3. m-by-m coarse matrix.(Galerkin product). Triple sparse matrix            
-            coarse_idx, fine_idx = self.coarsen(level)
-            level.level_R = self.restriction(fine_idx, coarse_idx)
-            level.level_P = self.interpolation(level.level_R)
-            next_level.level_A = level.level_R @ level.level_A @ level.level_P
-
-        # x
-        for i in range(self._maxlevels):
-            if i == 0:
-                continue    # As first level values are always input values.
-            self._levels[i].level_x = np.zeros(self._levels[i].level_A.shape[0], dtype=self._dtype)
-                
-        self.print_tabulate_eachlevel("After build_levels(SETUP)")
-        
-    def solve_V_down(self):
-
-        for i in range(len(self._levels)-1):
-            level = self._levels[i]
-            next_level = self._levels[i+1]
-            
-            # Pre-smoothing
-            # residual
-            # restrict       
-            presmoother = smoother(level, level.level_x)
-            level.level_x_smooth = presmoother.pyamg_jacobi(max_iter=self._maxiter_smoothing)
-            level.level_residual = self.calculate_residual(level.level_A, level.level_b, level.level_x_smooth)
-            # next level
-            next_level.level_b = self.restrict(level.level_R, level.level_residual)
-            
-        coarsest_level = self._levels[-1]
-        self.print_tabulate_eachlevel("After solve_V_down")
-        return coarsest_level.level_b, coarsest_level.level_A
-  
-    def solve_coarse_solver(self, a_coarse, x_coarse, b_coarse):
-        print("Coarse solver details")
-        from tabulate import tabulate
-        table = [
-            ["A_coarse", a_coarse.shape, a_coarse],
-            ["x_coarse", x_coarse.shape, "-", x_coarse],
-            ["b_coarse", b_coarse.shape, "-", b_coarse]
-        ]
-        print(tabulate(table, headers=["Variable", "Shape", "NNZ", "values"], tablefmt="simple"))
-        
-        # Check what solver to use
-        if self._coarse_solver == 'cg':
-            print("Solver = cg")
-            x, _ = scipy_iterative_solver(a_coarse, b_coarse, x_coarse, atol=1.e-12, max_ite=100)
-        elif self._coarse_solver == 'direct':
-            print("Solver = 'direct'")
-            x, _ = scipy_direct_solver(a_coarse, b_coarse)
-        else:
-            raise ValueError("coarse solver not implemented")
-        
-        # update last coarse level.
-        self._levels[-1].level_x = x    # coarse level
-        return x
-    
-    def print_tabulate_eachlevel(self, print_str="", up = False):
-        print(print_str)
-        level_info = []
-        if up:
-            start = len(self._levels)-1
-            end = -1
-            step = -1
-        else:
-            start = 0
-            end = len(self._levels)
-            step = 1
-            
-        for i in range(start, end, step):
-            level = self._levels[i]
-            level_info.append([
-                i, 
-                f"{level.level_A.shape} ({level.level_A.dtype})", 
-                level.level_A.nnz, 
-                f"{level.level_R.shape} ({level.level_R.dtype})" if level.level_R is not None else "-", 
-                f"{level.level_P.shape} ({level.level_P.dtype})" if level.level_P is not None else "-", 
-                f"{level.level_x.shape} ({level.level_x.dtype})" if level.level_x is not None else "-", 
-                f"{level.level_x_smooth.shape} ({level.level_x_smooth.dtype})" if level.level_x_smooth is not None else "-", 
-                f"{level.level_b.shape} ({level.level_b.dtype})" if level.level_b is not None else "-"
-            ])
-            table = [
-                ["Level", i],
-                ["A", f"{level.level_A.toarray()} ({level.level_A.dtype})" if level.level_A is not None else '-'],
-                ["b", f"{level.level_b} ({level.level_b.dtype})" if level.level_b is not None else '-'],
-                ["x", f"{level.level_x} ({level.level_x.dtype})" if level.level_x is not None else '-'],
-                ["x_smooth", f"{level.level_x_smooth} ({level.level_x_smooth.dtype})" if level.level_x_smooth is not None else '-'],
-                ["R", f"{level.level_R.toarray()} ({level.level_R.dtype})" if level.level_R is not None else '-'],
-                ["P", f"{level.level_P.toarray()} ({level.level_P.dtype})" if level.level_P is not None else '-']
-            ]
-            print(tabulate(table, headers=["Variable", "Values"], tablefmt="simple"))
-        print(tabulate(level_info, headers=["LevelID", "Shape of A", "NNZ in A", "Shape of R", "Shape of P", "Shape of x", "Shape of x_smooth", "Shape of b"], tablefmt="simple"))
-
-    def solve_V_up(self, A_coarse, x_coarse, b_coarse):        
-        # print the types of the variables
-
-        # 1. prolongation
-        # 2. update
-        # 3. Post-smoothing
-        for i in range(len(self._levels)-2, -1, -1):
-            level = self._levels[i]
-            prev_level = self._levels[i+1] # may overflow, check later.
-            # prolongate and update
-            level.level_x_smooth = level.level_x_smooth + level.level_P @ prev_level.level_x
-            # post-smoothing
-            postsmoother = smoother(level, level.level_x_smooth)
-            level.level_x = postsmoother.pyamg_jacobi(max_iter=self._maxiter_smoothing)
-        
-        self.print_tabulate_eachlevel("After solve_V_up", up=True)
-        # calculate rho
-        r = self._levels[0].level_b - self._levels[0].level_A.dot(self._levels[0].level_x)
-        rho = np.dot(r, r)
-        return self._levels[0].level_x, rho   # Return the finest-level solution

@@ -418,61 +418,67 @@ def generate_input2(M, N, type=np.float32):
     return A0, x0, b0
 
 def host_calculations(v_cycle_data):
-
-  # unpack v_cycle_data
-  ml = v_cycle_data["ml"]
-  setup_config = v_cycle_data["setup_config"]
-  x_level = v_cycle_data["x_level"]
-  b_level = v_cycle_data["b_level"]
-  tol = v_cycle_data["tol"]
-  max_iterations = v_cycle_data["max_iterations"]
-  ############################################################
-  # Perform V-Cycle
-  ############################################################
-  solver_callable_host = amg.scipy_direct_solver
-  
-  if len(ml.levels) == 0:
-    raise RuntimeError("No levels in the multilevel hierarchy")
-    exit(1)
-  # Iteration parameters
-  
-  for iteration in range(max_iterations):
-    print("Iteration:", iteration)
-    # V down
-    for i, level in enumerate(ml.levels[:-1]):
-      level = ml.levels[i]  # current level
-      b_coarse_layer, x_coarse_layer = amg.each_layer_solver_down(level, x_level, b_level, ml, setup_config, i)
-      b_level[i + 1] = b_coarse_layer  # Directly store in the next level
-      x_level[i + 1] = x_coarse_layer  # Directly store in the next level
-
-    # V coarse
-    print("Solving coarse on host")
-    b_coarsest = b_level[-1]
-    x_coarsest = x_level[-1]
-    A_coarsest = ml.levels[-1].A
-    x_coarsest[:] = solver_callable_host(A_coarsest, b_coarsest)
+    hostprofiling = time_ut.HostProfiling()
+    # unpack v_cycle_data
+    ml = v_cycle_data["ml"]
+    setup_config = v_cycle_data["setup_config"]
+    x_level = v_cycle_data["x_level"]
+    b_level = v_cycle_data["b_level"]
+    tol = v_cycle_data["tol"]
+    max_iterations = v_cycle_data["max_iterations"]
+    ############################################################
+    # Perform V-Cycle
+    ############################################################
+    solver_callable_host = amg.scipy_direct_solver
     
-    for i in reversed(range(len(ml.levels) - 1)):    
-      level = ml.levels[i]  # current level
-      x_lower_level = x_level[i+1]  # this is data not array
-      x_current_updated = amg.each_layer_solver_up(level, x_level, b_level, ml, setup_config, i, x_lower_level)
-      x_level[i] = x_current_updated
+    if len(ml.levels) == 0:
+        raise RuntimeError("No levels in the multilevel hierarchy")
+        exit(1)
+    # Iteration parameters
+    
+    for iteration in range(max_iterations):
+        
+        # V down
+        for i, level in enumerate(ml.levels[:-1]):
+            # Set context BEFORE the operation
+            hostprofiling.add_other_info(iteration, i, "down")
+            
+            level = ml.levels[i]  # current level
+            b_coarse_layer, x_coarse_layer, operator_timing = amg.each_layer_solver_down(level, x_level, b_level, ml, setup_config, i, hostprofiling)
+            b_level[i + 1] = b_coarse_layer
+            x_level[i + 1] = x_coarse_layer
+        
+        # V coarse
+        b_coarsest = b_level[-1]
+        x_coarsest = x_level[-1]
+        A_coarsest = ml.levels[-1].A
+        x_coarsest[:] = solver_callable_host(A_coarsest, b_coarsest)
+        
+        # V up
+        for i in reversed(range(len(ml.levels) - 1)):
+            # Set context BEFORE the operation
+            hostprofiling.add_other_info(iteration, i, "up")
+            
+            level = ml.levels[i]
+            x_lower_level = x_level[i+1]
+            x_current_updated, operator_timing = amg.each_layer_solver_up(level, x_level, b_level, ml, setup_config, i, x_lower_level, hostprofiling)
+            x_level[i] = x_current_updated
 
-    # Check convergence
-    residual = b_level[0] - ml.levels[0].A @ x_level[0]
-    residual_norm = np.linalg.norm(residual)
-    print(f"Residual: {residual_norm:.6e}, tol: {tol:.6e}, iteration: {iteration}")
-    if residual_norm <= tol:
-      print(f"Converged at iteration {iteration} with residual norm {residual_norm}")
-      break
-    print("After each iteration solver:")
+        # Check convergence
+        residual = b_level[0] - ml.levels[0].A @ x_level[0]
+        residual_norm = np.linalg.norm(residual)
+        print(f"Residual: {residual_norm:.6e}, tol: {tol:.6e}, iteration: {iteration}")
+        if residual_norm <= tol:
+            print(f"Converged at iteration {iteration} with residual norm {residual_norm}")
+            break
+
+    print("After final solver:")
     amg.debugprint(ml.levels, b_level, x_level)
-
-  b_solution, x_solution = b_level[0], x_level[0]
-  print("After final solver:")
-  amg.debugprint(ml.levels, b_level, x_level)
-  residual_host= np.linalg.norm(ml.levels[0].A @ x_solution - b_solution)  
-  return b_solution, x_solution, residual_host
+    hostprofiling.print_timing_summary()
+    # Checks
+    b_solution, x_solution = b_level[0], x_level[0]
+    residual_host= np.linalg.norm(ml.levels[0].A @ x_solution - b_level[0])  
+    return b_solution, x_solution, residual_host
 
 class HardwareTimerManager:
     def __init__(self, simulator):
