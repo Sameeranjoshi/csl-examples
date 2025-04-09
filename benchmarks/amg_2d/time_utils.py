@@ -100,12 +100,12 @@ def time_analysis_noref(height, width, time_memcpy_hwl, time_ref_hwl):
     # - Multiply by 1e-3 to convert nanoseconds to microseconds
     time_send = (cycles_send / 0.85) * 1.0e-3
     return {
-        'cycles': np.mean(cycles_send),
-        'time_us': np.mean(time_send),
+        'cycles': cycles_send,  # Seems like some bug was introduced here using np.mean()
+        'kernel_time_us': time_send,
         # 'time_start': time_start,
         # 'time_end': time_end,
     }
-       
+         
 def timing_analysis_2d(height, width, time_memcpy_hwl, time_ref_hwl):
     """
     Timing analysis for 2D AMG problem
@@ -396,3 +396,172 @@ def analyze_and_plot_timings(df, output_path):
         'per_level': df_level[['down_total', 'up_total', 'total_time']].round(6)
     }
     return summary
+
+@dataclass 
+class DeviceOperatorTiming:
+    """Timing data for AMG device operators"""
+    h2d_time: float = 0.0    # Host to device transfer time in seconds
+    d2h_time: float = 0.0    # Device to host transfer time in seconds
+    cycles: float = 0.0      # Hardware cycles
+    kernel_time_us: float = 0.0     # Time in microseconds
+
+@dataclass
+class DeviceProfiling:
+    """Class to track device-side timing information"""
+    # Structure: iteration -> level -> direction -> timing
+    timings: Dict[int, Dict[int, Dict[str, DeviceOperatorTiming]]] = None
+    current_iteration: int = 0
+    current_level: int = 0
+    current_direction: str = ""
+
+    def __init__(self):
+        self.timings = {}
+        
+    def add_timing(self, level_index: int, timing: DeviceOperatorTiming, direction: str):
+        """Add timing data for current iteration, level and direction"""
+        if self.current_iteration not in self.timings:
+            self.timings[self.current_iteration] = {}
+            
+        if level_index not in self.timings[self.current_iteration]:
+            self.timings[self.current_iteration][level_index] = {}
+            
+        self.timings[self.current_iteration][level_index][direction] = timing
+
+    def add_other_info(self, iteration: int, level_index: int, level_direction: str):
+        """Update current iteration, level and direction context"""
+        self.current_iteration = iteration
+        self.current_level = level_index
+        self.current_direction = level_direction
+        
+    def print_timing_summary(self):
+        """Print a summary of timing information and save to CSV for plotting"""
+        from tabulate import tabulate
+        import pandas as pd
+        from pathlib import Path
+
+        # Convert timing data to list of dictionaries for DataFrame
+        timing_records = []
+        for iteration in sorted(self.timings.keys()):
+            for level in sorted(self.timings[iteration].keys()):
+                level_timings = self.timings[iteration][level]
+                
+                record = {
+                    'iteration': iteration,
+                    'level': level
+                }
+
+                if "down" in level_timings:
+                    down = level_timings["down"]
+                    record.update({
+                        'down_h2d': down.h2d_time,
+                        'down_d2h': down.d2h_time,
+                        'down_cycles': down.cycles,
+                        'down_kernel_time_us': down.kernel_time_us
+                    })
+
+                if "up" in level_timings:
+                    up = level_timings["up"]
+                    record.update({
+                        'up_h2d': up.h2d_time,
+                        'up_d2h': up.d2h_time,
+                        'up_cycles': up.cycles,
+                        'up_kernel_time_us': up.kernel_time_us
+                    })
+
+                timing_records.append(record)
+
+        # Create DataFrame
+        df = pd.DataFrame(timing_records)
+
+        # Generate analysis and plots
+        device_output_path = "timing_results/device/plots"
+        summary = analyze_and_plot_device_timings(df, output_path=device_output_path)
+        
+        # Print formatted table
+        print("\nAMG Device Timing Summary:")
+        headers = ['Iteration', 'Level', 'Down H2D', 'Down D2H', 'Down Cycles', 'Down Kernel Time(us)',
+                  'Up H2D', 'Up D2H', 'Up Cycles', 'Up Kernel Time(us)']
+        if len(df) > 10:
+            print(tabulate(df.head(10), headers=headers, floatfmt='.6f', tablefmt='grid'))
+            print("...")
+        else:
+            print(tabulate(df, headers=headers, floatfmt='.6f', tablefmt='grid'))
+        
+        # Save to CSV
+        output_dir = Path(device_output_path)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = output_dir / 'device_timing_data.csv'
+        df.to_csv(csv_path, index=False)
+        print(f"\nDevice timing data saved to {csv_path}")
+        
+        print(f"\nDetailed analysis and plots saved in {device_output_path}/")
+
+def analyze_and_plot_device_timings(df, output_path):
+    """Generate device timing analysis plots using Plotly"""
+    import plotly.graph_objects as go
+    from pathlib import Path
+    
+    output_dir = Path(output_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Group by level and sum over iterations
+    df_level = df.groupby('level').sum().reset_index()
+
+    # Calculate total transfer time (H2D + D2H) for all directions
+    df_level['total_transfer'] = (df_level['down_h2d'] + df_level['down_d2h'] + 
+                                 df_level['up_h2d'] + df_level['up_d2h'])
+
+    # Calculate total kernel time
+    df_level['total_kernel'] = (df_level['down_kernel_time_us'] + df_level['up_kernel_time_us'])
+
+    # Create transfer time plot
+    fig_transfer = go.Figure()
+    
+    fig_transfer.add_trace(go.Bar(
+        x=df_level['level'],
+        y=df_level['total_transfer'],
+        name='Total Transfer Time'
+    ))
+    
+    fig_transfer.update_layout(
+        title='Total Memcpy Time per Level (Summed over Iterations)',
+        xaxis_title='Level',
+        yaxis_title='Time (seconds)',
+        showlegend=False,
+        xaxis=dict(
+            tickmode='linear',
+            tick0=0,
+            dtick=1,
+            tickformat='d'
+        )
+    )
+    
+    fig_transfer.write_html(output_dir / 'device_transfer_times.html')
+
+    # Create kernel time plot
+    fig_kernel = go.Figure()
+    
+    fig_kernel.add_trace(go.Bar(
+        x=df_level['level'],
+        y=df_level['total_kernel'],
+        name='Total Kernel Time'
+    ))
+    
+    fig_kernel.update_layout(
+        title='Total Kernel Time per Level (Summed over Iterations)',
+        xaxis_title='Level',
+        yaxis_title='Time (us)',
+        showlegend=False,
+        xaxis=dict(
+            tickmode='linear',
+            tick0=0,
+            dtick=1,
+            tickformat='d'
+        )
+    )
+    
+    fig_kernel.write_html(output_dir / 'device_kernel_times.html')
+
+    return {
+        'per_level': df_level[['total_transfer', 'total_kernel']].round(6)
+    }

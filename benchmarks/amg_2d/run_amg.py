@@ -84,26 +84,11 @@ def logs(run_args, logs_dir):
                 dest.unlink()
         shutil.move(str(item), str(logs_dir))
 
-# depricated.
-def time_logs(h, w, time_memcpy_hwl, time_ref_hwl, is_downward, level_index, iteration, timing_map_all_iterations):
-    # Get timing data for this layer
-    timing_data_per_layer = time_ut.timing_analysis_2d(h, w, time_memcpy_hwl, time_ref_hwl)
-    
-    # Store timing data based on direction and level
-    direction = "down" if is_downward else "up"
-    
-    # Initialize iteration and direction if not exists
-    if iteration not in timing_map_all_iterations:
-        timing_map_all_iterations[iteration] = {}
-    if direction not in timing_map_all_iterations[iteration]:
-        timing_map_all_iterations[iteration][direction] = {}
-        
-    # Update timing data for this level
-    timing_map_all_iterations[iteration][direction][level_index] = timing_data_per_layer
-
 # New time logs.
-def time_logs_new(h, w, time_memcpy_hwl, time_ref_hwl, start_time, end_time, is_downward, level_index, iteration, filename="./reports/v_cycle_up_down.csv"):
-    cpu_time = end_time - start_time    # measures the (memcpy + kernel time + sdkruntime setup) using CPU time
+def time_logs_new(h, w, hardware_timing, h2d_time, d2h_time, is_downward, level_index, iteration, filename="./reports/v_cycle_up_down.csv", deviceprofiling=None):
+    time_memcpy_hwl = hardware_timing["time_memcpy_hwl"]
+    time_ref_hwl = hardware_timing["time_ref_hwl"]
+    
     perf_metrics = {}
     # Get timing data for this layer
     timing_data_per_layer = time_ut.time_analysis_noref(h, w, time_memcpy_hwl, time_ref_hwl)
@@ -113,11 +98,21 @@ def time_logs_new(h, w, time_memcpy_hwl, time_ref_hwl, start_time, end_time, is_
     perf_metrics['direction'] = direction
     perf_metrics['level_index'] = level_index
     perf_metrics['PE'] = f"PE{h}_{w}"
-    perf_metrics['cpu_time_seconds'] = cpu_time
+    perf_metrics['h2d_time_seconds'] = h2d_time
+    perf_metrics['d2h_time_seconds'] = d2h_time
     perf_metrics['cycles'] = timing_data_per_layer['cycles']
-    perf_metrics['time_us'] = timing_data_per_layer['time_us']
+    perf_metrics['kernel_time_us'] = timing_data_per_layer['kernel_time_us']
     df = time_ut.write_performance_data(perf_metrics, filename=filename)
     
+    
+    # build this variable and return it.
+    timing = time_ut.DeviceOperatorTiming(
+        h2d_time=perf_metrics['h2d_time_seconds'],
+        d2h_time=perf_metrics['d2h_time_seconds'],
+        cycles=perf_metrics['cycles'],
+        kernel_time_us=perf_metrics['kernel_time_us']
+    )
+    deviceprofiling.add_timing(level_index, timing, direction)
     return df
   
   # 1. memory usage per pe.
@@ -481,6 +476,8 @@ def host_calculations(v_cycle_data):
     return b_solution, x_solution, residual_host
 
 class HardwareTimerManager:
+  # keep logs of time_memcpy_hwl, time_ref_hwl, h2d_time, d2h_time inside this class.
+  
     def __init__(self, simulator):
         self.simulator = simulator
         self.simulator.launch("f_enable_timer", nonblock=False)
@@ -509,7 +506,12 @@ class HardwareTimerManager:
         time_memcpy_hwl = np.reshape(time_memcpy_1d_f32, (h, w, 3), order='C')
         time_ref_hwl = np.reshape(time_ref_1d_f32, (h, w, 2), order='C')
         
-        return time_memcpy_hwl, time_ref_hwl
+        # create a new to store the timing data.
+        hardware_timing = {
+          "time_memcpy_hwl": time_memcpy_hwl,
+          "time_ref_hwl": time_ref_hwl,
+        }
+        return hardware_timing
 
 class simplerMemcpy:
     def __init__(self, simulator, memcpy_order, memcpy_dtype):
@@ -571,7 +573,7 @@ def perform_coarse_solve(level, x_level, b_level, solver_callable_host):
     
     return x_coarsest
       
-def perform_downward_pass(simple_memcpy, simulator,symbols, level_index, level, coords, x_level, b_level, setup_config, iteration):
+def perform_downward_pass(simple_memcpy, simulator,symbols, level_index, level, coords, x_level, b_level, setup_config, iteration, deviceprofiling):
     """Handle downward pass operations for a single level"""
     print("\n" + "-"*40)
     print(f"│ DOWN PHASE - LAYER {level_index}")
@@ -650,6 +652,7 @@ def perform_downward_pass(simple_memcpy, simulator,symbols, level_index, level, 
     simple_memcpy.do_memcpy_h2d_bcast(symbols['b'], b_transformed, px, py, w, h, per_pe_rows*1, is_rowbcast=True)
     simple_memcpy.do_memcpy_h2d(symbols['omega'], omega, px, py, w, h, 1)
     simple_memcpy.do_memcpy_h2d(symbols['iterations'], iterations, px, py, w, h, 1)
+    h2d_time = time.time() - start_time
     
     # timer
     print("Step 3: Timer Start")
@@ -667,22 +670,22 @@ def perform_downward_pass(simple_memcpy, simulator,symbols, level_index, level, 
     b_coarse_device = np.zeros(R_M, dtype=np.float32)
     x_coarse_device = np.zeros_like(b_coarse_device)
     x_smooth = np.zeros(N, dtype=np.float32)
+    d2h_start_time = time.time()
     simple_memcpy.do_memcpy_d2h(b_coarse_device, symbols['b_next'], px + (w-1), py + 0, 1, h, per_pe_restrict_rows*1) # copy from symbol into result.
     simple_memcpy.do_memcpy_d2h(x_smooth, symbols['x'], px, py, w, 1, per_pe_cols*1)
-    
+    d2h_time = time.time() - d2h_start_time
     # time retrival
     print("Step 7: Time Retrival")
-    time_memcpy_hwl, time_ref_hwl = hardwareTimer.get_timing_data(simple_memcpy, symbols, px, py, w, h)
+    hardware_timing = hardwareTimer.get_timing_data(simple_memcpy, symbols, px, py, w, h)
             
     # logging time
     print("Step 8: Logging Time")
-    end_time = time.time()
-    time_logs_new(h, w, time_memcpy_hwl, time_ref_hwl, start_time, end_time, is_downward=True, 
-                  level_index=level_index, iteration=iteration, filename="./v_cycle_up_down.csv")
-    
+    df = time_logs_new(h, w, hardware_timing, h2d_time, d2h_time, is_downward=True, 
+                  level_index=level_index, iteration=iteration, filename="./v_cycle_up_down.csv", deviceprofiling=deviceprofiling)
+
     return x_smooth, b_coarse_device, x_coarse_device
 
-def perform_upward_pass(simple_memcpy, simulator, symbols, level_index, level, coords, x_level, b_level, setup_config, iteration):
+def perform_upward_pass(simple_memcpy, simulator, symbols, level_index, level, coords, x_level, b_level, setup_config, iteration, deviceprofiling):
     """Handle upward pass operations for a single level"""
     print("\n" + "-"*40)
     print(f"│ UP PHASE - LAYER {level_index}")
@@ -736,6 +739,7 @@ def perform_upward_pass(simple_memcpy, simulator, symbols, level_index, level, c
     simple_memcpy.do_memcpy_h2d_bcast(symbols['x_coarse'], x_coarse, px, py, w, h, per_pe_prolongation_cols*1, is_rowbcast=False) # 2D distribution.
     simple_memcpy.do_memcpy_h2d(symbols['omega'], omega, px, py, w, h, 1)
     simple_memcpy.do_memcpy_h2d(symbols['iterations'], iterations, px, py, w, h, 1) # May differ for up and down pass as it's pre and post.
+    h2d_time = time.time() - start_time
      
     # timer
     print("Step 3: Timer Start")
@@ -750,17 +754,18 @@ def perform_upward_pass(simple_memcpy, simulator, symbols, level_index, level, c
     # D2H transfers
     print("Step 6: D2H Transfers")
     x_level_device = np.zeros(N, dtype=np.float32)
+    d2h_start_time = time.time()
     simple_memcpy.do_memcpy_d2h(x_level_device, symbols['x'], px, py, w, 1, per_pe_cols*1)
+    d2h_time = time.time() - d2h_start_time
     
     # time retrival
     print("Step 7: Time Retrival")
-    time_memcpy_hwl, time_ref_hwl = hardwareTimer.get_timing_data(simple_memcpy, symbols, px, py, w, h)
+    hardware_timing = hardwareTimer.get_timing_data(simple_memcpy, symbols, px, py, w, h)
     
     # logging time
     print("Step 8: Logging Time")
-    end_time = time.time()
-    time_logs_new(h, w, time_memcpy_hwl, time_ref_hwl, start_time, end_time, is_downward=False, 
-                  level_index=level_index, iteration=iteration, filename="./v_cycle_up_down.csv")
+    df = time_logs_new(h, w, hardware_timing, h2d_time, d2h_time, is_downward=False, 
+                  level_index=level_index, iteration=iteration, filename="./v_cycle_up_down.csv", deviceprofiling=deviceprofiling)
     
     return x_level_device
 
@@ -830,13 +835,20 @@ def device_calculations(v_cycle_data):
     ############################################################
     # AMG V-CYCLE
     ############################################################    
+    # Initialize device profiler
+    deviceprofiling = time_ut.DeviceProfiling()
+    
     while iteration < max_iterations and residual > tol:
         print(f"\n{'='*40}\n│ ITERATION {iteration}\n{'='*40}")
+        
         # Downward passes
         for level_index in range(len(ml.levels) - 1):
+            # Set context before operation
+            deviceprofiling.add_other_info(iteration, level_index, "down")
+            
             x_smooth, b_coarse, x_coarse = perform_downward_pass(
                 simple_memcpy, simulator, symbols, level_index, ml.levels[level_index],
-                layer_coordinates_map[level_index], x_level, b_level, setup_config, iteration
+                layer_coordinates_map[level_index], x_level, b_level, setup_config, iteration, deviceprofiling
             )
             x_level[level_index] = x_smooth
             b_level[level_index + 1] = b_coarse
@@ -847,9 +859,12 @@ def device_calculations(v_cycle_data):
         
         # Upward passes
         for level_index in reversed(range(len(ml.levels) - 1)):
+            # Set context before operation
+            deviceprofiling.add_other_info(iteration, level_index, "up")
+            
             x_new = perform_upward_pass(
                 simple_memcpy, simulator, symbols, level_index, ml.levels[level_index],
-                layer_coordinates_map[level_index], x_level, b_level, setup_config, iteration
+                layer_coordinates_map[level_index], x_level, b_level, setup_config, iteration, deviceprofiling
             )
             x_level[level_index] = x_new
         
@@ -859,6 +874,9 @@ def device_calculations(v_cycle_data):
         amg.debugprint(ml.levels, b_level, x_level)
         iteration += 1
 
+    # Print timing summary before cleanup
+    deviceprofiling.print_timing_summary()
+    
     ############################################################
     # Cleanup simulator
     ############################################################
