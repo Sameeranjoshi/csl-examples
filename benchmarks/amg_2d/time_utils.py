@@ -294,23 +294,39 @@ class HostProfiling:
         df = pd.DataFrame(timing_records)
 
         # Generate analysis and plots
-        summary = analyze_and_plot_timings(df)
+        cpu_output_path = "timing_results/cpu/plots"
+        summary = analyze_and_plot_timings(df, output_path=cpu_output_path)
         
         # Print formatted table
         print("\nAMG Host Timing Summary:")
         headers = ['Iteration', 'Level', 'Down Pre-Smooth', 'Down Residual', 
                   'Down Restrict', 'Down Total', 'Up Prolong', 'Up Post-Smooth', 'Up Total']
-        print(tabulate(df, headers=headers, floatfmt='.6f', tablefmt='grid'))
+        if len(df) > 10:
+            print(tabulate(df.head(10), headers=headers, floatfmt='.6f', tablefmt='grid'))
+            print("...")
+        else:
+            print(tabulate(df, headers=headers, floatfmt='.6f', tablefmt='grid'))
         
-        print(f"\nDetailed analysis and plots saved in timing_results/plots/")
-def analyze_and_plot_timings(df):
+        # Save to CSV
+        output_dir = Path(cpu_output_path)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = output_dir / 'timing_data.csv'
+        df.to_csv(csv_path, index=False)
+        print(f"\nTiming data saved to {csv_path}")
+        
+        print(f"\nDetailed analysis and plots saved in {cpu_output_path}/")
+
+def analyze_and_plot_timings(df, output_path):
     """Generate operation breakdown plot from timing data using Plotly"""
     import plotly.graph_objects as go
     from pathlib import Path
     
-    output_dir = Path('timing_results/plots')
+    output_dir = Path(output_path)
     if not output_dir.exists():
         output_dir.mkdir(parents=True)
+
+    # First, group by level and sum over iterations
+    df_level = df.groupby('level').sum().reset_index()
 
     # Operation time breakdown per level
     operations = [
@@ -321,11 +337,12 @@ def analyze_and_plot_timings(df):
         ('Post-smoothing', 'up_post_smooth')
     ]
     
+    # Create operation breakdown plot
     fig = go.Figure()
-    x = sorted(df['level'].unique())
+    x = sorted(df_level['level'].unique())
     
     for label, col in operations:
-        means = df.groupby('level')[col].mean()
+        means = df_level[col]
         fig.add_trace(go.Bar(
             name=label,
             x=x,
@@ -333,24 +350,49 @@ def analyze_and_plot_timings(df):
         ))
     
     fig.update_layout(
-        barmode='group',  # Changed from stack to group for side-by-side bars
-        title='Operation Time Breakdown per Level',
+        barmode='group',
+        title='Operation Time Breakdown per Level (Summed over Iterations)',
         xaxis_title='Level',
-        yaxis_title='Average Time (seconds)',
-        yaxis_type='log',  # Set y-axis to log scale
+        yaxis_title='Total Time (seconds)',
+        # yaxis_type='log',
         showlegend=True
     )
     
     fig.write_html(output_dir / 'operation_breakdown.html')
+
+    # Create total time plot
+    fig_total = go.Figure()
+    
+    # Calculate total time per level
+    df_level['total_time'] = df_level['down_total'] + df_level['up_total']
+    
+    fig_total.add_trace(go.Bar(
+        x=df_level['level'],
+        y=df_level['total_time'],
+        name='Total Time'
+    ))
+    
+    fig_total.update_layout(
+        title='Total Solve Time(Up + Down) (Summed over Iterations)',
+        xaxis_title='Level',
+        yaxis_title='Total Solve Time (seconds)',
+        # yaxis_type='log',
+        showlegend=True,
+        xaxis=dict(
+            tickmode='linear',
+            tick0=0,
+            dtick=1,  # Force integer ticks
+            tickformat='d'  # Display as integers
+        )
+    )
+    
+    fig_total.write_html(output_dir / 'total_time_per_level.html')
 
     print(f"\nAnalysis files generated in {output_dir}:")
     print("- Interactive plots (HTML files)")
     
     # Return basic summary statistics
     summary = {
-        'per_level': df.groupby('level').agg({
-            'down_total': ['mean', 'std'],
-            'up_total': ['mean', 'std']
-        }).round(6)
+        'per_level': df_level[['down_total', 'up_total', 'total_time']].round(6)
     }
     return summary
