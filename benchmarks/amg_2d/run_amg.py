@@ -105,7 +105,6 @@ def time_logs_new(h, w, hardware_timing, h2d_time, d2h_time, is_downward, level_
     df = time_ut.write_performance_data(perf_metrics, filename=filename)
     
     
-    # build this variable and return it.
     timing = time_ut.DeviceOperatorTiming(
         h2d_time=perf_metrics['h2d_time_seconds'],
         d2h_time=perf_metrics['d2h_time_seconds'],
@@ -823,7 +822,8 @@ def device_calculations(v_cycle_data):
         'omega': simulator.get_id("omega"),
         'iterations': simulator.get_id("iterations"),
         'time_memcpy': simulator.get_id("time_memcpy"),
-        'time_ref': simulator.get_id("time_ref")
+        'time_ref': simulator.get_id("time_ref"),
+        'communication_time': simulator.get_id("communication_time")
     }
     iteration = 0
     residual = float('inf')

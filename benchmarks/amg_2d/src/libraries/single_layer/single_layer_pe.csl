@@ -117,6 +117,11 @@ var time_ref_f32 = @zeros([3]f32);
 var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
 var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
 
+// After other timing variables, add new ones for MPI communication
+var communication_time_buf = @zeros([6]f32);  // Store start/end times for MPI operations
+var communication_tsc_start = @zeros([timestamp.tsc_size_words]u16);
+var communication_tsc_end = @zeros([timestamp.tsc_size_words]u16);
+var ptr_communication_time: [*]f32 = &communication_time_buf;
 
 // DSDs
 const dsd_A_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*@as(i16, N_local)] }); // 1 col of A_tile
@@ -501,10 +506,24 @@ comptime {
   // timing
   @export_symbol(ptr_time_memcpy, "time_memcpy");
   @export_symbol(ptr_time_ref, "time_ref");
+  @export_symbol(ptr_communication_time, "communication_time");
   @export_symbol(f_enable_timer);
   @export_symbol(f_tic);
   @export_symbol(f_toc);
   @export_symbol(f_memcpy_timestamps);
   @export_symbol(f_sync);
   @export_symbol(f_reference_timestamps);
+
+
+}
+
+// Helper functions for MPI timing
+fn communication_tic() void {
+    timestamp.get_timestamp(&communication_tsc_start);
+    sys_mod.unblock_cmd_stream();
+}
+
+fn communication_toc() void {
+    timestamp.get_timestamp(&communication_tsc_end);
+    sys_mod.unblock_cmd_stream();
 }
