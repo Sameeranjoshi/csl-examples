@@ -18,7 +18,9 @@ param memcpy_params: comptime_struct;
 param c2d_params: comptime_struct;
 param layer_params: comptime_struct;
 param reduce_params: comptime_struct;
-
+param fast_bcast_colors: [7]color;
+param pe_id_x: i16;
+param pe_id_y: i16;
 
 const M: i16 = layer_params.M; // Height of local matrix, or num rows per PE
 const N: i16 = layer_params.N; // Width of local matrix, or num cols per PE
@@ -80,6 +82,11 @@ const reduce_mod = @import_module( "../../../../csl-libs/allreduce/pe.csl", @con
      .src0_dsr_ids = [1]u16{1},
      .src1_dsr_ids = [1]u16{1}
      }));
+
+
+const modified_bcast_down_up = @import_module("../spatial-collectives/modules/modified_broadcast.csl", .{
+  .color_1 = fast_bcast_colors[1], .pe_id = pe_id_y, .root_id = pe_id_x,
+  .POS_DIR = SOUTH, .NEG_DIR = NORTH, .NUM_PES = layer_kernel_rows, .timestamp = timestamp}); // size = rows, 2 colors, north to south and south to north, start PE?
 
 //x, b, A, R will be partitioned using 2D Block decomposition.
 // input
@@ -161,6 +168,11 @@ var is_v_cycle_up: bool = false;
 var v_cycle_iteration: i32 = 0;
 var cur_state: i16 = 0;// State tracking variables
 var next_state: i16 = 0;
+
+// dummy
+const Nx = 1;
+var x = @constants([Nx]f32, @as(f32, 1.0));
+var x_ptr: [*]f32 = &x;
 
 // timing
 fn f_enable_timer() void {
@@ -288,6 +300,8 @@ fn initialize() void {
   }
   cur_state = next_state; // This is set by the f_state function.
   mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, STATE_MACHINE);
+  // modified_bcast_down_up.transfer_data(&D_inv, M_local, &communication_tsc_start, &communication_tsc_end);
+  // trigger_state_machine();  // calls next state.
 }
 
 fn layout_print() void {
@@ -471,6 +485,20 @@ task f_state() void {
 // Entrypoint into kernel
 fn v_cycle_down() void {
   simprint.print_string("v_cycle_down\n");
+  // // print x before bcast
+  // for (x) |val, i| {
+  //   simprint.fmt_with_coords("x_before_bcast = {f}", .{ @as(f32, val) });
+  // }
+  // if (px == py){
+  //   x[0] = x[0] + 1.0;
+  // } // diag x = 2, other x = 1
+  // // now bcast diag to all PEs
+  // modified_bcast_down_up.transfer_data(x_ptr, Nx, &communication_tsc_start, &communication_tsc_end);
+  // simprint.print_string("done with fast_bcast\n");
+  // // print x after bcast
+  // for (x) |val, i| {
+  //   simprint.fmt_with_coords("x_after_bcast = {f}", .{ @as(f32, val) });
+  // }
   init_params();
   // The iterations will always be greater than 0, ensured in run_amg.py
   cur_state = STATE_INIT;
@@ -514,7 +542,8 @@ comptime {
   @export_symbol(f_sync);
   @export_symbol(f_reference_timestamps);
 
-
+  // spatial collectives
+  modified_bcast_down_up.configure_network();  
 }
 
 // Helper functions for MPI timing

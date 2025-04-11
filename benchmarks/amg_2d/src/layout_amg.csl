@@ -68,6 +68,13 @@ const second = [9]i16 { layer_M_1, layer_N_1, layer_R_M_1, layer_R_N_1, layer_st
 
 // SYNC MODULE
 const C0 : color = @get_color(0);
+const fast_bcast_c1 : color = @get_color(1);
+const fast_bcast_c2 : color = @get_color(2);
+const fast_bcast_c3 : color = @get_color(3);
+const fast_bcast_c4 : color = @get_color(4);
+const fast_bcast_c5 : color = @get_color(18);
+const fast_bcast_c6 : color = @get_color(19);
+const fast_bcast_c7 : color = @get_color(20);
 
 // collective module colors
 const collective_x_color_right : color = @get_color(5);
@@ -177,6 +184,9 @@ layout {
                     .c2d_params = c2d_params,
                     .layer_params = layer_params,
                     .reduce_params = reduce_params,
+                    .fast_bcast_colors = [7]color{fast_bcast_c1, fast_bcast_c2, fast_bcast_c3, fast_bcast_c4, fast_bcast_c5, fast_bcast_c6, fast_bcast_c7},
+                    .pe_id_x = px,
+                    .pe_id_y = py,
                 };
                 @set_tile_code(px, py, "./libraries/single_layer/single_layer_pe.csl", params);
 
