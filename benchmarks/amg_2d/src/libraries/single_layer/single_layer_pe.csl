@@ -87,9 +87,12 @@ const reduce_mod = @import_module( "../../../../csl-libs/allreduce/pe.csl", @con
 const modified_bcast_down_up = @import_module("../spatial-collectives/modules/modified_broadcast.csl", .{
   .color_1 = fast_bcast_colors[1], .pe_id = pe_id_y, .root_id = pe_id_x,
   .POS_DIR = SOUTH, .NEG_DIR = NORTH, .NUM_PES = layer_kernel_rows, .timestamp = timestamp}); // size = rows, 2 colors, north to south and south to north, start PE?
-const modified_bcast_right_left = @import_module("../spatial-collectives/modules/modified_broadcast.csl", .{
-  .color_1 = fast_bcast_colors[3], .pe_id = pe_id_x, .root_id = pe_id_y,
-  .POS_DIR = EAST, .NEG_DIR = WEST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp}); // size = cols, 2 colors, east to west and west to east, start PE?
+// const modified_bcast_right_left = @import_module("../spatial-collectives/modules/modified_broadcast.csl", .{
+//   .color_1 = fast_bcast_colors[3], .pe_id = pe_id_x, .root_id = pe_id_y,
+//   .POS_DIR = EAST, .NEG_DIR = WEST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp}); // size = cols, 2 colors, east to west and west to east, start PE?
+// const broadcast_right = @import_module("../spatial-collectives/modules/unidirectional_broadcast.csl", .{.color_1 = fast_bcast_colors[3], .pe_id = pe_id_x, .root_id = pe_id_y, .POS_DIR = EAST, .NEG_DIR = WEST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
+// const broadcast_left = @import_module("../spatial-collectives/modules/unidirectional_broadcast.csl", .{.color_1 = fast_bcast_colors[4], .pe_id = pe_id_x, .root_id = pe_id_y, .POS_DIR = WEST, .NEG_DIR = EAST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
+
 
 //x, b, A, R will be partitioned using 2D Block decomposition.
 // input
@@ -304,6 +307,8 @@ fn initialize() void {
   cur_state = next_state; // This is set by the f_state function.
   // Broadcast from diagonal PE to others in the same row
   mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, STATE_MACHINE);
+  // broadcast_right.transfer_data(&D_inv, M_local, &communication_tsc_start, &communication_tsc_end);
+  // broadcast_left.transfer_data(&D_inv, M_local, &communication_tsc_start, &communication_tsc_end);
   // modified_bcast_right_left.transfer_data(&D_inv, M_local, &communication_tsc_start, &communication_tsc_end);
   // f_trigger_state_machine();
 }
@@ -338,7 +343,7 @@ fn init_params() void {
   mpi_x.init();
   mpi_y.init();
   px = mpi_x.pe_id;
-  py = mpi_y.pe_id;
+  py = pe_id_y; // py = mpi_y.pe_id
   v_cycle_iteration += 1;
   is_v_cycle_up = false;
   iter_count = 0;  
@@ -541,7 +546,9 @@ comptime {
 
   // spatial collectives
   modified_bcast_down_up.configure_network();  
-  modified_bcast_right_left.configure_network();
+  // modified_bcast_right_left.configure_network();
+  // broadcast_right.configure_network();
+  // broadcast_left.configure_network();
 }
 
 // Helper functions for MPI timing
