@@ -87,6 +87,9 @@ const reduce_mod = @import_module( "../../../../csl-libs/allreduce/pe.csl", @con
 const modified_bcast_down_up = @import_module("../spatial-collectives/modules/modified_broadcast.csl", .{
   .color_1 = fast_bcast_colors[1], .pe_id = pe_id_y, .root_id = pe_id_x,
   .POS_DIR = SOUTH, .NEG_DIR = NORTH, .NUM_PES = layer_kernel_rows, .timestamp = timestamp}); // size = rows, 2 colors, north to south and south to north, start PE?
+const modified_bcast_right_left = @import_module("../spatial-collectives/modules/modified_broadcast.csl", .{
+  .color_1 = fast_bcast_colors[3], .pe_id = pe_id_x, .root_id = pe_id_y,
+  .POS_DIR = EAST, .NEG_DIR = WEST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp}); // size = cols, 2 colors, east to west and west to east, start PE?
 
 //x, b, A, R will be partitioned using 2D Block decomposition.
 // input
@@ -299,9 +302,10 @@ fn initialize() void {
     @map(inverse_callback, dsd_A_diag, dsd_D_inv);
   }
   cur_state = next_state; // This is set by the f_state function.
+  // Broadcast from diagonal PE to others in the same row
   mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, STATE_MACHINE);
-  // modified_bcast_down_up.transfer_data(&D_inv, M_local, &communication_tsc_start, &communication_tsc_end);
-  // trigger_state_machine();  // calls next state.
+  // modified_bcast_right_left.transfer_data(&D_inv, M_local, &communication_tsc_start, &communication_tsc_end);
+  // f_trigger_state_machine();
 }
 
 fn layout_print() void {
@@ -358,7 +362,10 @@ fn compute_jacobi() void {
 
 fn bcast_jacobi() void {
   cur_state = next_state;
-  mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local, STATE_MACHINE);
+  // mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local, STATE_MACHINE);
+  modified_bcast_down_up.transfer_data(&x_tile, N_local, &communication_tsc_start, &communication_tsc_end);
+  f_trigger_state_machine();  // calls next state.  
+
 }
 
 // Compute residual
@@ -377,7 +384,9 @@ fn bcast_residual() void {
     @fsubs(dsd_residual_tile, dsd_b_tile, dsd_residual_tile);  // r = b - Ax
   }
   cur_state = next_state;
-  mpi_y.broadcast(px, @ptrcast([*]u32, &residual_tile), M_local, STATE_MACHINE);
+  // mpi_y.broadcast(px, @ptrcast([*]u32, &residual_tile), M_local, STATE_MACHINE);
+  modified_bcast_down_up.transfer_data(&residual_tile, M_local, &communication_tsc_start, &communication_tsc_end);
+  f_trigger_state_machine();  // calls next state.
 }
 
 // Compute restriction
@@ -404,7 +413,9 @@ fn bcast_prolongation() void {
     @fadds(dsd_x_tile, dsd_x_tile, dsd_px_sum_tile);  // x_tile = x_tile + Px
   }
   cur_state = next_state;
-  mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local, STATE_MACHINE);
+  // mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local, STATE_MACHINE);
+  modified_bcast_down_up.transfer_data(&x_tile, N_local, &communication_tsc_start, &communication_tsc_end);
+  f_trigger_state_machine();  // calls next state.
 }
 
 // State machine task
@@ -485,20 +496,6 @@ task f_state() void {
 // Entrypoint into kernel
 fn v_cycle_down() void {
   simprint.print_string("v_cycle_down\n");
-  // // print x before bcast
-  // for (x) |val, i| {
-  //   simprint.fmt_with_coords("x_before_bcast = {f}", .{ @as(f32, val) });
-  // }
-  // if (px == py){
-  //   x[0] = x[0] + 1.0;
-  // } // diag x = 2, other x = 1
-  // // now bcast diag to all PEs
-  // modified_bcast_down_up.transfer_data(x_ptr, Nx, &communication_tsc_start, &communication_tsc_end);
-  // simprint.print_string("done with fast_bcast\n");
-  // // print x after bcast
-  // for (x) |val, i| {
-  //   simprint.fmt_with_coords("x_after_bcast = {f}", .{ @as(f32, val) });
-  // }
   init_params();
   // The iterations will always be greater than 0, ensured in run_amg.py
   cur_state = STATE_INIT;
@@ -544,6 +541,7 @@ comptime {
 
   // spatial collectives
   modified_bcast_down_up.configure_network();  
+  modified_bcast_right_left.configure_network();
 }
 
 // Helper functions for MPI timing
