@@ -92,8 +92,13 @@ const modified_bcast_down_up = @import_module("../spatial-collectives/modules/mo
 //   .POS_DIR = EAST, .NEG_DIR = WEST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp}); // size = cols, 2 colors, east to west and west to east, start PE?
 // const broadcast_right = @import_module("../spatial-collectives/modules/unidirectional_broadcast.csl", .{.color_1 = fast_bcast_colors[3], .pe_id = pe_id_x, .root_id = pe_id_y, .POS_DIR = EAST, .NEG_DIR = WEST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
 // const broadcast_left = @import_module("../spatial-collectives/modules/unidirectional_broadcast.csl", .{.color_1 = fast_bcast_colors[4], .pe_id = pe_id_x, .root_id = pe_id_y, .POS_DIR = WEST, .NEG_DIR = EAST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
-
-
+// const chain_reduce_left = @import_module("../spatial-collectives/modules/reduce.csl", .{.color_1 = fast_bcast_colors[2], .color_2 = fast_bcast_colors[3], .pe_id = pe_id_x, .root_id = pe_id_y, .POS_DIR = EAST, .NEG_DIR = WEST, .NUM_PES = layer_kernel_cols, .step = 1, .algo = 0, .timestamp = timestamp});
+const upper_traingular_chain_reduce = @import_module("../spatial-collectives/modules/modified_chain.csl", .{
+  .color_1 = fast_bcast_colors[2], .color_2 = fast_bcast_colors[3], .pe_id = pe_id_x, .root_id = pe_id_y, 
+  .POS_DIR = EAST, .NEG_DIR = WEST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
+const lower_traingular_chain_reduce = @import_module("../spatial-collectives/modules/modified_chain.csl", .{
+  .color_1 = fast_bcast_colors[4], .color_2 = fast_bcast_colors[5], .pe_id = pe_id_x, .root_id = pe_id_y, 
+  .POS_DIR = WEST, .NEG_DIR = EAST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
 //x, b, A, R will be partitioned using 2D Block decomposition.
 // input
 var A_tile = @zeros([M_local*N_local]f32);
@@ -177,7 +182,7 @@ var next_state: i16 = 0;
 
 // dummy
 const Nx = 1;
-var x = @constants([Nx]f32, @as(f32, 1.0));
+var x = @constants([Nx]f32, @as(f32, 10.0));
 var x_ptr: [*]f32 = &x;
 
 // timing
@@ -502,8 +507,23 @@ task f_state() void {
 fn v_cycle_down() void {
   simprint.print_string("v_cycle_down\n");
   init_params();
+  // print x_temp before reduction
+  for (x) |val, i| {
+    simprint.fmt_with_coords("x_before[{d}] = {f}", .{ i, val });
+  }
+  //  ----------------------
+  upper_traingular_chain_reduce.transfer_data(&x, Nx, &communication_tsc_start);
+ //  ----------------------
+  // print x_temp after reduction
+  for (x) |val, i| {
+    simprint.fmt_with_coords("x_after_upper[{d}] = {f}", .{ i, val });
+  }
+  lower_traingular_chain_reduce.transfer_data(&x, Nx, &communication_tsc_start);
+  for (x) |val, i| {
+    simprint.fmt_with_coords("x_after_lower[{d}] = {f}", .{ i, val });
+  }
+ 
   // The iterations will always be greater than 0, ensured in run_amg.py
-  cur_state = STATE_INIT;
   @activate(STATE_MACHINE);
 }
 
@@ -549,6 +569,8 @@ comptime {
   // modified_bcast_right_left.configure_network();
   // broadcast_right.configure_network();
   // broadcast_left.configure_network();
+  upper_traingular_chain_reduce.configure_network();
+  lower_traingular_chain_reduce.configure_network();
 }
 
 // Helper functions for MPI timing
