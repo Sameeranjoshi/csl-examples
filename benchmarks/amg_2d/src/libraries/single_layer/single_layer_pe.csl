@@ -1,17 +1,3 @@
-// Copyright 2024 Cerebras Systems.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 
 // params
 param memcpy_params: comptime_struct;
@@ -93,10 +79,10 @@ const modified_bcast_down_up = @import_module("../spatial-collectives/modules/mo
 // const broadcast_right = @import_module("../spatial-collectives/modules/unidirectional_broadcast.csl", .{.color_1 = fast_bcast_colors[3], .pe_id = pe_id_x, .root_id = pe_id_y, .POS_DIR = EAST, .NEG_DIR = WEST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
 // const broadcast_left = @import_module("../spatial-collectives/modules/unidirectional_broadcast.csl", .{.color_1 = fast_bcast_colors[4], .pe_id = pe_id_x, .root_id = pe_id_y, .POS_DIR = WEST, .NEG_DIR = EAST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
 // const chain_reduce_left = @import_module("../spatial-collectives/modules/reduce.csl", .{.color_1 = fast_bcast_colors[2], .color_2 = fast_bcast_colors[3], .pe_id = pe_id_x, .root_id = pe_id_y, .POS_DIR = EAST, .NEG_DIR = WEST, .NUM_PES = layer_kernel_cols, .step = 1, .algo = 0, .timestamp = timestamp});
-const upper_traingular_chain_reduce = @import_module("../spatial-collectives/modules/modified_chain.csl", .{
+const upper_traingular_chain_reduce = @import_module("../spatial-collectives/modules/upper_tri_reduce.csl", .{
   .color_1 = fast_bcast_colors[2], .color_2 = fast_bcast_colors[3], .pe_id = pe_id_x, .root_id = pe_id_y, 
   .POS_DIR = EAST, .NEG_DIR = WEST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
-const lower_traingular_chain_reduce = @import_module("../spatial-collectives/modules/modified_chain.csl", .{
+const lower_traingular_chain_reduce = @import_module("../spatial-collectives/modules/lower_tri_reduce.csl", .{
   .color_1 = fast_bcast_colors[4], .color_2 = fast_bcast_colors[5], .pe_id = pe_id_x, .root_id = pe_id_y, 
   .POS_DIR = WEST, .NEG_DIR = EAST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
 //x, b, A, R will be partitioned using 2D Block decomposition.
@@ -406,6 +392,7 @@ fn compute_restriction() void {
   cur_state = next_state;
   mpi_x.reduce_fadds(layer_kernel_cols-1, @ptrcast([*]f32, &Rx), @ptrcast([*]f32, &b_next),
                      R_M_local, STATE_MACHINE); // reduce across rows towards left
+  // lower_traingular_chain_reduce.transfer_data(&Rx, R_M_local, STATE_MACHINE, &communication_tsc_start); // Won't call STATE_MACHINE
 }
 
 // Compute prolongation
@@ -507,24 +494,25 @@ task f_state() void {
 fn v_cycle_down() void {
   simprint.print_string("v_cycle_down\n");
   init_params();
+  lower_traingular_chain_reduce.transfer_data(&x, Nx, &communication_tsc_start);
+  if (px == py) {
+    simprint.fmt_with_coords("x_after_lower[] = {f}", .{ x[0] });
+  }  
   // print x_temp before reduction
   for (x) |val, i| {
     simprint.fmt_with_coords("x_before[{d}] = {f}", .{ i, val });
   }
   //  ----------------------
-  upper_traingular_chain_reduce.transfer_data(&x, Nx, &communication_tsc_start);
+  upper_traingular_chain_reduce.transfer_data(&x, Nx, &communication_tsc_start); // Won't call STATE_MACHINE
  //  ----------------------
-  // print x_temp after reduction
+  //print x_temp after reduction
   for (x) |val, i| {
-    simprint.fmt_with_coords("x_after_upper[{d}] = {f}", .{ i, val });
+    simprint.fmt_with_coords("x_after_upper[] = {f}", .{ val });
   }
-  lower_traingular_chain_reduce.transfer_data(&x, Nx, &communication_tsc_start);
-  for (x) |val, i| {
-    simprint.fmt_with_coords("x_after_lower[{d}] = {f}", .{ i, val });
-  }
- 
+  simprint.print_string("Finished printing\n");
+
   // The iterations will always be greater than 0, ensured in run_amg.py
-  @activate(STATE_MACHINE);
+  // @activate(STATE_MACHINE);
 }
 
 // V-cycle up function
