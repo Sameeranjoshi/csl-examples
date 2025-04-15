@@ -70,25 +70,27 @@ const reduce_mod = @import_module( "../../../../csl-libs/allreduce/pe.csl", @con
      .src1_dsr_ids = [1]u16{1}
      }));
 
-
-const modified_bcast_down_up = @import_module("../spatial-collectives/modules/modified_broadcast.csl", .{
-  .color_1 = fast_bcast_colors[1], .pe_id = pe_id_y, .root_id = pe_id_x,
-  .POS_DIR = SOUTH, .NEG_DIR = NORTH, .NUM_PES = layer_kernel_rows, .timestamp = timestamp}); // size = rows, 2 colors, north to south and south to north, start PE?
+// FastCC
+// const modified_bcast_down_up = @import_module("../spatial-collectives/modules/modified_broadcast.csl", .{
+//   .color_1 = fast_bcast_colors[1], .pe_id = pe_id_y, .root_id = pe_id_x,
+//   .POS_DIR = SOUTH, .NEG_DIR = NORTH, .NUM_PES = layer_kernel_rows, .timestamp = timestamp}); // size = rows, 2 colors, north to south and south to north, start PE?
 // const modified_bcast_right_left = @import_module("../spatial-collectives/modules/modified_broadcast.csl", .{
 //   .color_1 = fast_bcast_colors[3], .pe_id = pe_id_x, .root_id = pe_id_y,
 //   .POS_DIR = EAST, .NEG_DIR = WEST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp}); // size = cols, 2 colors, east to west and west to east, start PE?
 // const broadcast_right = @import_module("../spatial-collectives/modules/unidirectional_broadcast.csl", .{.color_1 = fast_bcast_colors[3], .pe_id = pe_id_x, .root_id = pe_id_y, .POS_DIR = EAST, .NEG_DIR = WEST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
 // const broadcast_left = @import_module("../spatial-collectives/modules/unidirectional_broadcast.csl", .{.color_1 = fast_bcast_colors[4], .pe_id = pe_id_x, .root_id = pe_id_y, .POS_DIR = WEST, .NEG_DIR = EAST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
 // const chain_reduce_left = @import_module("../spatial-collectives/modules/reduce.csl", .{.color_1 = fast_bcast_colors[2], .color_2 = fast_bcast_colors[3], .pe_id = pe_id_x, .root_id = pe_id_y, .POS_DIR = EAST, .NEG_DIR = WEST, .NUM_PES = layer_kernel_cols, .step = 1, .algo = 0, .timestamp = timestamp});
-const upper_traingular_chain_reduce = @import_module("../spatial-collectives/modules/upper_tri_reduce.csl", .{
-  .color_1 = fast_bcast_colors[2], .color_2 = fast_bcast_colors[3], .pe_id = pe_id_x, .root_id = pe_id_y, 
-  .POS_DIR = EAST, .NEG_DIR = WEST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
-const lower_traingular_chain_reduce = @import_module("../spatial-collectives/modules/lower_tri_reduce.csl", .{
-  .color_1 = fast_bcast_colors[4], .color_2 = fast_bcast_colors[5], .pe_id = pe_id_x, .root_id = pe_id_y, 
-  .POS_DIR = WEST, .NEG_DIR = EAST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
-const star_modified_right = @import_module("../spatial-collectives/modules/modified_star.csl", .{
-  .color_1 = fast_bcast_colors[6], .pe_id = pe_id_x, .root_id = pe_id_y, .POS_DIR = EAST, .NEG_DIR = WEST, 
-  .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
+// const upper_traingular_chain_reduce = @import_module("../spatial-collectives/modules/upper_tri_reduce.csl", .{
+//   .color_1 = fast_bcast_colors[2], .color_2 = fast_bcast_colors[3], .pe_id = pe_id_x, .root_id = pe_id_y, 
+//   .POS_DIR = EAST, .NEG_DIR = WEST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
+// const lower_traingular_chain_reduce = @import_module("../spatial-collectives/modules/lower_tri_reduce.csl", .{
+//   .color_1 = fast_bcast_colors[4], .color_2 = fast_bcast_colors[5], .pe_id = pe_id_x, .root_id = pe_id_y, 
+//   .POS_DIR = WEST, .NEG_DIR = EAST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
+// const star_modified_right = @import_module("../spatial-collectives/modules/modified_star.csl", .{
+//   .color_1 = fast_bcast_colors[6], .pe_id = pe_id_x, .root_id = pe_id_y, .POS_DIR = EAST, .NEG_DIR = WEST, 
+//   .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
+
+
 //x, b, A, R will be partitioned using 2D Block decomposition.
 // input
 var A_tile = @zeros([M_local*N_local]f32);
@@ -302,6 +304,8 @@ fn initialize() void {
   cur_state = next_state; // This is set by the f_state function.
   // Broadcast from diagonal PE to others in the same row
   mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, STATE_MACHINE);
+
+  // FastCC
   // broadcast_right.transfer_data(&D_inv, M_local, &communication_tsc_start, &communication_tsc_end);
   // broadcast_left.transfer_data(&D_inv, M_local, &communication_tsc_start, &communication_tsc_end);
   // modified_bcast_right_left.transfer_data(&D_inv, M_local, &communication_tsc_start, &communication_tsc_end);
@@ -362,9 +366,9 @@ fn compute_jacobi() void {
 
 fn bcast_jacobi() void {
   cur_state = next_state;
-  // mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local, STATE_MACHINE);
-  modified_bcast_down_up.transfer_data(&x_tile, N_local, &communication_tsc_start, &communication_tsc_end);
-  f_trigger_state_machine();  // calls next state.  
+  mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local, STATE_MACHINE);
+  // modified_bcast_down_up.transfer_data(&x_tile, N_local, &communication_tsc_start, &communication_tsc_end);
+  // f_trigger_state_machine();  // calls next state.  
 
 }
 
@@ -384,9 +388,9 @@ fn bcast_residual() void {
     @fsubs(dsd_residual_tile, dsd_b_tile, dsd_residual_tile);  // r = b - Ax
   }
   cur_state = next_state;
-  // mpi_y.broadcast(px, @ptrcast([*]u32, &residual_tile), M_local, STATE_MACHINE);
-  modified_bcast_down_up.transfer_data(&residual_tile, M_local, &communication_tsc_start, &communication_tsc_end);
-  f_trigger_state_machine();  // calls next state.
+  mpi_y.broadcast(px, @ptrcast([*]u32, &residual_tile), M_local, STATE_MACHINE);
+  // modified_bcast_down_up.transfer_data(&residual_tile, M_local, &communication_tsc_start, &communication_tsc_end);
+  // f_trigger_state_machine();  // calls next state.
 }
 
 // Compute restriction
@@ -414,9 +418,9 @@ fn bcast_prolongation() void {
     @fadds(dsd_x_tile, dsd_x_tile, dsd_px_sum_tile);  // x_tile = x_tile + Px
   }
   cur_state = next_state;
-  // mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local, STATE_MACHINE);
-  modified_bcast_down_up.transfer_data(&x_tile, N_local, &communication_tsc_start, &communication_tsc_end);
-  f_trigger_state_machine();  // calls next state.
+  mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local, STATE_MACHINE);
+  // modified_bcast_down_up.transfer_data(&x_tile, N_local, &communication_tsc_start, &communication_tsc_end);
+  // f_trigger_state_machine();  // calls next state.
 }
 
 // State machine task
@@ -499,20 +503,21 @@ fn v_cycle_down() void {
   simprint.print_string("v_cycle_down\n");
   init_params();
   // print x_temp before reduction
-  for (x) |val, i| {
-    simprint.fmt_with_coords("x_before[{d}] = {f}", .{ i, val });
-  }
+  // for (x) |val, i| {
+  //   simprint.fmt_with_coords("x_before[{d}] = {f}", .{ i, val });
+  // }
   //  ----------------------
   // upper_traingular_chain_reduce.transfer_data(&x, Nx, &communication_tsc_start); // Won't call STATE_MACHINE
   // lower_traingular_chain_reduce.transfer_data(&x, Nx, &communication_tsc_start);
-  if (Nx > 1) star_modified_right.transfer_data(&x, Nx, DONE, &communication_tsc_start) else star_modified_right.transfer_data_scalar(&x, Nx, DONE, &communication_tsc_start);
-  for (x) |val, i| {
-    simprint.fmt_with_coords("x_after_star[] = {f}", .{ val });
-  }
-  simprint.print_string("Finished printing\n");
+  // if (Nx > 1) star_modified_right.transfer_data(&x, Nx, DONE, &communication_tsc_start) else star_modified_right.transfer_data_scalar(&x, Nx, DONE, &communication_tsc_start);
+  // for (x) |val, i| {
+  //   simprint.fmt_with_coords("x_after_star[] = {f}", .{ val });
+  // }
+  // simprint.print_string("Finished printing\n");
 
   // The iterations will always be greater than 0, ensured in run_amg.py
-  // @activate(STATE_MACHINE);
+  cur_state = STATE_INIT;
+  @activate(STATE_MACHINE);
 }
 
 // V-cycle up function
@@ -559,13 +564,13 @@ comptime {
   @export_symbol(f_reference_timestamps);
 
   // spatial collectives
-  modified_bcast_down_up.configure_network();  
-  // modified_bcast_right_left.configure_network();
-  // broadcast_right.configure_network();
-  // broadcast_left.configure_network();
-  star_modified_right.configure_network();
-  upper_traingular_chain_reduce.configure_network();
-  lower_traingular_chain_reduce.configure_network();
+  // modified_bcast_down_up.configure_network();  
+  // // modified_bcast_right_left.configure_network();
+  // // broadcast_right.configure_network();
+  // // broadcast_left.configure_network();
+  // star_modified_right.configure_network();
+  // upper_traingular_chain_reduce.configure_network();
+  // lower_traingular_chain_reduce.configure_network();
 }
 
 // Helper functions for MPI timing
