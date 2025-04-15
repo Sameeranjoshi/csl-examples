@@ -37,6 +37,7 @@ const STATE_BCAST_RESIDUAL: i16 = 9;
 const STATE_COMPUTE_RESTRICTION: i16 = 10;
 const STATE_PROLONGATION: i16 = 11;
 const STATE_BCAST_PROLONGATION: i16 = 12;
+const DONE: local_task_id = @get_local_task_id(26);
 
 
 const math_lib = @import_module("<math>");
@@ -85,6 +86,9 @@ const upper_traingular_chain_reduce = @import_module("../spatial-collectives/mod
 const lower_traingular_chain_reduce = @import_module("../spatial-collectives/modules/lower_tri_reduce.csl", .{
   .color_1 = fast_bcast_colors[4], .color_2 = fast_bcast_colors[5], .pe_id = pe_id_x, .root_id = pe_id_y, 
   .POS_DIR = WEST, .NEG_DIR = EAST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
+const star_modified_right = @import_module("../spatial-collectives/modules/modified_star.csl", .{
+  .color_1 = fast_bcast_colors[6], .pe_id = pe_id_x, .root_id = pe_id_y, .POS_DIR = EAST, .NEG_DIR = WEST, 
+  .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
 //x, b, A, R will be partitioned using 2D Block decomposition.
 // input
 var A_tile = @zeros([M_local*N_local]f32);
@@ -167,7 +171,7 @@ var cur_state: i16 = 0;// State tracking variables
 var next_state: i16 = 0;
 
 // dummy
-const Nx = 1;
+const Nx = 2;
 var x = @constants([Nx]f32, @as(f32, 10.0));
 var x_ptr: [*]f32 = &x;
 
@@ -494,20 +498,16 @@ task f_state() void {
 fn v_cycle_down() void {
   simprint.print_string("v_cycle_down\n");
   init_params();
-  lower_traingular_chain_reduce.transfer_data(&x, Nx, &communication_tsc_start);
-  if (px == py) {
-    simprint.fmt_with_coords("x_after_lower[] = {f}", .{ x[0] });
-  }  
   // print x_temp before reduction
   for (x) |val, i| {
     simprint.fmt_with_coords("x_before[{d}] = {f}", .{ i, val });
   }
   //  ----------------------
-  upper_traingular_chain_reduce.transfer_data(&x, Nx, &communication_tsc_start); // Won't call STATE_MACHINE
- //  ----------------------
-  //print x_temp after reduction
+  // upper_traingular_chain_reduce.transfer_data(&x, Nx, &communication_tsc_start); // Won't call STATE_MACHINE
+  // lower_traingular_chain_reduce.transfer_data(&x, Nx, &communication_tsc_start);
+  if (Nx > 1) star_modified_right.transfer_data(&x, Nx, DONE, &communication_tsc_start) else star_modified_right.transfer_data_scalar(&x, Nx, DONE, &communication_tsc_start);
   for (x) |val, i| {
-    simprint.fmt_with_coords("x_after_upper[] = {f}", .{ val });
+    simprint.fmt_with_coords("x_after_star[] = {f}", .{ val });
   }
   simprint.print_string("Finished printing\n");
 
@@ -525,8 +525,14 @@ fn v_cycle_up() void {
   @activate(STATE_MACHINE);
 }
 
+task f_done() void {
+  simprint.print_string("DONE\n");
+  sys_mod.unblock_cmd_stream();
+}
+
 comptime {
   @bind_local_task(f_state, STATE_MACHINE);
+  @bind_local_task(f_done, DONE);
 
   @export_symbol(ptr_A, "A");
   @export_symbol(ptr_x, "x");
@@ -557,6 +563,7 @@ comptime {
   // modified_bcast_right_left.configure_network();
   // broadcast_right.configure_network();
   // broadcast_left.configure_network();
+  star_modified_right.configure_network();
   upper_traingular_chain_reduce.configure_network();
   lower_traingular_chain_reduce.configure_network();
 }
