@@ -1,0 +1,21 @@
+const supported_targets_ = @import_module("<target_name/internal/supported_targets>");
+
+const supported_targets = supported_targets_.supported_targets;
+
+fn get_target_name() comptime_string {
+  for (supported_targets) |target| {
+    if (@is_arch(target)) {
+      return target;
+    }
+  }
+  var errorMsg = "Unsupported target architecture. Supported architectures: ";
+  for (supported_targets) |target, index| {
+    if (index == 0) {
+      errorMsg = @strcat(errorMsg, target);
+    } else {
+      errorMsg = @strcat(errorMsg, ", ", target);
+    }
+  }
+  @comptime_print(errorMsg);
+  @comptime_assert(false);
+}

@@ -1,0 +1,38 @@
+
+param width:i16;
+param height:i16;
+
+param MEMCPYH2D_1 = {};  // 1-th H2D specified at runtime
+param MEMCPYH2D_2 = {};  // 2-th H2D specified at runtime
+param MEMCPYH2D_3 = {};  // 3-th H2D specified at runtime
+param MEMCPYH2D_4 = {};  // 4-th H2D specified at runtime
+
+param MEMCPYD2H_1 = {};  // 1-th D2H specified at runtime
+param MEMCPYD2H_2 = {};  // 2-th D2H specified at runtime
+param MEMCPYD2H_3 = {};  // 3-th D2H specified at runtime
+param MEMCPYD2H_4 = {};  // 4-th D2H specified at runtime
+
+param LAUNCH = {}; // RPC via memcpy streaming
+                                      // LAUNCH must be a routable color, similar to H2D
+                                      // because the user must define WTT for LAUNCH
+
+fn get_params(px:i16) comptime_struct {
+
+  const first_pe: bool = (0 == px);
+  const last_pe: bool = ((@as(i16,width)-1) == px);
+
+  return .{
+    .first_pe = first_pe,
+    .last_pe = last_pe,
+
+    .MEMCPYH2D_1 = MEMCPYH2D_1,
+    .MEMCPYH2D_2 = MEMCPYH2D_2,
+    .MEMCPYH2D_3 = MEMCPYH2D_3,
+    .MEMCPYH2D_4 = MEMCPYH2D_4,
+    .MEMCPYD2H_1 = MEMCPYD2H_1,
+    .MEMCPYD2H_2 = MEMCPYD2H_2,
+    .MEMCPYD2H_3 = MEMCPYD2H_3,
+    .MEMCPYD2H_4 = MEMCPYD2H_4,
+    .LAUNCH = LAUNCH
+  };
+}

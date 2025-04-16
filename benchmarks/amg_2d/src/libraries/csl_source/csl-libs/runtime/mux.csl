@@ -1,0 +1,896 @@
+
+//
+// To avoid a loop of "mux td", "mux" and "mux adaptor", we ask N >= 2.
+// This requires runtime to append empty PE in user's rectangle if the user
+// only uses one row.
+//
+// multiplexer: gather the data stream from a set of row PEs
+// mux is a system kernel instantiated by the runtime (CSELFRunner)
+// It can be placed at either east or west edge of the core rectangle,
+// for example:
+//
+//     +------+     +------+
+// <-- | mux  | <-- | core |
+//     +------+     +------+
+//
+// or
+//     +------+     +------+
+//     | core | --> | mux  |
+//     +------+     +------+
+//
+// Behavior:
+// The data stream from a core rectangle contains control wavelets,
+// which are generated to switch the router.
+// The control wavelet is set to be NOCE (not enter compute engine),
+// so we can redirect data through RAMP to skip these control wavelets.
+//
+// The same switch technique as memcpyd2h.csl is used to aggregate the data
+// from different PEs of mux, from north to south
+//
+// The last PE redirects data stream to east edge in which a "mux adaptor" can
+// remove NOCE ctrl wavelets and redirect the data to LVDS.
+//
+// Here is layout of the mux
+//
+//   c0   +-----+
+//   ---> | P0  |
+//        +-----+
+//           | c1
+//           v
+//   c0   +-----+
+//   ---> | P1  |
+//        +-----+
+//           | c1
+//           v
+//   c0   +-----+
+//   ---> | P2  |
+//        +-----+
+//           | c1
+//           v
+//   c0   +-----+  c1  +-------------+
+//   ---> | P3  | ---> | mux adaptor |
+//        +-----+      +-------------+
+//
+// where
+//   c0 is RXACT
+//   c1 is MEMCPYD2H_DATA
+//
+// c0 { rx = WEST, tx = RAMP } removes NOCE ctrl wavelets
+// c1 { dynamic switch } aggregates data from north to south
+//
+//
+// Example: suppose we have 4-by-1 PEs from north to south
+//
+// initial routing
+// north   -->   --->-->   -->-->  -->-->  south
+//         ^
+//         |
+//
+// after 1st control wavelet from PE0 to advance switch of PE1
+//   (PE0 does not change switch because it keeps sending data)
+//    -->     -->   -->-->  -->-->
+//    ^       ^
+//    |       |
+// after 2nd control wavelet from PE1 to advance switch of 2 PEs
+//    -->   -->-->     -->  -->-->
+//    ^                ^
+//    |                |
+// after 3rd control wavelet from PE2 to advance switch of 2 PEs
+//    -->   -->-->   -->-->   -->
+//    ^                       ^
+//    |                       |
+// after 4th control wavelet from PE3 to advance switch of 2 PEs
+//    -->   -->-->   -->-->   -->-->
+//    ^
+//    |
+//
+// Each PE sends out data from FIFO, then triggers a switch advance command
+// Only first PE can send out the data because the routing is {.rx = RAMP, .tx = SOUTH},
+// other PEs cannot send data to the router because of {.rx = NORTH, .tx = SOUTH}.
+//
+// First PE sends the control wavelet after the data is out.
+// The control wavelet will advance the switch of 2nd PE, but keep 1st (self) PE unchanged
+// 1st PE still has the same routing {.rx = RAMP, .tx = SOUTH}, and
+// 2nd PE will have routing {.rx = RAMP, .tx = SOUTH}
+//
+// Now 2nd PE can send the data to the router because rx = RAMP, and then
+// it will send out the control wavelet to advance switch of 2nd and 3rd PEs.
+//
+
+// demux/mux has the following protocal
+//  struct {
+//    u16 enable_receiver[N]; // N is max. number of receivers per LVDS
+//    u16 pes_per_receiver;
+//    u16 pe_length;
+//  }
+//  Each active PE of mux will receive (pes_per_receiver*pe_length) wavelets
+//  So we need to reset the PE, identify which one is active, and change
+//  switch of active PEs
+//
+
+// ------------ how to reconfigure a switch at runtime
+//
+// The following routing is pos0
+//
+// north   -->   --->-->   -->-->  -->-->  south
+//         ^
+//         |
+//
+// Observation 1: each PE has the same pos1={rx = RAMP}
+//   once a PE is at pos1, it can send out data to its neighbor
+//
+// Observation 2: if 1st PE of ROI is Pk, then we need to add {rx = RAMP} in color config
+//   register of Pk, we can use OR operation to setup color config reg
+//
+// Observation 3: 1st PE of ROI needs to send reset (0x99f 9249) signal to itself, in order
+//   to switch back to pos0
+//
+// Observation 4: if 1st PE of ROI is k > 0, then Pk has {rx = NORTH, RAMP} for pos0
+//   Although P0 has {rx = EAST, RAMP}, P0, P1, ... P{k-1} will not send any data and control
+//   wavelets, so Pk is the 1st PE to send the data, we don't need to change the pos0 of P0
+//
+// Observation 5: if last PE of ROI is m, then P{m+1}, ... P{h-1} will not change the switch,
+//   only forward the data, so Pm only sends cmd1=sw_advance to itself, does not change the
+//   switch of P{m+1}
+//
+
+// The control flow:
+// MEMCPYD2H_DATA is in teardown mode at comptime
+// f_startup --> f_config (reconfigure the switch)
+//           --> f_txact_next_tensor --> f_txact_next_chunk
+//           --> send TD if 1st PE of routing ROI
+//           --> all PEs in the routing ROI wait for TD
+//           --> T29 calls f_startup
+//
+// f_startup(): receive config parameters from mux adaptor
+// f_config(): decode config parameters and reconfigure the switch
+// f_teardown(): receive teardown from 1st PE of routing ROI
+//    turn MEMCPYD2H_DATA back to teardown mode and
+//    call f_startup() to wait for next D2H command
+//
+// f_txact_next_tensor()
+//    Each PE in the mux receives pes_per_receiver * pe_length wavelets
+//    pes_per_receiver <= dim(WSE) ~= 1000
+//    pe_length can be 12K
+//    so pes_per_receiver * pe_length can exceed 16-bit limit
+//    for j in range(pe_length)
+//        receive pes_per_receiver from core into fifo
+//        send pes_per_receiver data to mux adaptor
+//    end
+//
+// (1) two back to back D2H commands are serialized, starting at f_startup
+//     i.e. next command is read only if current tensor is sent completely
+// (2) data from core can only enter if the PE is active and read data from
+//     core via "@mov32(fifo, fab_recv_wdsd, .{.async=true} );"
+//     the next tensor could come early from the core, however the router
+//     will not process it if the current tensor is still on going.
+//
+// Example: D2H tensor A and B back to back
+//    A is from row 0 of the core, and B is from row 1 of the core
+//    when 1st D2H is processed, P0 of mux sends the data and P1 of the mux
+//    has no data to send, it just forwards the data from P0.
+//    At the same time, B from row 1 of the core arrives P1. B is waiting
+//    at the router because P1 uses microthread to read the data. However
+//    P1 has nothing to do for the current tensor (A is from row 0), P1
+//    keeps forwarding the data, and its state is back to f_startup, waiting
+//    for next command from adaptor.
+//    The next command will not come until 1st command finishes.
+//    So there is no race condition for mux.
+//
+
+// local colors
+param RXACT: color; // receive data from core rectangle
+             // include both data wavelets and control wavelets
+
+param MEMCPYD2H_DATA: color; // aggregate data from north to south
+                      // send the data wavelets and control wavelets
+
+param RXACT_CONFIG: color; // receive config parameters from mux adaptor
+
+// local tasks
+param STARTUP : local_task_id;
+param CONFIG: local_task_id;  // received config parameters
+param TXACT_NEXT_TENSOR: local_task_id;
+param TXACT_NEXT_CHUNK: local_task_id;
+param SEND_CTRL : local_task_id;  // send switch advance
+param SEND_DATA : local_task_id;  // send data
+
+// parameters
+param chunk : i16; // chunk size of round-robin
+                   // this chunk size can be different from chunk siz in core rectangle
+                   // W-S chooses chunk = 1
+
+param height : i16 ;
+
+param first_pe: bool; // (0 == py);
+param last_pe: bool;  // ((height-1) == py);
+param start_pos_y_mux: i16; // starting y coordinate of the mux
+
+
+const N = height;
+
+
+const fifo_enable : i16 = 1;
+
+
+const iq_rxact = @get_input_queue(0);
+const iq_rxact_config = @get_input_queue(2);
+
+const oq_memcpyd2h_data = @get_output_queue(1);
+
+const task_id_rxact = if (@is_arch("wse3")) @get_data_task_id(iq_rxact) else @get_data_task_id(RXACT);
+const task_id_rxact_config = if (@is_arch("wse3")) @get_data_task_id(iq_rxact_config) else @get_data_task_id(RXACT_CONFIG);
+
+//--------------------- system utility for teardown
+
+const tile_config = @import_module("<tile_config>");
+
+const switch_config = tile_config.switch_config;
+const color_config = tile_config.color_config;
+const memcpyh2d_addr = color_config.get_color_config_addr(MEMCPYD2H_DATA);
+const memcpyh2d_cur_pos_addr = switch_config.get_switch_config_addr(MEMCPYD2H_DATA, switch_config.switch_status);
+const fabric = @import_module("<layout>");
+
+// mux is a column of PEs, the pe_id = 0,1,2,..., h-1
+// The relative y-coordinate is the id of the mux, independent of x-coordinate
+// WARNING: this version only works for single LVDS
+// for multi-lvds, we need to introduce start_pos_y_mux, which varies per mux module
+// ---
+//    start_pos_y_mux = 0, h0, h0+h1, ...
+//    const start_pos_y_mux : i16 = start_pos_y_mux_list[idx];
+// ---
+fn get_pe_id() u16 {
+    return fabric.get_y_coord() - @as(u16,start_pos_y_mux);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Main memory (48KB)
+////////////////////////////////////////////////////////////////////////////////
+
+var fifo_buffer = @zeros([1024*8]f32);
+const fifo = @allocate_fifo(fifo_buffer);
+
+
+// enable_receiver[N] = config_buf[0:N-1]
+// pes_per_receiver = config_buf[N]
+// pe_length = config_buf[N+1]
+// num_receivers = config_buf[N+2]
+//
+var config_buf = @zeros([N+3]i16);
+
+// Counter init value for the next RXACT tensor. This value is equal to the
+// PE's index in the order of receivers. If the PE does not receive any data
+// then this value will be 0xffff.
+var receiver_idx: i16 = -1; // 0xffff;
+
+// Number of receivers for the next tensor, corresponds to filter limit
+var num_receivers: i16 = 0;
+
+// if the receiver is inactive, we still send out zero data, otherwise
+// we will hang the output y because it is Cliff distribution
+// the adaptor will send the same pes_per_receiver and pe_length for all
+// receivers
+// First of all, we will receive
+//      receiver_idx = enable_receiver[i] = k >= 0: position of filtering
+//                                         -1    : receiver is off
+//
+//
+var pes_per_receiver: i16 = 0; // number of active PEs per receiver
+var pe_length: i16 = 0;        // number of data wavelets per PE
+
+// implement nested fo-loop
+// for j in range(pe_legnth)
+//   for i in range(pes_per_receiver)
+//      send chunk wavelet to fabric
+//      send ctrl to update the switch
+// end
+var num_send : i16 = 0; // pe_length for active receiver, 0 otherwise
+var idx_send : i16 = 0;
+
+var num_data : i16 = 0; // pes_per_receiver*chunk for one send
+var idx_data : i16 = 0;
+
+// Assume a submatrix in core rectangle, only a consecutive rows will be
+// processed, and sent to mux, so we only need two parameters y_first and
+// y_last to specify this submatrix
+//
+// y_first = argmin{ j: enable_receivers[j] != -1, 0 <= j < N }
+// y_last  = argmax{ j: enable_receivers[j] != -1, 0 <= j < N }
+//
+// f_config() will prepare y_first and y_last, either
+// - received from mux adaptor
+// - compute locally
+//
+var y_first : i16 = 0;
+var y_last  : i16 = 0;
+// WARNING: under the assumption of submatrix
+// is_active = (receiver_idx != -1)
+var is_active: i16 = 0; // is_active = (_pe_id <= y_last) and (_pe_id >= y_first)
+
+// routing_active = PE in [y_first, end)
+var routing_active: bool = false; // routing_active = (_pe_id >= y_first)
+
+// (_pe_id, height) can identify which PE starts to send the data and
+// last PE which only advance its own switch
+var _pe_id : i16 = 0 ;
+
+
+////////////////////////////////////////////////////////////////////////////////
+// DSDs
+// data-structure descriptors (DSDs), loaded into data-structure registers (DSRs)
+//
+// Queues 0,1: input depth 6 wavelets
+// Queues 2,3: input depth 4 wavelets
+// Queues 4-7: input depth 2 wavelets
+//
+// queues 0,1: output depth 2 wavelets
+// queues 2,3: output depth 6 wavelets
+// queues 4,5: output depth 2 wavelets
+////////////////////////////////////////////////////////////////////////////////
+
+
+
+// The length of fabin is set to pes_per_receiver at runtime
+// ctrl wavelets are excluded because they are NOCE
+var fab_recv_wdsd =  @get_dsd(fabin_dsd, .{
+   .extent = chunk,
+   .fabric_color = RXACT,
+   .input_queue = iq_rxact
+});
+
+
+// redirect "chunk" wavelets from FIFO
+// need different microthread ID from fabin
+const fab_trans_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = chunk,
+    .fabric_color = MEMCPYD2H_DATA,
+    .output_queue = oq_memcpyd2h_data
+});
+
+
+// WARNING: control wavelet must be sent with the same microthread, via the same output buffer,
+// otherwise, we may see only one data wavelet, then 2nd is the control wavelet, then
+// the remaining data cannot be sent out because the routing is back to {.rx=NORTH, .tx=SOUTH},
+// there is no path from RAMP to the router.
+const fab_trans_ctrl_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .control = true,
+    .fabric_color = MEMCPYD2H_DATA,
+    .output_queue = oq_memcpyd2h_data
+});
+
+
+// receive N+3 i16 config parameters
+const mem_buf_config_np3_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N+3} -> config_buf[i] });
+const fab_rx_config_wdsd = @get_dsd(fabin_dsd, .{
+   .extent = N+3,
+   .fabric_color = RXACT_CONFIG,
+   .input_queue = iq_rxact_config
+});
+
+////////////////////////////////////////////////////////////////////////////////
+// Tasks
+// syntax
+//     task_begin(name, entrypoint, color)
+////////////////////////////////////////////////////////////////////////////////
+
+const switches = @import_module("<memcpy/memcpy_switches>");
+
+// The following arrays define values for control wavelets, which update the
+// switch position at the recipient PEs.
+// All are comptime constants.
+//
+// ctrl_1  is for last PE in ROI which only changes the its own switch
+// ctrl_11 is for other PEs which changes switch of two consecutive PEs
+var ctrl_11 = [1]u32 { switches.ctrl(switches.switch_cmd_11()) };
+var ctrl_1  = [1]u32 { switches.ctrl(switches.switch_cmd_1()) };
+
+var mem_ctrl_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> ctrl_11[i] });
+
+// teardown from casm
+// teardown_buf[0] = (1 << 31) | (0b111 << 22)
+//
+// teardown from csl
+// from cslang/test-e2e/dynamic_filters/sender.csl
+//  31=0x1f = no entrypoint
+//
+// teardown wavelet = 0x1df 0000
+//const teardown_buf = [1]u32{(31 << 16) | 0b111 << 22};
+// teardown wavelet = 0x9df 9249
+const teardown_buf = [1]u32 { switches.ctrl(switches.teardown_cmd_1()) };
+
+const mem_buf_td_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> teardown_buf[i] });
+
+
+// Each PE has three parameters
+//   - chunk
+//   - pes_per_receiver
+//   - pe_length
+// to round-robin data from core rectangle, such that
+// where (chunk*pes_per_receiver*pe_length) is the number of data wavelets from core rectangle
+//
+// The switch has to send out the local data in round-robin sense according to the order of
+// tensor [pe_length][pes_per_receiver][chunk]
+//
+// Here is the pseudocode of mux
+// ---
+// for (j = 0 ; j < pe_length ; j++){
+//    for (i = 0 ; i < pes_per_receiver; i++){
+//       send chunk from FIFO to fabric
+//       send ctrl to fabric
+//    }
+// }
+// ---
+//
+//
+
+// f_startup: receive config parameter from mux adaptor
+//            and trigger f_config
+// f_config:
+//       decode config parameters
+//       reconfigure switches
+//       if receiver_idx != -1
+//           receive data from core to fifo
+//           send data/ctrl
+//       end
+//
+// task 29: receive teardown from 1st PE of routing ROI
+//       call f_startup() to wait for next D2H command
+//
+
+// f_startup is called for each D2H, "push_fifo_inf" makes sure we only calls @mov32(fifo, fab_recv_wdsd) once,
+var push_fifo_inf : bool =  false;
+
+task f_startup() void {
+
+    if (false == push_fifo_inf){
+        push_fifo_inf = true;
+        if (0 < fifo_enable){
+            // The length of all other types of DSRs is specified by the length field of its DSD. When
+            // the bits encoding the length are 0x7fff, the length is infinite
+            fab_recv_wdsd = @set_dsd_length(fab_recv_wdsd, 0x7fff);
+
+            // FIFO listens for color RXACT in input queue 0
+            // move wavelets from fabric (core) to the FIFO
+            // only data wavelets, NOCE ctrl wavelets are removed
+            @mov32(fifo, fab_recv_wdsd, .{.async=true} );
+        }
+    }
+
+    // retrieve PE id in the beginning to avoid keep updating pe_id
+    // because pe_id is no longer a comptime parameter
+    _pe_id = @as(i16, get_pe_id());
+
+    // receive config parameters from mux adaptor
+    @mov16(mem_buf_config_np3_dsd, fab_rx_config_wdsd, .{.async=true, .activate=f_config} );
+}
+
+
+// config_buf[N+3] is received, including
+// - enable_receiver[N] = config_buf[0:N-1]
+// - pes_per_receiver = config_buf[N]
+// - pe_length = config_buf[N+1]
+// - num_receivers = config_buf[N+2]
+//
+// If there is no active receivers, mux adaptor does not send
+// any data. But mux adaptor still sends config parameters.
+//
+task f_config() void {
+    // (1) enable_receiver[i] = k >= 0: position of filtering
+    //                         -1    : receiver is off
+    // handled by header_sentinel
+    receiver_idx = config_buf[_pe_id];
+
+    // (2) Use received values unless this PE does not act as a receiver for the
+    // next tensor
+    pes_per_receiver = config_buf[N];
+
+    // (3) number of wavelets per PE
+    pe_length = config_buf[N+1];
+
+    // (4) number of active receivers
+    num_receivers = config_buf[N+2];
+
+    // (5) boundary of ROI = (px, py), (w, h)
+    // y_first = argmin{ j: enable_receivers[j] != -1, 0 <= j < N }
+    // y_last  = argmax{ j: enable_receivers[j] != -1, 0 <= j < N }
+    // all active receivers --> y_first = 0, y_last = N-1
+    // one active receiver --> y_first = y_last
+    // Exception: if all PEs are inactive,
+    //    y_first = N and y_last = -1
+    // (violates 0 <= y_first <= y_last < N)
+    // reset y_first = 0 and y_last = N-1.
+    // f_txact_next_tensor() will set num_send = 0.
+    // f_txact_next_chunk() will not send any data out, the operation is
+    // 1st PE sends TD and others wait for TD.
+    //
+    y_first = N;
+    y_last  = -1;
+    var row : i16 = 0;
+    while(row < N) : (row +=1) {
+        if (-1 != config_buf[row]){
+            //y_first = min(y_first, row);
+            if ( y_first > row) { y_first = row ;}
+            //y_last  = max(y_last,  row);
+            if ( y_last < row ) { y_last = row; }
+        }
+    }
+    if ( N == y_first ) {
+        // all receivers are INactive
+        y_first = 0;
+    }
+    if ( -1 == y_last ){
+        // all receivers are INactive
+        y_last = N-1;
+    }
+    // 0 <= y_first <= y_last < N
+
+    // (1) setup switch according to config parameters
+    // 1. pos0 (color config reg)
+    // 2. pos1 (switch config reg)
+    //    pos1 = {.rx = RAMP} for all PEs and never changed
+    //
+    // routing_active = PE in [y_first, end=height)
+    routing_active = false;
+    if (_pe_id >= y_first){
+        routing_active = true;
+    }
+
+    // is_active = [y_first, y_last]
+    is_active = 0;
+    if ( (_pe_id <= y_last) and (_pe_id >= y_first) ){
+        is_active = 1;
+    }
+
+    if (routing_active){ // _pe_id >= y_first
+        // reset switch position to pos0
+        // WARNING: if switch config register does not reset the switch position back to pos0,
+        // it is possible that some PE is at pos1 after the switch is reconfigured and the sending
+        // pattern is messed up, for example, the PE sends data first, then forwards the data from
+        // the west.
+        switch_config.clear_current_position(memcpyh2d_cur_pos_addr);
+
+        // mux.csl has at least two PEs (height >= 2)
+        const tx_dir = if (last_pe) EAST else SOUTH;
+        if ( y_first == _pe_id ){
+            // 1st PE must has {rx = RAMP} to send out the data
+            // .rx = .{ RAMP },.tx = .{ SOUTH },
+            color_config.reset_routes(memcpyh2d_addr, .{.tx = tx_dir, .rx = RAMP});
+        }else{
+            // y_first < _pe_id
+            // middle:  .rx = .{ NORTH }, .tx = .{ SOUTH },
+            // last pe: .rx = .{ NORTH }, .tx = .{ EAST },
+            color_config.reset_routes(memcpyh2d_addr, .{.tx = tx_dir, .rx = NORTH});
+        }
+
+
+        // insert one instruction to resolve RAW hazard
+        const dummy = switch_config.get_switch_config_addr(MEMCPYD2H_DATA, tile_config.target.switch_status);
+        var r_switch_state = @get_config(dummy);
+
+        // (2) clear teardown-in-progress bit
+        // config_reg[c] ^= mask where mask = 1 << 14
+        tile_config.teardown.exit(MEMCPYD2H_DATA);
+
+        // (3) send the tensor which has (pes_per_receiver*pe_length*chunk) wavelets
+        // per active receiver
+        // TXACT_NEXT_TENSOR handles inactive PEs.
+        // case 1: PE is in ROI, send data/ctrl pair
+        // case 2: PE is NOT in ROI, does nothing
+        // Exception: if all PEs are inactive, ROI is [0, h),
+        // all PEs are in the ROI, but no PE sends out data
+        @activate( TXACT_NEXT_TENSOR );
+
+    }else{
+        // NOT in the routing ROI
+        // - keep MEMCPYD2H_DATA in teardown mode
+        // - D2H only has TD covers [y_first, end)
+        @activate( STARTUP ); // wait for next D2H command
+    }
+}
+
+
+// 1st PE of routing ROI sends TD after the operation is done.
+task f_teardown() void {
+
+    // (1) Read TIP register (TAMAP_TEARDOWN_PEND_ADDR_[LO|HI]) to clear
+    const pending = tile_config.teardown.get_pending();
+
+    // The operation is done, wait for next D2H command
+    @activate( STARTUP );
+}
+
+
+// All PEs call this task but only active receiver sends (pes_per_receiver*pe_length*chunk) wavelets
+//
+// for j in range( pe_length )
+//    send pes_per_receiver*chunk to adaptor
+// end
+//
+task f_txact_next_tensor() void {
+
+// WARNING: is_active = (-1 != receiver_idx)
+// inactive receiver has num_send = 0
+    num_send = 0;
+    if (-1 != receiver_idx){
+        num_send = pe_length;
+    }
+    idx_send = 0;
+
+    // case 1: fifo is on
+    //    fab_recv_wdsd has infiniate (0x7fff) length and push data to fifo in STARTUP
+    // case 2: fifo is off
+    //    fab_recv_wdsd has length chunk (=1)
+
+    // configure mem dsd once on ROI: [y_first, y_last]
+    // - last PE of active receivers: sends cmd1
+    // - other active receivers: send cmd1 and cmd2
+    if ( 0 < is_active ){
+        if ( _pe_id == y_last ){
+            // last PE of "active receivers" only changes the switch of itself
+            mem_ctrl_buf_dsd =  @set_dsd_base_addr(mem_ctrl_buf_dsd, ctrl_1);
+        }else{
+            // other PE in [y_first, y_last) changes the switch of itself and its neighbor
+            mem_ctrl_buf_dsd =  @set_dsd_base_addr(mem_ctrl_buf_dsd, ctrl_11);
+        }
+    }
+
+    @activate( TXACT_NEXT_CHUNK );
+
+}
+
+
+//
+// Goal: send (pe_length * pes_per_receiver * chunk) to fabric
+//
+// Each call of f_txact_next_chunk sends pes_per_receiver data
+// The number of iterations num_send = pe_length
+//
+// for each j in num_send
+//    move pes_per_receiver to fifo
+//    call SEND_DATA to send out data/ctrl pes_per_receiver times
+// end
+//
+task f_txact_next_chunk() void {
+    // WARNING: inactive receiver has num_send = 0, so the condition (0 < is_active) is
+    // not necessary
+    if ( idx_send < num_send ){
+        num_data = pes_per_receiver;
+        idx_data = 0;
+        @activate( SEND_DATA );
+        idx_send = idx_send + 1; // move to next chunk
+    }else{
+        // the tensor is done, including
+        //  - inactive receiver
+        //  - active receiver, has sent out the tensor
+        if (y_first == _pe_id){
+            // 1st PE of routing ROI sends TD to turn MEMCPYD2H_DATA back to teardown mode
+            @mov32(fab_trans_ctrl_wdsd, mem_buf_td_dsd, .{.async=true} );
+        }
+        // other PEs (y_first < _pe_id) waits for TD (teardown handler calls STARTUP)
+    }
+}
+
+
+// Only active receiver calls this task
+task f_send_data() void {
+
+    if ( idx_data < num_data ){
+        // Move a data wavelet from the FIFO to fabric
+        if (0 < fifo_enable){
+            @mov32(fab_trans_wdsd, fifo, .{.async=true, .activate=f_send_ctrl} );
+        }else{
+            @mov32(fab_trans_wdsd, fab_recv_wdsd, .{.async=true, .activate=f_send_ctrl} );
+        }
+        idx_data = idx_data + 1;
+    }else{
+        // sending of pes_per_receiver is done, continue next chunk
+        @activate(TXACT_NEXT_CHUNK);
+    }
+}
+
+
+// Only active receiver calls this task
+task f_send_ctrl() void{
+    // only DSD operands are allowed for async operations
+    @mov32(fab_trans_ctrl_wdsd, mem_ctrl_buf_dsd, .{.async=true, .activate=f_send_data } );
+}
+
+
+
+comptime {
+
+    @comptime_assert( 2 <= N);
+
+    @comptime_assert( 1 == chunk );
+
+    @activate(STARTUP);
+    @block(task_id_rxact); // use microthread
+    @block(task_id_rxact_config); // use microthread
+
+    @bind_local_task( f_startup, STARTUP);
+    @bind_local_task( f_send_ctrl, SEND_CTRL);
+    @bind_local_task( f_send_data, SEND_DATA);
+    @bind_local_task( f_txact_next_tensor, TXACT_NEXT_TENSOR );
+    @bind_local_task( f_txact_next_chunk, TXACT_NEXT_CHUNK );
+
+    @bind_local_task( f_teardown, tile_config.teardown.get_task_id() );
+    @bind_local_task( f_config, CONFIG);
+
+}
+
+
+// routing of RXACT, from WEST to RAMP for each PE in mux
+// this works for any N
+comptime {
+    @set_local_color_config(RXACT, .{ .routes = .{ .rx = .{WEST}, .tx = .{RAMP} } } );
+}
+
+// Routing of MEMCPYD2H_DATA
+//
+// Data passing path is from north to south.
+// Last PE redirects data to east, not south.
+//
+// North                     South
+//    -->   --->-->   -->-->
+//    ^
+//    |
+//   sw_adv
+//    -->      -->   -->-->
+//    ^        ^
+//    |        |
+//   data     data
+//            sw_adv
+//    -->     --> -->     -->
+//    ^                   ^
+//    |                   |
+//   sw_adv              data
+//                      sw_adv
+//    -->       -->    --> -->
+//    ^         ^
+//    |         |
+//             data
+//             sw_adv
+//
+// MEMCPYD2H_DATA is in teardown mode initially.
+// Each PE configures the switch
+//   - in routing ROI
+//     send data and wait for TD
+//   - not in routing ROI
+//     wait for next command
+// 1st PE in ROI sends TD to other PEs in routing ROI.
+//
+// WARNING 1: pop_mode must be pop_on_advance, otherwise, teardown wavelet
+//   will shift 3 bits due to "pop one instruction", for example
+//   P0 receives 0x1df0000 (teardown)
+//   P1 receives 0x1f80000 (pop one instruction)
+// WARNING 2: if pop_mode = pop_on_advance, P0 cannot have NOP in the ctrl
+//   wavelet, otherwise this NOP instruction is not popped out, and cause
+//   wrong number of data received in mux adaptor
+//
+comptime {
+    const firstConfig = .{
+        .routes = .{
+            .rx = .{ RAMP },
+            .tx = .{ SOUTH },
+        },
+        .switches= .{
+            .pos1 = .{ .rx = RAMP },
+            .ring_mode = true,
+            .pop_mode = .{ .pop_on_advance = true },
+        },
+        .teardown = true
+    };
+    const secondConfig = .{
+        .routes = .{
+            .rx = .{ NORTH },
+            .tx = .{ SOUTH },
+        },
+        .switches= .{
+            .pos1 = .{ .rx = RAMP },
+            .ring_mode = true,
+            .pop_mode = .{ .pop_on_advance = true },
+        },
+        .teardown = true
+    };
+// last PE redirects the wavelets to east "mux adaptor"
+// A common pattern is to set the last PE in the chain to pop_always and set all the rest to pop_on_advance
+// In this way, last PE will modify the arrival teardown wavelet, shift one instruction, so the adaptor no
+// longer sees teardown 0b111, only sees 0b100 (NOCE, NOP)
+// WARNING: it shows wrong result
+// Root cause: The teardown wavelet 0x1df0000  enters the last PE, then it leaves the last PE with the value
+// 0x1f8000 because it pops one instruction due to pop_always mode.
+// The data stream has data wavelet and control wavelet interleaved, the control wavelets must be NOCE such
+// that the adaptor only sees data wavelets. Now the teardown becomes 0x1f8000  which is no longer a teardown
+// wavelet, so adaptor sees a control wavelet of 0b000, which is NOT NOCE mode, and this wavelet enters the
+// adaptor.
+//
+// If teardown = 0x9df,9249  (cmd1=teardown+NOCE, others=NOP+NOCE), then we can use always_pop for last PE
+//
+    const lastConfig = .{
+        .routes = .{
+            .rx = .{ NORTH },
+            .tx = .{ EAST },
+        },
+        .switches= .{
+            .pos1 = .{ .rx = RAMP },
+            .ring_mode = true,
+            .pop_mode = .{ .always_pop = true },
+        },
+        .teardown = true
+    };
+
+
+    if ( first_pe ){
+        // only 1st PE of active receivers can do RAMP -> SOUTH
+        @set_local_color_config(MEMCPYD2H_DATA, firstConfig );
+    }else if ( last_pe ){
+        // last PE redirects data to east
+        @set_local_color_config(MEMCPYD2H_DATA, lastConfig );
+    }else{
+        // middle PE: 0 < pe < h-1
+        @set_local_color_config(MEMCPYD2H_DATA, secondConfig );
+    }
+}
+
+
+// routing of RXACT_CONFIG (for any N)
+//
+// N=1 (special case)
+//  +------+     +-------------+
+//  | mux  | <-- | mux adaptor |
+//  +------+     +-------------+
+//
+//   { rx = EAST, tx = RAMP } // no broadcasting
+//
+// N > 1
+//
+//  +------+
+//  | mux  |
+//  +------+
+//     ^
+//     |
+//  +------+
+//  |  mux |
+//  +------+
+//     ^
+//     |
+//  +------+      +-------------+
+//  |  mux | <--- | mux adaptor |
+//  +------+      +-------------+
+//
+comptime {
+    if (1 == N ){
+        // no broadcasting
+        @set_local_color_config(RXACT_CONFIG, .{ .routes = .{ .rx = .{EAST}, .tx = .{RAMP} } } );
+    }else{
+        // N > 1
+        if ( first_pe ){
+            // 1st PE receives from south and forwards it to ramp
+            @set_local_color_config(RXACT_CONFIG, .{ .routes = .{ .rx = .{SOUTH}, .tx = .{RAMP} } } );
+        }else if ( last_pe ){
+            // last PE receives from east (mux adaptor) and broadcasts it to ramp and north
+            @set_local_color_config(RXACT_CONFIG, .{ .routes = .{ .rx = .{EAST}, .tx = .{RAMP, NORTH} } } );
+        }else{
+            // middle PE receives from south, and broadcasts it to ramp and north
+            // 0 < pe < h-1
+            @set_local_color_config(RXACT_CONFIG, .{ .routes = .{ .rx = .{SOUTH}, .tx = .{RAMP, NORTH} } } );
+        }
+    }
+}
+
+comptime{
+    @comptime_assert( 1 == fifo_enable );
+}
+
+// routable color must bind to an input queue
+comptime {
+    @initialize_queue(iq_rxact, .{.color = RXACT} );
+    @initialize_queue(iq_rxact_config, .{.color = RXACT_CONFIG} );
+}
+
+comptime {
+    if (@is_arch("wse3")){
+        @initialize_queue(oq_memcpyd2h_data, .{.color = MEMCPYD2H_DATA});
+    }
+}

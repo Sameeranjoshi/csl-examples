@@ -1,0 +1,10 @@
+
+const tile_config = @import_module("<tile_config>");
+
+fn get_x_coord() u16 {
+  return tile_config.get_fabric_coord(tile_config.fabric_coord.X) - @get_rectangle().offsets.width;
+}
+
+fn get_y_coord() u16 {
+  return tile_config.get_fabric_coord(tile_config.fabric_coord.Y) - @get_rectangle().offsets.height;
+}

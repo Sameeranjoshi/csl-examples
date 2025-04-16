@@ -1,0 +1,610 @@
+
+// Resource Usage
+// input queue 0: data from C23(internal H2D color)
+// output queue 0 for streaming H2D_x
+//
+// copy mode: C23(fabin) --> mem1d
+// streaming mode: C23 (fabin) --> streaming H2D_x (fabout)
+//
+// WARNING: if the user does not define WTT for streaming H2D color c,
+// but use microthread to read the data, the user must not use the
+// same input queue ID as output queue ID used in color c.
+// Otherwise it could hang.
+// The reason is that both input queue and output queue are running
+// with the same microthread.
+
+//
+// A collective communication: receive data from cmd fan from left,
+// setups a fitler to retrieve data via MEMCPYH2D_DATA
+// There are two modes:
+// - memcpy mode: copy data to device memory
+// - streaming mode: transfer data from MEMCPYH2D_DATA to user's H2D color,
+//   the user can receive the data by WTT or microthread explicitly
+//
+// The caller must instantiate memcpyh2d module with H2D colors (one or more),
+// memcpyh2d generates the initial routing and filter at comptime, and
+// h2d_configure() reconfigures the filter at runtime
+//
+
+//
+// It uses a counter filter with the following routing on MEMCPYH2D_DATA
+//
+// demux  -->-->   --->-->   -->-->  -->
+//          |        |        |       |
+//          V        V        V       V
+//
+// The data from demux broadcasts to a row PEs
+// Each PE must set up the counter filter before the data arrives
+//
+// Here are three examples and corrsponding setting of the counter filter
+// (layout.csl chooses example 2, round-robin wavelet along row PEs)
+//
+// Example 1: cliff distribution
+//   order of tensor x[w][l]
+//   PE0: [0,     T)
+//   PE1: [T,   2*T)
+//   PE2: [2*T, 3*T)
+//
+// limit = width*T - 1
+// PE pid filters [T*pid, T*(pid+1))
+// init_count = (limit+1 - pid*T) % (limit+1)
+// range [0, max_pass] where max_pass = LOCAL_OUT_SZ-1
+//
+// Example 2: round-robin a wavelet along row PEs
+//    order of tensor: x[l][w]
+//    PE0: 0, w  , 2*w  , ...
+//    PE1: 1, w+1, 2*w+1, ...
+//    PE2: 2, w+2, 2*w+2, ...
+//
+//  l = 4, w = 4
+//  data from demux  x0  x4  x8 x12  x1  x5  x9 x13  x2  x6 x10 x14  x3  x7 x11 x15
+//  P0:               0   1   2   3   0   1   2   3   0   1   2   3   0   1   2   3
+//  P1:               3   0   1   2   3   0   1   2   3   0   1   2   3   0   1   2
+//  P2:               2   3   0   1   2   3   0   1   2   3   0   1   2   3   0   1
+//  P3:               1   2   3   0   1   2   3   0   1   2   3   0   1   2   3   0
+//
+// limit = width - 1
+// PE pid filters [pid, (pid+1))
+// init_count = (limit+1 - pid) % (limit+1)
+// range [0, max_pass] where max_pass = 0
+//
+// Example 3: round-robin chunk size along row PEs
+//    order of tensor: x[l/chunk][w][chunk]
+//    PE0: [0, chunk), w*chunk+[0, chunk)  , 2*w*chunk+[0, chunk)  , ...
+//    PE1: [chunk, 2*chunk), w*chunk+[chunk, 2*chunk)  , 2*w*chunk+[chunk, 2*chunk)  , ...
+//    PE2: [2*chunk, 3*chunk), w*chunk+[2*chunk, 3*chunk)  , 2*w*chunk+[2*chunk, 3*chunk)  , ...
+//
+// limit = width*chunk - 1
+// PE pid filters [pid*chunk, (pid+1)*chunk)
+// init_count = (limit+1 - pid*chunk) % (limit+1)
+// range [0, max_pass] where max_pass = chunk-1
+//
+//
+
+param MEMCPYH2D_DATA: color ;  // system-reserved for memcpyH2D
+
+// if the user only has one H2D color, then USER_MEMCPYH2D_DATA_[2|3|4]=none, so
+// we don't generate routing for USER_MEMCPYH2D_DATA_[2|3|4]
+param USER_MEMCPYH2D_DATA_1 = {}; // 1-th H2D
+param USER_MEMCPYH2D_DATA_2 = {}; // 2-th H2D
+param USER_MEMCPYH2D_DATA_3 = {}; // 3-th H2D
+param USER_MEMCPYH2D_DATA_4 = {}; // 4-th H2D
+//---
+
+// explicit DSR allocation
+param dest_dsr_ids: [1]u16;
+param src1_dsr_ids: [1]u16;
+
+param first_pe: bool; // (0 == px);
+param last_pe: bool;  // ((width-1) == px);
+param width : i16 ;
+
+param RXACT_CMD: color; // RXCOMMAND=C22
+param input_queue_cmd_id: i16; // input queue for command channel C22
+param SYS_UBLK_C22: local_task_id; // an entrypoint to unblock C22
+
+// The caller memcpy.csl prepares iq_h2d and task_iq_h2d binding to IQ0
+param iq_h2d: input_queue;
+param task_id_h2d: data_task_id;
+
+// H2D reuses output queue 0 to redirect the wavelets from C23 to user's WTT tasks.
+// The f_memcpyh2d() in memcpy.csl calls OQFLUSH(OQ0) and then the teardown handler.
+// oq0_teardow_handler() configures the color field of OQ0 as user's H2D color (memcpyH2D_c).
+param oq_h2d: output_queue;
+
+// memcpy.csl binds input_queue_cmd to C22
+const input_queue_cmd = @get_input_queue(input_queue_cmd_id);
+const task_id_cmd = if (@is_arch("wse3")) @get_data_task_id(input_queue_cmd) else @get_data_task_id(RXACT_CMD);
+
+const tile_config = @import_module("<tile_config>");
+
+const target_name = @import_module("<target_name>");
+const mnemonic = target_name.get_target_name();
+const color_config = tile_config.color_config;
+const memcpyh2d_addr = color_config.get_color_config_addr(MEMCPYH2D_DATA);
+const switch_config = tile_config.switch_config;
+
+const sys_params = @import_module( "<memcpy/sys_params>" );
+const MemcpyOpType = sys_params.MemcpyOpType;
+
+const fabric = @import_module("<layout>");
+fn get_x_coord() u16 {
+    return fabric.get_x_coord();
+}
+fn get_y_coord() u16 {
+    return fabric.get_y_coord();
+}
+
+
+// runtime decides is_streaming
+//    is_streaming == !(c >= 24)
+// if the command is memcpyh2d(c=24,...), then it uses memcpy
+// if the command is memcpyh2d(c=1,...), then it uses memcpy streaming
+//
+// memcpy streaming: 0 <= c < 24
+// memcpy: c = 31
+// return 0: memcpy
+//        1: streaming
+fn is_streaming_eval( user_color: u16) i16 {
+    if (user_color < 24){
+        return 1;
+    }else{
+        @assert(31 == user_color);
+        return 0;
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Main memory (48KB)
+////////////////////////////////////////////////////////////////////////////////
+
+
+// Number of receivers for the next tensor, corresponds to filter limit
+var num_receivers: i16 = 0;
+
+// Counter init value for the next RXACT tensor. This value is equal to the
+// PE's index in the order of receivers. If the PE does not receive any data
+// then this value will be 0xffff.
+var receiver_idx: i16 = -1; // 0xffff;
+
+////////////////////////////////////////////////////////////////////////////////
+// DSDs
+// data-structure descriptors (DSDs), loaded into data-structure registers (DSRs)
+//
+// Queues 0,1: input depth 6 wavelets
+// Queues 2,3: input depth 4 wavelets
+// Queues 4-7: input depth 2 wavelets
+//
+// queues 0,1: output depth 2 wavelets
+// queues 2,3: output depth 6 wavelets
+// queues 4,5: output depth 2 wavelets
+//
+// Length of an operand:
+// The length of all other types of DSRs is specified by the length field of its DSD. When
+// the bits encoding the length are 0x7fff, the length is infinite.
+//
+// Length of the vector instruction is then determined in the following order:
+// 1. If src0 has a non-zero length, that length is used
+// 2. If src1 has a non-zero length, that length is used
+// 3. If dst has a non-zero length, that length is used
+// 4. if no operands have length (all operands are GPR), length = 1
+////////////////////////////////////////////////////////////////////////////////
+
+const dest_dsr = @get_dsr(dsr_dest, dest_dsr_ids[0]);
+const src1_dsr = @get_dsr(dsr_src1, src1_dsr_ids[0]);
+
+// To change the base address and the length of a DSD, csl requires a dummy DSD.
+// The type here doesn't matter
+const dummy = @zeros([1]i16);
+// The length doesn't matter either since csl will overwrite it
+const dummy_dsd = @get_dsd(mem1d_dsd, .{.tensor_access = |i|{42} -> dummy[i]});
+
+
+// input queue = 0 must be reserved, the user cannot use input queue 0
+//
+// WARNING: lenghth = 1 is don't care, reset length at runtime
+// cslang does not allow "extent = 0"
+var fab_recv_wdsd = @get_dsd(fabin_dsd, .{
+    .extent = 1,
+    .fabric_color = MEMCPYH2D_DATA,
+    .input_queue = iq_h2d
+});
+
+// H2D reuses output queue 0 for all streaming H2D colors
+//
+// WARNING: lenghth = 1 is don't care, reset length at runtime
+// cslang does not allow "extent = 0".
+//
+// WARNING: The color "USER_MEMCPYH2D_DATA_1" is don't care because
+// on SDR, fabout DSD no longer has color field, instead, output queue
+// owns the color field.
+// The teardown handler oq0_teardow_handler() configures color field of OQ0.
+//
+// WARNING: we cannot bind fabric_color to USER_MEMCPYH2D_DATA_1 because
+// the user may not use any streaming color. The DSD no longer has a color
+// field on SDR. The color field is in input/output queue configuration reg.
+// So the "fabric_color" is don't care. We can bind any valid color.
+// Here we choose color 0.
+var fab_trans_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .fabric_color = @get_color(0),
+    .output_queue = oq_h2d
+});
+
+
+// memcpyh2d_start() is called if the PE in an active row.
+// memcpy (not memcpy streaming) calls memcpyh2d_start()
+fn memcpyh2d_start( d_A : u16, pe_length : u16, is_half: u16 ) void {
+
+    // (1) reset the length of fabin
+    fab_recv_wdsd = @set_dsd_length(fab_recv_wdsd, pe_length);
+
+    // (2) reset base address, offset and length
+    // TODO: we may add offset in the future in order to copy host tensor on A[offset]
+    var mem_x_buf_dsd = @set_dsd_base_addr(dummy_dsd, @get_tensor_ptr(d_A));
+    // mem_x_buf_dsd = @increment_dsd_offset(mem_x_buf_dsd, offset, f32);
+    mem_x_buf_dsd = @set_dsd_length(mem_x_buf_dsd, pe_length);
+    @load_to_dsr(dest_dsr, mem_x_buf_dsd);
+    @load_to_dsr(src1_dsr, fab_recv_wdsd, .{.async=true, .unblock=SYS_UBLK_C22} );
+    if (0 < is_half){
+        @mov16(dest_dsr, src1_dsr, .{.async=true} );
+    }else{
+        @mov32(dest_dsr, src1_dsr, .{.async=true} );
+    }
+    // WARNING: no need to unblock C22 when H2D finishes.
+    // cmd fan will send a TD after the data, so T29 will turn C21 back to teardown mode
+    // and activate SYS_UBLK_C22 which unblocks C22.
+}
+
+
+fn unblock_cmd_stream() void {
+    @unblock( task_id_cmd );
+}
+
+
+// The caller has blocked SYS_UBLK_C22
+//
+// case 1: inactive row
+//  - keep C21 in teardown mode (do NOT clear TIP)
+//  - unblock C22 to proceed next command because cmd fan does not send TD to this row,
+//    so we must unblock C22 here
+//    Also unblock SYS_UBLK_C22 because no H2D operation here
+//
+// case 2:  active row and inactive PE
+//  - remove offramp
+//  - clear TIP
+//  - do NOT unblock C22 because cmd fan sends a TD
+//  - unblock SYS_UBLK_C22 because no H2D operation here
+//
+// case 3: active row and active PE
+//  - reconfigure filter
+//  - clear TIP
+//  - memcpy: call memcpyh2d_start()
+//  - streaming: forward data to corresponding user's H2D color
+//  - do NOT unblock C22 because cmd fan sends a TD
+//  - unblock SYS_UBLK_C22 when UT0 finishes
+//
+fn h2d_configure(
+    memcpyH2D_c: i16, // user's H2D color
+    px: i16,
+    py: i16,
+    w: i16,
+    h: i16,
+    d_A: u16, // d_A is a symbol
+    pe_length: u16,
+    is_half: u16,
+    memcpy_optype: i16,
+    row_stride: i16,
+    col_stride: i16,
+    one_over_row_stride: f32,
+    one_over_col_stride: f32) void
+{
+    const _px = @as(i16, get_x_coord());
+    const _py = @as(i16, get_y_coord());
+    const offramp = color_config.fabric_io.TX_RAMP;
+
+    // region of interest ((px, py), (w, h))
+    // case 1: memcpy_optype = MEMCPY_OP_DENSE
+    //   inactive row: _py is outside [py, py+h)
+    //   inactive PE: receiver_idx = -1
+    //   active PE:  receiver_idx = [0, w)
+    // case 2: memcpy_optype = MEMCPY_OP_STRIDE
+    //   the stride pattern is described by (p, q) defined by
+    //     _py = y + p*col_stride + q
+    //     p = (_py - py) / col_stride
+    //     q = (_py - py) - p * col_stride
+    //   if q is 0, _py is in the regular stride pattern, so
+    //   inactive_row = false if q is 0 and _py in [py, py+h)
+    //               = true otherwise
+    //   active PE:  receiver_idx = p
+    //   inactive PE: receiver_idx = -1
+
+    // Remark: if PEs are outside [py, py+h-1], cmd fan does not send data or TD,
+    // we must keep C21 in teardown mode and unblock C22 explicitly to proceed
+    // next command.
+
+    const rel_x: i16 = (_px - px);
+    receiver_idx = rel_x;
+    if (@get_int(MemcpyOpType.MEMCPY_OP_STRIDE) == memcpy_optype){
+        const p: i16 = @as(i16, @as(f32, rel_x)*one_over_row_stride);
+        const q: i16 = rel_x - p * row_stride;
+        if (0 != q){
+            receiver_idx = -1; // active row but inactive PE
+        }else{
+            // active PE: the init counter depends on the relative position
+            // within the active PEs.
+            receiver_idx = p;
+        }
+    }
+    // correct the parameters when outside ROI.
+    // reset receiver_idx = 0 when _px is outside [px, px+w).
+    // this applies to any memcpy_optype.
+    if (rel_x < 0) {
+        receiver_idx = -1;
+    }
+    if (rel_x >= w){
+        receiver_idx = -1;
+    }
+    var inactive_row: bool = false;
+    if (@get_int(MemcpyOpType.MEMCPY_OP_STRIDE) == memcpy_optype){
+        const p: i16 = @as(i16, @as(f32, _py - py)*one_over_col_stride);
+        const q: i16 = (_py - py) - p * col_stride;
+        if (0 != q){
+            inactive_row = true;
+        }
+    }
+    // reset inactive_row = 0 when _py is outside [py, py+h).
+    // this applies to any memcpy_optype.
+    if ( _py < py ){
+        inactive_row = true;
+    }
+    if ( _py >= (py+h) ){
+        inactive_row = true;
+    }
+
+    if (inactive_row){
+        // case 1: inactive row
+        // keep C21 in teardown mode, DO NOT clear TIP
+        // unblock C22 to proceed the next command (cmd fan does not send a TD to inactive row)
+        unblock_cmd_stream();
+        // WARNING: SYS_UBLK_C22 is blocked when H2D is received.
+        // unblock it because of no H2D operation here.
+        @unblock(SYS_UBLK_C22);
+    }else{
+        // active row
+        if ( -1 == receiver_idx ){
+            // case 2:  active row and inactive PE
+
+            // PE does not receive data, remove offramp connection
+            color_config.clear_io_direction(memcpyh2d_addr, offramp);
+
+            // insert one instruction to resolve RAW hazard
+            const dummy = switch_config.get_switch_config_addr(MEMCPYH2D_DATA, tile_config.target.switch_status);
+            var r_switch_state = @get_config(dummy);
+
+            // clear teardown-in-progress bit
+            tile_config.teardown.exit(MEMCPYH2D_DATA);
+
+            // do NOT unblock C22 because cmd fan sends a TD to activate SYS_UBLK_C22
+            // which unblocks C22
+            @unblock(SYS_UBLK_C22);
+        }else{
+            // case 3: active row and active PE
+            const filter_id = @get_filter_id(MEMCPYH2D_DATA);
+
+            // WARNING: row broadcast mode broadcasts data to all active PEs.
+            //   we need to set
+            //     - counter init value is 0
+            //     - counter limit is 0 (repeat every 1 wavelet)
+            //   i.e.
+            //   tile_config.filters.set_max_counter(filter_id, 0);
+            //   tile_config.filters.set_active_limit(filter_id, 0);
+            //   tile_config.filters.set_counter(filter_id, 0);
+
+            // ".max_counter = 0"
+            // SDR removes the "limits" on the counter filter, instead, we need to set
+            // the pass_cnt and drop_cnt. To be compatible with old API which still uses
+            // "limits", we need to set pass_cnt (in this case, max_counter) before
+            // calling set_max_counter(). Otherwise the drop_cnt may not be set correctly.
+            tile_config.filters.set_max_counter(filter_id, 0);
+
+            const dummy_1 = switch_config.get_switch_config_addr(MEMCPYH2D_DATA, tile_config.target.switch_status);
+            var r_switch_state_1 = @get_config(dummy_1);
+
+            num_receivers = w;
+            if (@get_int(MemcpyOpType.MEMCPY_OP_STRIDE) == memcpy_optype){
+                // xi is the number of active PEs in a row, defined by
+                //     xi = 1 + floor((w-1)/row_stride)
+                const xi: i16 = 1 + @as(i16, @as(f32,w-1)*one_over_row_stride);
+                num_receivers = xi;
+            }else if (@get_int(MemcpyOpType.MEMCPY_OP_ROW_BCAST) == memcpy_optype){
+                // row broadcast only has data on 1 PE per active row
+                num_receivers = 1;
+            }
+            // num_receivers = # of active receviers
+            // limit1 = (num_receivers-1), similar to limit1 = N-1 for 1st teardown
+            tile_config.filters.set_active_limit(filter_id, @bitcast(u16, num_receivers-1));
+
+            const dummy_2 = switch_config.get_switch_config_addr(MEMCPYH2D_DATA, tile_config.target.switch_status);
+            var r_switch_state_2 = @get_config(dummy_2);
+
+            // init_count = (num_receivers - receiver_idx) % num_receivers
+            // so if receiver_idx = 0, then init_count = 0
+            // Here receiver_idx != -1
+            var r_tmp : i16 = num_receivers;
+            var r_state : i16 = receiver_idx;
+            r_tmp = r_tmp - r_state;
+            if (0 == r_state){
+                r_tmp = 0;
+            }
+            if (@get_int(MemcpyOpType.MEMCPY_OP_ROW_BCAST) == memcpy_optype){
+                // row broadcast needs to broadcast data to all active PEs
+                r_tmp = 0;
+            }
+            tile_config.filters.set_counter(filter_id, @bitcast(u16,r_tmp));
+
+            // enable OFFRAMP
+            color_config.set_io_direction(memcpyh2d_addr, offramp);
+
+            // insert one instruction to resolve RAW hazard
+            const dummy = switch_config.get_switch_config_addr(MEMCPYH2D_DATA, tile_config.target.switch_status);
+            var r_switch_state = @get_config(dummy);
+
+            // Clear teardown-in-progress bit on receive color
+            // config_reg[c] ^= mask where mask = 1 << 14
+            tile_config.teardown.exit(MEMCPYH2D_DATA);
+
+            // (3) receive data by calling memcpyh2d_start
+            if (0 == is_streaming_eval(@as(u16,memcpyH2D_c))){
+                // copy mode: use microthread 0
+                // SYS_UBLK_C22 is unblocked when UT0 finishes the copy
+                memcpyh2d_start( d_A, pe_length, is_half ); // callback = f_sys_exit
+            }else{
+
+// WARNING: It is not legal to use a normal-mode fabric input vector operand in a microthreaded
+// instruction. For example, a combination where src0 is a normal mode fabric vector and
+// dst is a microthreaded fabric vector is illegal
+//    @load_to_dsr(src1_dsr, fab_recv_wdsd) can stall RTM backward phase
+//
+// Both fabin and fabout must have UE = 1 (microthread mode)
+
+                // f_memcpyh2d() calls OQFLUSH(OQ0), then T29 is triggered when OQ0 is empty.
+                // T29 calls oq0_teardow_handler() which does
+                // - set color field of OQ0 as memcpyH2D_c
+                // - calls memcpyh2d_mod_1.h2d_configure()
+                // so at this point, OQ0 is empty and bound to color memcpyH2D_c
+
+                fab_recv_wdsd = @set_dsd_length(fab_recv_wdsd, pe_length); // binds to internal MEMCPYH2D_DATA
+                @load_to_dsr(src1_dsr, fab_recv_wdsd, .{.async=true} );
+                fab_trans_wdsd = @set_dsd_length(fab_trans_wdsd, pe_length);
+                @load_to_dsr(dest_dsr, fab_trans_wdsd, .{.async=true, .unblock=SYS_UBLK_C22});
+                @mov32(dest_dsr, src1_dsr, .{.async=true} );
+                // WARNING: no need to unblock C22 when H2D finishes.
+                // cmd fan will send a TD after the data, so T29 will turn C21 back to teardown mode
+                // and activate SYS_UBLK_C22 which unblocks C22.
+            }
+        }// if an active PE
+    }// active row
+
+}
+
+comptime {
+
+    // IQ0 is shared by H2D and D2H.
+    // H2D uses UT0 to read data in IQ0, so H2D must block IQ0 in f_memcpyh2d().
+    // D2H uses WTT_D2H to read data in IQ0, so D2H must unblock IQ0 in f_memcpyd2h().
+    // The initial state of IQ0 is blocked.
+    @block(task_id_h2d);
+
+    if ( !@is_same_type(@type_of(USER_MEMCPYH2D_DATA_1), void)) {
+        @set_local_color_config(USER_MEMCPYH2D_DATA_1, .{ .routes = .{ .rx = .{RAMP}, .tx = .{RAMP} } } );
+    }
+    if ( !@is_same_type(@type_of(USER_MEMCPYH2D_DATA_2), void)) {
+        @set_local_color_config(USER_MEMCPYH2D_DATA_2, .{ .routes = .{ .rx = .{RAMP}, .tx = .{RAMP} } } );
+    }
+    if ( !@is_same_type(@type_of(USER_MEMCPYH2D_DATA_3), void)) {
+        @set_local_color_config(USER_MEMCPYH2D_DATA_3, .{ .routes = .{ .rx = .{RAMP}, .tx = .{RAMP} } } );
+    }
+    if ( !@is_same_type(@type_of(USER_MEMCPYH2D_DATA_4), void)) {
+        @set_local_color_config(USER_MEMCPYH2D_DATA_4, .{ .routes = .{ .rx = .{RAMP}, .tx = .{RAMP} } } );
+    }
+}
+
+
+//
+// routing of internal MEMCPYH2D_DATA (broadcasting to a row PEs)
+// -->-->   --->-->   -->-->  -->
+//    |        |        |       |
+//    V        V        V       V
+//
+// Example 1: Cliff distribution
+//   order of tensor x[w][l]
+//   PE0: [0,     T)
+//   PE1: [T,   2*T)
+//   PE2: [2*T, 3*T)
+//
+// limit = width*T - 1
+// PE pid filters [T*pid, T*(pid+1))
+// init_count = (limit+1 - pid*T) % (limit+1)
+// range [0, max_pass] where max_pass = LOCAL_OUT_SZ-1
+//
+// Example 2: round-robin along row PEs
+//    order of tensor: x[l][w]
+//    PE0: 0, w  , 2*w  , ...
+//    PE1: 1, w+1, 2*w+1, ...
+//    PE2: 2, w+2, 2*w+2, ...
+//
+//  l = 4, w = 4
+//  data from demux  x0  x4  x8 x12  x1  x5  x9 x13  x2  x6 x10 x14  x3  x7 x11 x15
+//  P0:               0   1   2   3   0   1   2   3   0   1   2   3   0   1   2   3
+//  P1:               3   0   1   2   3   0   1   2   3   0   1   2   3   0   1   2
+//  P2:               2   3   0   1   2   3   0   1   2   3   0   1   2   3   0   1
+//  P3:               1   2   3   0   1   2   3   0   1   2   3   0   1   2   3   0
+//
+// limit = width - 1
+// PE pid filters [pid, (pid+1))
+// init_count = (limit+1 - pid) % (limit+1)
+// range [0, max_pass] where max_pass = 0
+//
+// Example 3: round-robin chunk size along row PEs
+//    order of tensor: x[l/chunk][w][chunk]
+//    PE0: [0, chunk), w*chunk+[0, chunk)  , 2*w*chunk+[0, chunk)  , ...
+//    PE1: [chunk, 2*chunk), w*chunk+[chunk, 2*chunk)  , 2*w*chunk+[chunk, 2*chunk)  , ...
+//    PE2: [2*chunk, 3*chunk), w*chunk+[2*chunk, 3*chunk)  , 2*w*chunk+[2*chunk, 3*chunk)  , ...
+//
+// limit = width*chunk - 1
+// PE pid filters [pid*chunk, (pid+1)*chunk)
+// init_count = (limit+1 - pid*chunk) % (limit+1)
+// range [0, max_pass] where max_pass = chunk-1
+//
+comptime {
+    var limit_plus_1 :i16 = width;
+
+    // the filter is reconfigured for every tensor.
+    // the teardown wavelet ignores the filter, and triggers task 29.
+    // the comptime setting of the filter is don't care
+    // the original setting is
+    // ---
+    //   .init_counter = (limit_plus_1 - _px) % limit_plus_1,
+    // ---
+    const baseConfig = .{
+        .routes = .{ .rx = .{ WEST }, .tx = .{RAMP, EAST} },
+        .filter = .{
+            .kind = .{ .counter = true },
+            .count_data = true,
+            .count_control = false,
+            .init_counter = 0,
+            .max_counter  = 0,
+            .limit1 = (limit_plus_1 - 1)
+        },
+        .teardown = true
+    };
+
+    const baseConfig_last = .{
+        .routes = .{ .rx = .{ WEST }, .tx = .{ RAMP } },
+        .filter = .{
+            .kind = .{ .counter = true },
+            .count_data = true,
+            .count_control = false,
+            .init_counter = 0,
+            .max_counter  = 0,
+            .limit1 = (limit_plus_1 - 1)
+        },
+        .teardown = true
+    };
+
+    if ( !last_pe ){
+        // px < (w-1)
+        @set_local_color_config(MEMCPYH2D_DATA, baseConfig );
+    }else{
+        @set_local_color_config(MEMCPYH2D_DATA, baseConfig_last );
+    }
+}
+
+// binding a color to an input queue.
+// This is necessary when an explicit DSR binds to a fabin DSD because
+// the compiler no longer can generate the instruction to set up the
+// config register of input queue.
+comptime {
+    @initialize_queue(iq_h2d, .{.color = MEMCPYH2D_DATA} );
+}

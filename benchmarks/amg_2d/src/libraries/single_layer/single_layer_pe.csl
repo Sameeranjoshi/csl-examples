@@ -47,13 +47,15 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 // const mpi_x = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.x });
 // const mpi_y = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.y });
 const mpi_x = @import_module("../csl_source/csl-libs/collectives_2d/pe.csl", .{
+// const mpi_x = @import_module("<collectives_2d/pe>", .{
     .dim_params = c2d_params.x,
     .queues = [2]u16{2,4},
     .dest_dsr_ids = [1]u16{1},
     .src0_dsr_ids = [1]u16{1},
     .src1_dsr_ids = [1]u16{1}
     });
-const mpi_y = @import_module("../csl_source/csl-libs/collectives_2d/pe.csl", .{
+const mpi_y = @import_module("../csl_source/csl-libs/collectives_2d/pe.csl", .{ // MOdified CC.
+// const mpi_y = @import_module("<collectives_2d/pe>", .{
     .dim_params = c2d_params.y,
     .queues = [2]u16{3,5},
     .dest_dsr_ids = [1]u16{2},
@@ -297,24 +299,30 @@ fn inverse_callback(val: f32) f32 {
 
 fn initialize() void {
   simprint.print_string("initialize\n");
+  simprint.print_string("before inverse callback\n");
   if (px == py) {
     // now D_inv, is 1/A_tile for px==py and bcast to other PEs.
     @map(inverse_callback, dsd_A_diag, dsd_D_inv);
   }
+  simprint.print_string("after inverse callback\n");
+  for (D_inv) |val, i| {
+    simprint.fmt_with_coords("D_inv[] = {f}", .{ @as(f32, val) });
+  }
   cur_state = next_state; // This is set by the f_state function.
+  simprint.fmt_with_coords("before broadcast, cur_state = {d}\n", .{@as(u32, cur_state)});
   // Broadcast from diagonal PE to others in the same row
   mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, STATE_MACHINE);
-
+  simprint.fmt_with_coords("after broadcast, cur_state = {d}\n", .{@as(u32, cur_state)});
   // FastCC
   // broadcast_right.transfer_data(&D_inv, M_local, &communication_tsc_start, &communication_tsc_end);
   // broadcast_left.transfer_data(&D_inv, M_local, &communication_tsc_start, &communication_tsc_end);
   // modified_bcast_right_left.transfer_data(&D_inv, M_local, &communication_tsc_start, &communication_tsc_end);
-  // f_trigger_state_machine();
 }
 
-fn layout_print() void {
-  simprint.fmt_with_coords("layout_print iteration: {d}\n", .{@as(u32, v_cycle_iteration)});
-  simprint.print_string("\n");
+fn layout_print(runtime_layer_index: u32) void {
+  if (runtime_layer_index == @as(u32, layer_index)) {
+    simprint.fmt_with_coords("layout_print iteration: {d}\n", .{@as(u32, v_cycle_iteration)});
+    simprint.print_string("\n");
     // print x_tile
     for (x_tile) |val, i| {
       simprint.fmt_with_coords("x_tile[{d}] = {f}", .{ i, val });
@@ -335,14 +343,19 @@ fn layout_print() void {
     for (b_tile) |val, i| {
       simprint.fmt_with_coords("b_tile[{d}] = {f}", .{ i, val });
     }
+  }
   sys_mod.unblock_cmd_stream();
 }
 
 fn init_params() void {
   mpi_x.init();
   mpi_y.init();
-  px = mpi_x.pe_id;
-  py = pe_id_y; // py = mpi_y.pe_id
+  // px = mpi_x.pe_id;
+  // py = mpi_y.pe_id; // py = mpi_y.pe_id
+  px = mpi_x.pe_id - @as(u16, layer_start_x);
+  py = mpi_y.pe_id - @as(u16, layer_start_y);
+
+  simprint.fmt_with_coords("init_params: px = {d}, py = {d}\n", .{@as(u32, px), @as(u32, py)});
   v_cycle_iteration += 1;
   is_v_cycle_up = false;
   iter_count = 0;  
@@ -425,6 +438,7 @@ fn bcast_prolongation() void {
 
 // State machine task
 task f_state() void {
+  simprint.fmt_with_coords("f_state: cur_state = {d}\n", .{@as(u32, cur_state)});
   if (STATE_SYNC == cur_state) {
     simprint.print_string("STATE_SYNC\n");
     next_state = STATE_EXIT;
@@ -486,6 +500,10 @@ task f_state() void {
   } 
   else if (STATE_EXIT == cur_state) {
     simprint.print_string("STATE_EXIT\n");
+    // print b_tile before exit
+    for (b_next) |val, i| {
+      simprint.fmt_with_coords("b_next[{d}] = {f}", .{ i, val });
+    }
     sys_mod.unblock_cmd_stream();
 
   }
@@ -493,41 +511,53 @@ task f_state() void {
     @assert(false); // Error: unknown state
     // assert() is ignored by HW, it could hang here
     // To avoid a stall, trigger callback (the caveat is the wrong result)
+    simprint.print_string("Error: unknown state\n");
     sys_mod.unblock_cmd_stream();
 
   }  
 }
 
 // Entrypoint into kernel
-fn v_cycle_down() void {
-  simprint.print_string("v_cycle_down\n");
-  init_params();
-  // print x_temp before reduction
-  // for (x) |val, i| {
-  //   simprint.fmt_with_coords("x_before[{d}] = {f}", .{ i, val });
-  // }
-  //  ----------------------
-  // upper_traingular_chain_reduce.transfer_data(&x, Nx, &communication_tsc_start); // Won't call STATE_MACHINE
-  // lower_traingular_chain_reduce.transfer_data(&x, Nx, &communication_tsc_start);
-  // if (Nx > 1) star_modified_right.transfer_data(&x, Nx, DONE, &communication_tsc_start) else star_modified_right.transfer_data_scalar(&x, Nx, DONE, &communication_tsc_start);
-  // for (x) |val, i| {
-  //   simprint.fmt_with_coords("x_after_star[] = {f}", .{ val });
-  // }
-  // simprint.print_string("Finished printing\n");
+fn v_cycle_down(runtime_layer_index: u32) void {
+  if (runtime_layer_index == @as(u32, layer_index)) {
+    simprint.fmt_with_coords("v_cycle_down with runtime_layer_index = {d}\n", .{runtime_layer_index});
+    init_params();
+    // print x_temp before reduction
+    // for (x) |val, i| {
+    //   simprint.fmt_with_coords("x_before[{d}] = {f}", .{ i, val });
+    // }
+    //  ----------------------
+    // upper_traingular_chain_reduce.transfer_data(&x, Nx, &communication_tsc_start); // Won't call STATE_MACHINE
+    // lower_traingular_chain_reduce.transfer_data(&x, Nx, &communication_tsc_start);
+    // if (Nx > 1) star_modified_right.transfer_data(&x, Nx, DONE, &communication_tsc_start) else star_modified_right.transfer_data_scalar(&x, Nx, DONE, &communication_tsc_start);
+    // for (x) |val, i| {
+    //   simprint.fmt_with_coords("x_after_star[] = {f}", .{ val });
+    // }
+    // simprint.print_string("Finished printing\n");
 
-  // The iterations will always be greater than 0, ensured in run_amg.py
-  cur_state = STATE_INIT;
-  @activate(STATE_MACHINE);
+    // The iterations will always be greater than 0, ensured in run_amg.py
+    cur_state = STATE_INIT;
+    @activate(STATE_MACHINE);
+  } else{
+    sys_mod.unblock_cmd_stream();
+    // cur_state = STATE_EXIT;
+    // @activate(STATE_MACHINE);
+  }
 }
 
 // V-cycle up function
-fn v_cycle_up() void {
-  simprint.print_string("v_cycle_up\n");
-  // set a global boolean flag to true.
-  is_v_cycle_up = true;
-  iter_count = 0; // reset iter_count
-  cur_state = STATE_PROLONGATION;
-  @activate(STATE_MACHINE);
+fn v_cycle_up(runtime_layer_index: u32) void {
+  if (runtime_layer_index == @as(u32, layer_index)) {
+    simprint.fmt_with_coords("v_cycle_up with runtime_layer_index = {d}\n", .{runtime_layer_index});
+    // set a global boolean flag to true.
+    is_v_cycle_up = true;
+    iter_count = 0; // reset iter_count    
+    cur_state = STATE_PROLONGATION;
+    @activate(STATE_MACHINE);
+  } else{
+    cur_state = STATE_EXIT;
+    @activate(STATE_MACHINE);
+  }
 }
 
 task f_done() void {

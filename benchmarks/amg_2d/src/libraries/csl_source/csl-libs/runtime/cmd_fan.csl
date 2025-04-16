@@ -1,0 +1,765 @@
+//
+// CMD fan receives command sequence from LVDS, then forwards it to core rectangle
+// - the command enters as a data wavelet and is forwarded as a control wavelet
+// - only one data channel (RXACT_DATA) from demux
+// - TXACT_DATA = MEMCPYH2D_DATA is internal to transfer all data
+//
+// Assumption: all H2D/D2H must be serialized because we only have one global
+// parameter set if we have two back to back H2D at the same time, we must have
+// two different sets of parameters. Also we don't duplicate the entrypoints,
+// TXACT_NEXT_TENSOR and TACT_NEXT_CHUNK are used to send the data via TXACT_DATA,
+// so serialization is must-have.
+//
+// CMD fan is not aware of user's H2D/D2H colors, it uses internal color
+// MEMCPYH2D_DATA.
+//
+
+// Connectivity
+//      +--------+     +---------+     +-------+
+//      | demux  | --> | CMD fan | --> | core  |
+//      +--------+     +---------+     +-------+
+//
+// RXACT_DATA      +--------+
+//     -->         | cmd    | --> TXACT_CMD
+//                 |        | --> TXACT_DATA: MEMCPYH2D_DATA
+//                 +--------+
+//                     ^
+//                     |
+//                 +--------+
+// RXACT_DATA      | cmd    | --> TXACT_CMD
+//     -->         |        |
+//                 |        | --> TXACT_DATA: MEMCPYH2D_DATA
+//                 +--------+
+//                     ^
+//                     |
+//                 +--------+
+// RXACT_DATA      |        |
+//    --->         | cmd    | --> TXACT_CMD
+//                 |        | --> TXACT_DATA: MEMCPYH2D_DATA
+// RXACT_CMD_FIFO  |        |
+//    --->         |        |
+//                 +--------+
+//
+
+//
+// The behavior of H2D
+// 1. send cmd to core via RXCOMMAND (C22)
+//    The core receives cmd and then reconfigures the filters
+// 2. send data to core via MEMCPYH2D_DATA
+// 3. send TD to the core via MEMCPYH2D_DATA, turn MEMCPYH2D_DATA(C21) back to teardown mode
+//
+// The behavior of D2H
+// 1. send cmd to core via RXCOMMAND (C22)
+//    core receives cmd and then reconfigures the switches
+//
+
+// RXACT_CMD_FIFO receives the cmd sequence from the LVDS, and redirects the wavelets into
+// the FIFO "fifo_cmd".
+// Keeping RXACT_CMD as-is to minimize the code change, i.e. when the core receives wavelets
+// from RXACT_CMD, it is NOT from LVDS, but from the FIFO "fifo_cmd".
+// In other words, we have
+//    RXACT_CMD_FIFO --> fifo_cmd --> RXACT_CMD --> core
+// so we only change the routing, and add microthreads to read/write FIFO, others are unchanged.
+//
+// WARNING: RXACT_CMD does not satisfy the convention: it is the output color of fifo_cmd,
+// the name should be TXACT_xxx. Since fifo_cmd is in the same PE, so RXACT_CMD is an internal
+// color, we use the name "RXACT" because the receiver may think the data from RXACT_CMD is
+// from LVDS, it does not need to know the existence of the FIFO.
+//
+param RXACT_CMD_FIFO: color ; // receive commands (data wavelets) from LVDS
+param RXACT_CMD: color ; // receive commands from fifo_cmd
+param TXACT_CMD: color ; // send out commands (control wavelets) to core
+
+param RXACT_DATA: color; // receive data from demux
+
+param TXACT_DATA: color; // forward internal H2D to core
+
+// local tasks
+param TXACT_NEXT_TENSOR: local_task_id; // send data to core
+param TXACT_NEXT_CHUNK: local_task_id;
+
+param H2D_TD: local_task_id; // entrypoint to send teardown via MEMCPYH2D_DATA
+
+param STARTUP : local_task_id;
+
+// parameters
+param CODE_MEMCPYH2D:i16; // integer of command MEMCPYH2D, i.e. entrypoint MEMCPYH2D
+param CODE_MEMCPYD2H:i16; // integer of command MEMCPYD2H, i.e. entrypoint MEMCPYD2H
+param CODE_LAUNCH:i16; // integer of command LAUNCH, i.e. entrypoint LAUNCH
+
+param _CMD_SIZE : i16 = 128;
+
+param _STACK_SIZE : i16 = 128;
+
+param height : i16 ;
+
+param first_pe: bool; // (0 == py);
+param last_pe: bool;  // ((height-1) == py);
+param start_pos_y_cmd: i16; // starting y coordinate of the cmd fan
+
+const target_name = @import_module("<target_name>");
+const __target_details = @import_module(
+  @strcat("<runtime/target/", target_name.get_target_name(), ">")
+);
+
+// define a WTT binding to RXACT_CMD
+// input queue 0, 4 are reserved
+// output queue 1, 3 are reserved
+const in_q_rxact_cmd: input_queue = @get_input_queue(2);
+const WTT_RXACT_CMD = __target_details.get_wtt_rxact(in_q_rxact_cmd, RXACT_CMD);
+
+// there are two FIFOs, one for cmd seq and one for data from demux
+// - fifo_cmd: for cmd seq
+//   4KB
+// - fifo_buffer: for data from demux
+//   up to 36KB, 40KB cannot work
+const fifo_enable : i16 = 1;
+
+const max_fifo_len_h2d = 1024*7;
+const max_fifo_len_cmd = 1024;
+
+// the parameters of H2D
+// (1) c: streaming color
+// (2) px
+// (3) py
+// (4) w
+// (5) h
+// (6) addr (device pointer)
+// (7) pe_length
+// (8) is_half (mov16)
+// (9) memcpy_optype { MEMCPY_OP_DENSE = 0, MEMCPY_OP_ROW_BCAST = 1, MEMCPY_OP_COL_BCAST = 2, MEMCPY_OP_STRIDE = 3 }
+// (10) row_stride
+// (11) col_stride
+// (12, 13) one_over_row_stride (f32)
+// (14, 15) one_over_col_stride (f32)
+const params_h2d = 15;
+
+// the parameters of D2H
+// only first 8 u16 of H2D
+const params_d2h = 8;
+
+const sys_params = @import_module( "<memcpy/sys_params>" );
+const MemcpyOpType = sys_params.MemcpyOpType;
+
+
+const iq_rxact_cmd_fifo = @get_input_queue(4);
+const task_id_rxact_cmd_fifo = if (@is_arch("wse3")) @get_data_task_id(iq_rxact_cmd_fifo) else @get_data_task_id(RXACT_CMD_FIFO);
+
+const iq_rxact_data = @get_input_queue(0);
+const task_id_rxact_data = if (@is_arch("wse3")) @get_data_task_id(iq_rxact_data) else @get_data_task_id(RXACT_DATA);
+
+const oq_txact_cmd = @get_output_queue(3);
+const oq_txact_data = @get_output_queue(1);
+const oq_rxact_cmd = @get_output_queue(5);
+
+////////////////////////////////////////////////////////////////////////////////
+// Main memory (48KB)
+////////////////////////////////////////////////////////////////////////////////
+
+var fifo_buffer = @zeros([max_fifo_len_h2d]f32);
+const fifo = @allocate_fifo(fifo_buffer);
+
+// 20 wavelets per H2D/D2H/launch command
+// fifo_cmd can hold 50 commands,enough for regular app
+var fifo_cmd_buffer = @zeros([max_fifo_len_cmd]u32);
+const fifo_cmd = @allocate_fifo(fifo_cmd_buffer);
+
+var cmd = @zeros([_CMD_SIZE]u32);
+
+var stack_u32 = @zeros([_STACK_SIZE]u32);
+var stack_last : i16 = 0; // stack is empty
+
+var memcpyH2D_c  : i16 = 0;
+var memcpyH2D_px : i16 = 0;
+var memcpyH2D_py : i16 = 0;
+var memcpyH2D_w  : i16 = 0;
+var memcpyH2D_h  : i16 = 0;
+var memcpyH2D_addr  : i16 = 0;
+var memcpyH2D_pe_length : i16 = 0;
+var memcpyH2D_is_half : i16 = 0;
+var memcpyH2D_memcpy_optype : i16 = 0;
+var memcpyH2D_row_stride : i16 = 0;
+var memcpyH2D_col_stride : i16 = 0;
+var memcpyH2D_one_over_row_stride : f32 = @as(f32, 0);
+var memcpyH2D_one_over_col_stride : f32 = @as(f32, 0);
+
+// num_send = number of PEs in a row <= dim(WSE) ~= 1000, i16 is enough
+var num_send : i16 = 0;
+var idx_send : i16 = 0;
+
+
+const tile_config = @import_module("<tile_config>");
+
+const switches = @import_module("memcpy_switches.csl");
+
+// teardown from casm
+// teardown_buf[0] = (1 << 31) | (0b111 << 22)
+//
+// teardown from csl
+// from cslang/test-e2e/dynamic_filters/sender.csl
+//  31=0x1f = no entrypoint
+//
+// teardown wavelet = 0x1df 0000
+//const teardown_buf = [1]u32{(31 << 16) | 0b111 << 22};
+// teardown wavelet = 0x9df 9249
+const teardown_buf = [1]u32 { switches.ctrl(switches.teardown_cmd_1()) };
+
+
+// (_pe_id, height) is the PE id of CMD fan
+//    0 <= pe_id < height
+var _pe_id : i16 = 0 ;
+
+
+const fabric = @import_module("<layout>");
+
+// cmd fan is a column of PEs, the pe_id = 0,1,2,..., h-1
+// The relative y-coordinate is the id of the cmd fan, independent of x-coordinate
+fn get_pe_id() u16 {
+    return fabric.get_y_coord() - @as(u16,start_pos_y_cmd);
+}
+
+
+////////////////////////////////////////////////////////////////////////////////
+// DSDs
+// data-structure descriptors (DSDs), loaded into data-structure registers (DSRs) to configure DSR
+//
+// Queues 0,1: input depth 6 wavelets
+// Queues 2,3: input depth 4 wavelets
+// Queues 4-7: input depth 2 wavelets
+//
+// queues 0,1: output depth 2 wavelets
+// queues 2,3: output depth 6 wavelets
+// queues 4,5: output depth 2 wavelets
+////////////////////////////////////////////////////////////////////////////////
+
+const mem_buf_td_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> teardown_buf[i] });
+
+// only receive one 32-bit wavelet
+// because we don't know how many command wavelets at runtime
+const mem_cmd_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> cmd[i] });
+
+// send one wavelet with control bit enabled
+// input_queue = 0 is reserved for fifo if fifo is on, so we cannot use UT0
+const fab_trans_cmd_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .fabric_color = TXACT_CMD,
+    .control = true,
+    .output_queue = oq_txact_cmd
+});
+
+var fab_trans_data_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .fabric_color = TXACT_DATA,
+    .output_queue = oq_txact_data
+});
+
+// RXACT_DATA is the data channel from demux
+// reset its length at runtime
+var fab_recv_data_wdsd =  @get_dsd(fabin_dsd, .{
+   .extent = 1,
+   .fabric_color = RXACT_DATA,
+   .input_queue = iq_rxact_data
+});
+
+
+const fab_txtd0_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .fabric_color = TXACT_DATA,
+    .control = true,
+    .output_queue = oq_txact_data
+});
+
+// f_startup() sets length=inf
+// redirect data to fifo_cmd
+var fab_recv_cmdfifo_wdsd = @get_dsd(fabin_dsd, .{
+   .extent = 1,
+   .fabric_color = RXACT_CMD_FIFO,
+   .input_queue = iq_rxact_cmd_fifo
+});
+
+// f_startup() sets length=inf
+// redirect data out of fifo_cmd
+var fab_trans_cmdfifo_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .fabric_color = RXACT_CMD,
+    .output_queue = oq_rxact_cmd
+});
+
+
+////////////////////////////////////////////////////////////////////////////////
+// Tasks
+// syntax
+//     task_begin(name, entrypoint, color)
+////////////////////////////////////////////////////////////////////////////////
+
+
+// stack manipulation
+// stack.push
+// stack.top
+// stack.pop
+//
+// refer memcpy/sys.csl for stack_push, stack_top and stack_pop
+
+fn stack_push( data : u16 ) void {
+    // stack_last is valid from 0 to _STACK_SIZE-1.
+    // stack_last points to the available entry.
+    // stack_list = 0 implies stack is empty.
+    // stack_list = _STACK_SIZE implies stack is full.
+    @assert(stack_last < _STACK_SIZE);
+    const stack = @ptrcast([*]u16, &stack_u32);
+    stack[stack_last] = data;
+    stack_last = stack_last + 1;
+}
+
+
+//
+// The caller f_rxact_cmd blocks RXACT_CMD
+//
+// cmd fan does the following:
+// - receive H2D command
+// - inactive rows (no active PEs in this row)
+//   no data, do NOT send TD
+// - active rows (at least one active PE)
+//   send H2D data (forward the data from demux)
+//   send TD to reset the C21 in the core back to teardown mode
+//
+// WARNING: The cmd fan must send interleaved DATA and TD, i.e. no back-to-back TD.
+//   If a row is inactive, cmd fan does not send TD for this row and the core should
+//   do nothing and keeps C21 in teardown mode.
+//
+fn cmd_decode_h2d() void {
+
+// memcpyH2D(color:int, px:int, py:int, w:int, h:int, h_A:np.ndarray, d_A:devicePtr, pe_length:int)
+// (1)  PUSH color
+// (2)  PUSH px
+// (3)  PUSH py
+// (4)  PUSH w
+// (5)  PUSH h
+// (6)  PUSH d_A
+// (7)  PUSH pe_length
+// (8)  PUSH is_half
+// (9)  PUSH memcpy_optype
+// (10) PUSH row_stride
+// (11) PUSH col_stride
+// (12) PUSH lo(one_over_row_stride)
+// (13) PUSH hi(one_over_row_stride)
+// (14) PUSH lo(one_over_col_stride)
+// (15) PUSH hi(one_over_col_stride)
+//    MEMCPYH2D, 0    // MEMCPYD2H triggers f_memcpyH2D
+//
+
+    @assert(stack_last == params_h2d); // receive "params_h2d" uint16
+    const stack = @ptrcast([*]u16, &stack_u32);
+
+    var c : i16 = @bitcast(i16, stack[0]);
+    var px : i16 = @bitcast(i16, stack[1]);
+    var py : i16 = @bitcast(i16, stack[2]);
+    var w : i16 = @bitcast(i16, stack[3]);
+    var h : i16 = @bitcast(i16, stack[4]);
+    var d_A : i16 = @bitcast(i16, stack[5]);
+    var pe_length : i16 = @bitcast(i16, stack[6]);
+    var is_half : i16 = @bitcast(i16, stack[7]);
+    var memcpy_optype: i16 = @bitcast(i16, stack[8]);
+    var row_stride: i16 = @bitcast(i16, stack[9]);
+    var col_stride: i16 = @bitcast(i16, stack[10]);
+    var one_over_row_stride: f32 = @bitcast(f32, @as(u32, stack[12]) << 16 + @as(u32, stack[11]));
+    var one_over_col_stride: f32 = @bitcast(f32, @as(u32, stack[14]) << 16 + @as(u32, stack[13]));
+
+    stack_last = 0; // clear stack, stack is empty
+
+    memcpyH2D_c   = c;
+    memcpyH2D_px  = px;
+    memcpyH2D_py  = py;
+    memcpyH2D_w  = w;
+    memcpyH2D_h  = h;
+    memcpyH2D_addr = d_A;
+    memcpyH2D_pe_length = pe_length;
+    memcpyH2D_is_half = is_half;
+    memcpyH2D_memcpy_optype = memcpy_optype;
+    memcpyH2D_row_stride = row_stride;
+    memcpyH2D_col_stride = col_stride;
+    memcpyH2D_one_over_row_stride = one_over_row_stride;
+    memcpyH2D_one_over_col_stride = one_over_col_stride;
+
+    // case 1: a row is not active
+    //   num_send = 0, no data is sent out, no TD, unblock RXACT_CMD
+    // case 2: a row is active
+    //   num_send = w, send data
+    //   send TD
+    //   unblock RXACT_CMD
+    @mov32(fab_trans_cmd_wdsd, mem_cmd_buf_dsd, .{.async=true, .activate = f_txact_next_tensor });
+}
+
+
+//
+// the caller f_rxact_cmd blocks RXACT_CMD
+//
+fn cmd_decode_d2h() void {
+
+    // cmd fan does not send TD. Instead 1st PE of ROI sends a TD after D2H is done.
+    // cmd fan does nothing, but clears the stack and forwards D2H command to the
+    // core and proceed next command.
+
+    @assert(stack_last == params_d2h); // receive "params_d2h" uint16
+    stack_last = 0; // clear stack, stack is empty
+
+    @mov32(fab_trans_cmd_wdsd, mem_cmd_buf_dsd, .{.async=true, .unblock=WTT_RXACT_CMD });
+}
+
+
+// receive command wavelet one by one
+// push the wavelet to the stack
+// decode the command, check H2D and D2H
+//
+task f_rxact_cmd( data: u32 ) void {
+
+    @block( WTT_RXACT_CMD );
+
+    // record the command wavelet, sent out by mem_cmd_buf_dsd
+    cmd[0] = data;
+
+// receive cmd wavelets and send it out with control bit
+// WARNING: unblock RXACT_CMD when UT is done, otherwise
+// it is possible to call several f_rxact_cmd when no output is sent when core is busy and blocks RXCOMMAND
+// for example, core is doing GEMV which consumes 400 cycles, we can accumulate more than 3 f_rxact_cmd.
+// 4-th f_rxact_cmd triggers FATAL error because of race condition.
+//
+    var index : i16 = @as(i16, (data >> 16));
+    if (index == CODE_MEMCPYH2D){
+        cmd_decode_h2d();
+        // stack is clear
+    }else if (index == CODE_MEMCPYD2H){
+        cmd_decode_d2h();
+        // stack is clear
+    }else if (index == CODE_LAUNCH){
+        stack_last = 0; // clear stack, stack is empty
+        // forward {LAUNCH, 0} as a control wavelet
+        @mov32(fab_trans_cmd_wdsd, mem_cmd_buf_dsd, .{.async=true, .unblock=WTT_RXACT_CMD });
+    }else{
+        // data = {PUSH, data}
+        // record the 16-bit data only
+        const low_mask : u32 = @as(u32,0x0000ffff);
+        var data_u16 : u16 =  @as(u16, (data & low_mask));
+        stack_push(data_u16);
+        // forward {PUSH, data} as a control wavelet
+        @mov32(fab_trans_cmd_wdsd, mem_cmd_buf_dsd, .{.async=true, .unblock=WTT_RXACT_CMD });
+    }
+}
+
+
+// send data to core via TXACT_DATA(C21=MEMCPYH2D_DATA)
+//
+// A row PEs has (width * pe_length) wavelets which could exceed 16-bit limt,
+// so we have either
+// - loop w times, each sends pe_length wavelets or
+// - loop pe_length times, each sends w wavelets
+//
+// Assume pe_length is positive, otherwise, runtime will not schedule this H2D
+//
+task f_txact_next_tensor() void {
+
+// if the PE is inactive, then no data is sent out
+// ROI is ((px, py), (w, h))
+// num_send = 0 if
+// - _pe_id is not in [py, py+h)
+// - w = 0
+//
+// if num_send is zero, then no data is sent
+//
+    //var c:u16 = @as(u16, memcpyH2D_c);
+    //var px: i16 = memcpyH2D_px;
+    var py: i16 = memcpyH2D_py;
+    var w: i16  = memcpyH2D_w;
+    var h: i16  = memcpyH2D_h;
+    //var d_A: i16 = memcpyH2D_addr;
+    var pe_length: i16 = memcpyH2D_pe_length;
+
+// case 1: memcpy_optype = MEMCPY_OP_DENSE
+//  num_send = w if _py in [py, py+h)
+//             0 otherwise
+// case 2: memcpy_optype = MEMCPY_OP_STRIDE
+//  xi is the number of active PEs in a row, defined by
+//     xi = 1 + floor((w-1)/row_stride)
+//
+//  the stride pattern is described by (p, q) defined by
+//     _py = y + p*col_stride + q
+//     p = (_py - py) / col_stride
+//     q = (_py - py) - p * col_stride
+//  if q is 0, _py is in the regular stride pattern, so
+//  num_send = xi if q is 0 and _py in [py, py+h)
+//           = 0 otherwise
+//
+// Remark: if memcpy_optype = MEMCPY_OP_DENSE, row_stride=col_stride=1.
+// We can also use the formula of case 2.
+
+    num_send = w;
+    idx_send = 0;
+
+    var _py: i16 = _pe_id;
+
+    if (@get_int(MemcpyOpType.MEMCPY_OP_STRIDE) == memcpyH2D_memcpy_optype){
+        // WARNING: if an inactive row (out of ROI) can lead to negative value of (_py - py).
+        // if so, p is negative. The operation on num_send will be overwritten later
+        // when we check ROI.
+        const xi: i16 = 1 + @as(i16, @as(f32,w-1)*memcpyH2D_one_over_row_stride);
+        num_send = xi;
+        const p: i16 = @as(i16, @as(f32, _py - py)*memcpyH2D_one_over_col_stride);
+        const q: i16 = (_py - py) - p * memcpyH2D_col_stride;
+        if (0 != q){
+            num_send = 0;
+        }
+    }else if (@get_int(MemcpyOpType.MEMCPY_OP_ROW_BCAST) == memcpyH2D_memcpy_optype){
+        // row broadcast only has data on 1 PE per active row
+        // cmd fan thinks the ROI is (px, py, w=1, h, l)
+        num_send = 1;
+    }
+    // reset num_send = 0 when _py is outside [py, py+h).
+    // this applies to any memcpy_optype.
+    if ( _py < py ){
+        num_send = 0;
+    }
+    if ( _py >= (py+h) ){
+        num_send = 0;
+    }
+
+//
+// WARNING: input is from demux, only one channel, so reuse fab_recv_data_wdsd
+//
+    if (0 == fifo_enable){
+        // fifo is off, so read "pe_length" wavelets from demux at a time
+        // this causes backpressure because LVDS is very slow
+        fab_recv_data_wdsd  = @set_dsd_length(fab_recv_data_wdsd,  @as(u16,pe_length));
+    }
+
+    fab_trans_data_wdsd = @set_dsd_length(fab_trans_data_wdsd, @as(u16,pe_length));
+
+    @activate(TXACT_NEXT_CHUNK);
+}
+
+
+//
+// Only send data according to DSD fab_recv_data_wdsd/fifo and fab_trans_data_wdsd
+// the caller has to prepare the correct color in DSD
+//
+task f_txact_next_chunk() void {
+    if ( idx_send >= num_send ){
+        if (0 == num_send){ // case 1: inactive row
+            // does nothing, proceed next command
+            @unblock( WTT_RXACT_CMD );
+        }else{ // case 2: active row
+            // f_h2d_td() does
+            // - send TD to the core (turn C21 back to teardown mode)
+            // - unblock C22
+            @activate(H2D_TD);
+        }
+    }else{
+        if (0 < fifo_enable){
+            // fifo reads data from demux in the beginning with infinite length via color RXACT_DATA with input queue 0
+            @mov32(fab_trans_data_wdsd, fifo, .{.async=true, .activate=f_txact_next_chunk} );
+        }else{
+            @mov32(fab_trans_data_wdsd, fab_recv_data_wdsd, .{.async=true, .activate=f_txact_next_chunk} );
+        }
+        idx_send = idx_send+1;
+    }
+}
+
+
+//--- TODO: change the color name H2D_TD should be H2D_DONE
+// After cmd fan sends out the data, it sends TD and then unblocks C22.
+// (only active row can trigger f_h2d_td)
+task f_h2d_td() void {
+    @mov32(fab_txtd0_wdsd, mem_buf_td_dsd, .{.async=true, .unblock=WTT_RXACT_CMD} );
+}
+
+
+
+// The sender also needs to handle teardown because teardown ctrl wavelet will pass through
+// sender's router, then stall wavelets for all 5 directions.
+// If we don't clear teardown-in-progress bit of this color, then no data can be sent out.
+// The task 29 simply does
+// - clear teardown pending register
+// - clear teardown-in-progress (bit-14 of color config reg)
+//   to allow the data go through the router
+//
+// WARNING: task 29 is called after the teardown ctrl wavelet is sent out
+// if any task runs before task 29 (for example, callback task of sending out teardown),
+// then it cannot send out the data via microthread, so microthread will sleep, then task 29
+// is picked up.
+//
+// WARNING: cmd fan needs to teardown core rectangle for H2D (filter) and D2H (switch)
+//   all memcpy ops must be serialized, so only one can enter task 29 at a time.
+//   for example, if we have H2D, then D2H, D2H can send teardown only when H2D is done
+//   (has sent out all data)
+//
+// Reference: cslang/test-e2e/dynamic_filters/receiver.csl
+//
+task f_teardown() void {
+
+    // (1) Read TIP register (TAMAP_TEARDOWN_PEND_ADDR_[LO|HI]) to clear
+    const pending = tile_config.teardown.get_pending();
+
+    // (2) Clear teardown-in-progress bit on transmit color
+    //    bit-14 = 1 (teardonw in progress), or 0x4000
+    // H2D
+    if (tile_config.teardown.is_pending(pending, TXACT_DATA)){
+        tile_config.teardown.exit(TXACT_DATA);
+    }
+}
+
+
+export var memcpy_use_addr_color : u16 linksection(".memcpy_cfg") = 31;
+export var sys_cmd_push : u16 = @get_int(sys_params.SYS_CMD_PUSH);
+export var sys_cmd_h2d : u16  = @get_int(sys_params.SYS_CMD_MEMCPYH2D);
+export var sys_cmd_d2h : u16  = @get_int(sys_params.SYS_CMD_MEMCPYD2H);
+export var sys_cmd_rpc : u16  = @get_int(sys_params.SYS_RPC);
+var CHECK_AND_IGNORE : u16  = @get_int(sys_params.SYS_CHECK_AND_IGNORE);
+export var memcpy_version : u16 = 5;
+
+var init_sym = @zeros([6]u32);
+const mem_init_sym_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{6} -> init_sym[i] });
+
+const fab_trans_init_sym_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = 6,
+    .fabric_color = TXACT_CMD,
+    .control = true,
+    .output_queue = oq_txact_cmd
+});
+
+
+task f_startup() void {
+
+    // retrieve PE id in the beginning to avoid keep updating pe_id
+    // because pe_id is no longer a comptime parameter
+    _pe_id = @as(i16, get_pe_id());
+
+    if (0 < fifo_enable){
+        // The length of all other types of DSRs is specified by the length field of its DSD. When
+        // the bits encoding the length are 0x7fff, the length is infinite
+        fab_recv_data_wdsd = @set_dsd_length(fab_recv_data_wdsd, 0x7fff);
+
+        // FIFO listens for color RXACT_DATA in input queue 0
+        // move wavelets from fabric (core) to the FIFO
+        // only data wavelets, NOCE ctrl wavelets are removed
+        @mov32(fifo, fab_recv_data_wdsd, .{.async=true} );
+
+        // UT4 redirects cmd seq to fifo_cmd (infinite length)
+        fab_recv_cmdfifo_wdsd = @set_dsd_length(fab_recv_cmdfifo_wdsd, 0x7fff);
+        @mov32(fifo_cmd, fab_recv_cmdfifo_wdsd, .{.async=true} );
+
+        // UT5 redirects data from fifo_cmd to RXACT_CMD (infinite length)
+        // WTT(RXACT_CMD) will receive the data
+        fab_trans_cmdfifo_wdsd = @set_dsd_length(fab_trans_cmdfifo_wdsd, 0x7fff);
+        @mov32(fab_trans_cmdfifo_wdsd, fifo_cmd, .{.async=true} );
+    }
+
+    init_sym[0] = (@as(u32, CHECK_AND_IGNORE) << 16) + @as(u32, memcpy_use_addr_color);
+    init_sym[1] = (@as(u32, CHECK_AND_IGNORE) << 16) + @as(u32, sys_cmd_push);
+    init_sym[2] = (@as(u32, CHECK_AND_IGNORE) << 16) + @as(u32, sys_cmd_h2d);
+    init_sym[3] = (@as(u32, CHECK_AND_IGNORE) << 16) + @as(u32, sys_cmd_d2h);
+    init_sym[4] = (@as(u32, CHECK_AND_IGNORE) << 16) + @as(u32, sys_cmd_rpc);
+    init_sym[5] = (@as(u32, CHECK_AND_IGNORE) << 16) + @as(u32, memcpy_version);
+
+    // unblock RXACT_CMD to receive the cmd sequence when symbols are sent out
+    @mov32(fab_trans_init_sym_wdsd, mem_init_sym_dsd, .{.async=true, .unblock=WTT_RXACT_CMD });
+}
+
+
+comptime {
+
+    @comptime_assert( 0 == start_pos_y_cmd );
+
+    @activate(STARTUP);
+
+    // block RXACT_CMD_FIFO because UT4 reads it
+    @block( task_id_rxact_cmd_fifo );
+
+    // only unblock RXACT_CMD after _pe_id is retrieved and TDs of C21 and C23 are sent out
+    @block( WTT_RXACT_CMD );
+
+    // block, use microthread to read data from demux when memcpyH2D command is received
+    @block( task_id_rxact_data );
+
+    @bind_data_task( f_rxact_cmd, WTT_RXACT_CMD);
+
+    @bind_local_task( f_txact_next_tensor, TXACT_NEXT_TENSOR );
+    @bind_local_task( f_txact_next_chunk, TXACT_NEXT_CHUNK );
+
+    @bind_local_task( f_teardown, tile_config.teardown.get_task_id());
+
+    @bind_local_task( f_h2d_td, H2D_TD);
+    @bind_local_task( f_startup, STARTUP);
+}
+
+
+
+//         +------+
+//         | cmd  | --> c1
+//         +------+
+//            ^
+//            | c0
+//         +------+
+//         | cmd  | --> c1
+//         +------+
+//            ^
+//            | c0
+//         +------+
+//  c0 --> | cmd  | --> c1
+//         +------+
+//
+// where
+//    c0 = RXACT_CMD_FIFO
+//    c1 = TXACT_CMD
+//
+// ------
+// iportmap_cmd = f"{{ cmd_waves[i=0:{N_cmds-1}][j=0] -> [PE[-1, {height-1}] -> index[i]] }}"
+//
+comptime {
+
+    if (1 == height){
+        // only one PE, no broadcasting along the column
+        @set_local_color_config(RXACT_CMD_FIFO, .{ .routes = .{ .rx = .{WEST}, .tx = .{RAMP} } } );
+    }else{
+        if ( first_pe ){
+            @set_local_color_config(RXACT_CMD_FIFO, .{ .routes = .{ .rx = .{SOUTH}, .tx = .{RAMP} } } );
+        }else if ( last_pe ){
+            @set_local_color_config(RXACT_CMD_FIFO, .{ .routes = .{ .rx = .{WEST}, .tx = .{RAMP, NORTH} } } );
+        }else{
+            @set_local_color_config(RXACT_CMD_FIFO, .{ .routes = .{ .rx = .{SOUTH}, .tx = .{RAMP, NORTH} } } );
+        }
+    }
+
+    @set_local_color_config(TXACT_CMD, .{ .routes = .{ .rx = .{RAMP}, .tx = .{EAST} } } );
+
+    // data channel from demux at west
+    @set_local_color_config(RXACT_DATA, .{ .routes = .{ .rx = .{WEST}, .tx = .{RAMP} } } );
+
+    // H2D channels to core: for teardown and data
+    @set_local_color_config(TXACT_DATA, .{ .routes = .{ .rx = .{RAMP}, .tx = .{EAST} } } );
+
+    // RXACT_CMD receives the data from fifo_cmd
+    @set_local_color_config(RXACT_CMD, .{ .routes = .{ .rx = .{RAMP}, .tx = .{RAMP} } } );
+}
+
+comptime {
+    @initialize_queue(in_q_rxact_cmd, .{ .color = RXACT_CMD });
+}
+
+comptime {
+    @initialize_queue(iq_rxact_cmd_fifo, .{.color = RXACT_CMD_FIFO} );
+}
+
+comptime {
+    @initialize_queue(iq_rxact_data, .{.color = RXACT_DATA} );
+}
+
+comptime {
+    if (@is_arch("wse3")){
+        @initialize_queue(oq_txact_cmd, .{.color = TXACT_CMD});
+        @initialize_queue(oq_txact_data, .{.color = TXACT_DATA});
+        @initialize_queue(oq_rxact_cmd, .{.color = RXACT_CMD});
+    }
+}
+
+comptime {
+    @comptime_assert( 1 == fifo_enable );
+}

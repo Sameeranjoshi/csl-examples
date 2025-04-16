@@ -1,0 +1,667 @@
+
+// layout of CMD fan, demux, and demux adaptor to support 60 demux modules:
+
+//
+// Compilation of demux adaptor, demux and CMD fan
+// The following figure is for 1 LVDS
+//
+//           +---------+      +-------+      +---------+
+// LVDS ---> | demux   | ---> | demux | ---> | CMD fan | --->
+//           | adaptor |      |       |      |         |
+//           +---------+      +-------+      +---------+
+//                                |
+//                                V
+//                            +-------+      +---------+
+//                            | demux | ---> | CMD fan | --->
+//                            +-------+      +---------+
+//                                |
+//                                V
+//                            +-------+      +---------+
+//                            | demux | ---> | CMD fan | --->
+// LVDS -----------------------------------> |         |
+//                            +-------+      +---------+
+//
+// The following is for two LVDS
+//                        +---------+      +-------+      +---------+
+// FABRIC_H2D_DATA_0 ---> | demux   | ---> | demux | ---> | CMD fan | --->
+//                        | adaptor |      |       |      |         |
+//                        +---------+      +-------+      +---------+
+//
+//                        +---------+      +-------+      +---------+
+// FABRIC_H2D_DATA_1 ---> | demux   | ---> | demux | ---> | CMD fan | --->
+//                        | adaptor |      |       |      |         |
+// FABRIC_CMD ------------------------------------------> |         |
+//                        +---------+      +-------+      +---------+
+//
+//
+// placement:
+//   x
+//  -->
+//           +-------------------------+----------------+----------------+-------------+-------------+----------------+
+//  "height" | demux adaptor           |   demux        |  cmd fan       |  core       | mux         | mux adaptor    |
+//           +-------------------------+----------------+----------------+-------------+-------------+----------------+
+//  "width"    width_demux_adaptor = 1   widith_demux=1    width_cmd=1    width_core    width_mux=1   width_mux_adaptor=1
+//
+//
+//             +-----------------+
+//  (c6) -->   |  demux_adaptor  |  --> (c10)
+//             +-----------------+
+//
+//             +------------+
+//  (c10) -->  |  demux     |  --> (c11)
+//             +------------+
+//
+//             +-----------------+
+//  (c5) -->   |  cmd            |  --> (c0)
+//  (c11) -->  |                 |  --> (c1)
+//             +-----------------+
+//
+// Example: core rectangle is 4-by-3, with a demux and a demux adaptor at west edge,
+//    surrounded by a halo of size 1, here is the layout
+//    A LVDS connects to a demux adaptor which is 1-by-3
+//
+//       px  0     1       2           3     4     5     6     7     8     9             10
+//   py  +-----+-----+--------------+-----+-----+-----+-----+-----+-----+--------------+---+
+//    0  |  h  | h   |  h           |  h  |  h  |  h  |  h  |  h  |  h  | h            | h |
+//       +-----+--------------+-----+-----+-----+-----+-----+-----+-----+--------------+---+
+//    1  |  h  |demux adaptor |demux| cmd |core |core |core |core | mux | mux td       | h |
+//       +-----+--------------+-----+-----+-----+-----+-----+-----+-----+--------------+---+
+//    2  |  h  |   nop        |demux| cmd |core |core |core |core | mux | nop          | h |
+//       +-----+--------------+-----+-----+-----+-----+-----+-----+-----+--------------+---+
+//    3  |  h  |   nop        |demux| cmd |core |core |core |core | mux | mux_adaptor  | h | ---> LVDS
+//       +-----+--------------+-----+-----+-----+-----+-----+-----+-----+--------------+---+
+//    4  |  h  |  h           |  h  |  h  |  h  |  h  |  h  |  h  |  h  | h            | h |
+//       +-----+--------------+-----+-----+-----+-----+-----+-----+-----+--------------+---+
+//
+// demux adaptor:
+//    start_pos = (x = 0, y = 0)
+//    width = 1
+//    height = 3
+//
+// demux:
+//    start_pos = (x = 1, y = 0)
+//    width = 1
+//    height = 3
+//
+// cmd:
+//    start_pos = (x = 2, y = 0)
+//    width = 1
+//    height = 3
+//
+
+//
+//  FABRIC_CMD (5)      +---------+  RXCOMMAND (0)     +------+  RXCOMMAND (0)     +------+
+//    ------------>     | cmd fan |  --------->        | core | ----------->       | core |
+//  GC_TXACT_DEMUX (11) |         | MEMCPYH2D_DATA (1) |      | MEMCPYH2D_DATA (1) |      |
+//    ------------>     |         |  --------->        |      | ----------->       |      |
+//                      +---------+                    +------+                    +------+
+//
+//  FABRIC_H2D_DATA (6)  +---------------+  GC_RXACT_DEMUX (10)   +-------+ GC_TXACT_DEMUX (11)  +---------+
+//  --------------->     | demux adaptor | ---------------->      | demux | ------------------>  | cmd fan |
+//                       +---------------+                        +-------+                      +---------+
+//
+//
+
+//--- parameters
+
+// user's H2D colors
+// WARNING: if num_inputs=1, only MEMCPYH2D_DATA_1_ID is used
+//          if num_inputs=2, only MEMCPYH2D_DATA_1_ID and MEMCPYH2D_DATA_2_ID are used
+//
+// auto_cmd_fan_<num_inputs>in.csl is compiled
+//
+param MEMCPYH2D_DATA_1_ID : i16 = 32;  // 1st H2D, specified by the user
+param MEMCPYH2D_DATA_2_ID : i16 = 32;  // 2nd H2D, specified by the user
+param MEMCPYH2D_DATA_3_ID : i16 = 32;  // 3rd H2D, specified by the user
+param MEMCPYH2D_DATA_4_ID : i16 = 32;  // 4th H2D, specified by the user
+
+// routing of cmd fan
+param FABRIC_CMD_ID : i16;      // input of CMD fan (command sequence from LVDS)
+
+// routing of demux adaptor
+//--- AUTO-1: FABRIC_H2D_DATA_ID_<j>: j=0,1,2,...,15
+// if FABRIC_H2D_DATA_ID_<j> = -1, then it is not valid
+// In production, prefer one color, and the routing solves the crossing issue
+param FABRIC_H2D_DATA_ID_0 : i16 = -1; // input of demux adaptor 0 (data from LVDS)
+param FABRIC_H2D_DATA_ID_1 : i16 = -1; // input of demux adaptor 1 (data from LVDS)
+param FABRIC_H2D_DATA_ID_2 : i16 = -1; // input of demux adaptor 2 (data from LVDS)
+param FABRIC_H2D_DATA_ID_3 : i16 = -1; // input of demux adaptor 3 (data from LVDS)
+param FABRIC_H2D_DATA_ID_4 : i16 = -1; // input of demux adaptor 4 (data from LVDS)
+param FABRIC_H2D_DATA_ID_5 : i16 = -1; // input of demux adaptor 5 (data from LVDS)
+param FABRIC_H2D_DATA_ID_6 : i16 = -1; // input of demux adaptor 6 (data from LVDS)
+param FABRIC_H2D_DATA_ID_7 : i16 = -1; // input of demux adaptor 7 (data from LVDS)
+param FABRIC_H2D_DATA_ID_8 : i16 = -1; // input of demux adaptor 8 (data from LVDS)
+param FABRIC_H2D_DATA_ID_9 : i16 = -1; // input of demux adaptor 9 (data from LVDS)
+param FABRIC_H2D_DATA_ID_10 : i16 = -1; // input of demux adaptor 10 (data from LVDS)
+param FABRIC_H2D_DATA_ID_11 : i16 = -1; // input of demux adaptor 11 (data from LVDS)
+param FABRIC_H2D_DATA_ID_12 : i16 = -1; // input of demux adaptor 12 (data from LVDS)
+param FABRIC_H2D_DATA_ID_13 : i16 = -1; // input of demux adaptor 13 (data from LVDS)
+param FABRIC_H2D_DATA_ID_14 : i16 = -1; // input of demux adaptor 14 (data from LVDS)
+param FABRIC_H2D_DATA_ID_15 : i16 = -1; // input of demux adaptor 15 (data from LVDS)
+param FABRIC_H2D_DATA_ID_16 : i16 = -1; // input of demux adaptor 16 (data from LVDS)
+param FABRIC_H2D_DATA_ID_17 : i16 = -1; // input of demux adaptor 17 (data from LVDS)
+param FABRIC_H2D_DATA_ID_18 : i16 = -1; // input of demux adaptor 18 (data from LVDS)
+param FABRIC_H2D_DATA_ID_19 : i16 = -1; // input of demux adaptor 19 (data from LVDS)
+param FABRIC_H2D_DATA_ID_20 : i16 = -1; // input of demux adaptor 20 (data from LVDS)
+param FABRIC_H2D_DATA_ID_21 : i16 = -1; // input of demux adaptor 21 (data from LVDS)
+param FABRIC_H2D_DATA_ID_22 : i16 = -1; // input of demux adaptor 22 (data from LVDS)
+param FABRIC_H2D_DATA_ID_23 : i16 = -1; // input of demux adaptor 23 (data from LVDS)
+param FABRIC_H2D_DATA_ID_24 : i16 = -1; // input of demux adaptor 24 (data from LVDS)
+param FABRIC_H2D_DATA_ID_25 : i16 = -1; // input of demux adaptor 25 (data from LVDS)
+param FABRIC_H2D_DATA_ID_26 : i16 = -1; // input of demux adaptor 26 (data from LVDS)
+param FABRIC_H2D_DATA_ID_27 : i16 = -1; // input of demux adaptor 27 (data from LVDS)
+param FABRIC_H2D_DATA_ID_28 : i16 = -1; // input of demux adaptor 28 (data from LVDS)
+param FABRIC_H2D_DATA_ID_29 : i16 = -1; // input of demux adaptor 29 (data from LVDS)
+param FABRIC_H2D_DATA_ID_30 : i16 = -1; // input of demux adaptor 30 (data from LVDS)
+param FABRIC_H2D_DATA_ID_31 : i16 = -1; // input of demux adaptor 31 (data from LVDS)
+param FABRIC_H2D_DATA_ID_32 : i16 = -1; // input of demux adaptor 32 (data from LVDS)
+param FABRIC_H2D_DATA_ID_33 : i16 = -1; // input of demux adaptor 33 (data from LVDS)
+param FABRIC_H2D_DATA_ID_34 : i16 = -1; // input of demux adaptor 34 (data from LVDS)
+param FABRIC_H2D_DATA_ID_35 : i16 = -1; // input of demux adaptor 35 (data from LVDS)
+param FABRIC_H2D_DATA_ID_36 : i16 = -1; // input of demux adaptor 36 (data from LVDS)
+param FABRIC_H2D_DATA_ID_37 : i16 = -1; // input of demux adaptor 37 (data from LVDS)
+param FABRIC_H2D_DATA_ID_38 : i16 = -1; // input of demux adaptor 38 (data from LVDS)
+param FABRIC_H2D_DATA_ID_39 : i16 = -1; // input of demux adaptor 39 (data from LVDS)
+param FABRIC_H2D_DATA_ID_40 : i16 = -1; // input of demux adaptor 40 (data from LVDS)
+param FABRIC_H2D_DATA_ID_41 : i16 = -1; // input of demux adaptor 41 (data from LVDS)
+param FABRIC_H2D_DATA_ID_42 : i16 = -1; // input of demux adaptor 42 (data from LVDS)
+param FABRIC_H2D_DATA_ID_43 : i16 = -1; // input of demux adaptor 43 (data from LVDS)
+param FABRIC_H2D_DATA_ID_44 : i16 = -1; // input of demux adaptor 44 (data from LVDS)
+param FABRIC_H2D_DATA_ID_45 : i16 = -1; // input of demux adaptor 45 (data from LVDS)
+param FABRIC_H2D_DATA_ID_46 : i16 = -1; // input of demux adaptor 46 (data from LVDS)
+param FABRIC_H2D_DATA_ID_47 : i16 = -1; // input of demux adaptor 47 (data from LVDS)
+param FABRIC_H2D_DATA_ID_48 : i16 = -1; // input of demux adaptor 48 (data from LVDS)
+param FABRIC_H2D_DATA_ID_49 : i16 = -1; // input of demux adaptor 49 (data from LVDS)
+param FABRIC_H2D_DATA_ID_50 : i16 = -1; // input of demux adaptor 50 (data from LVDS)
+param FABRIC_H2D_DATA_ID_51 : i16 = -1; // input of demux adaptor 51 (data from LVDS)
+param FABRIC_H2D_DATA_ID_52 : i16 = -1; // input of demux adaptor 52 (data from LVDS)
+param FABRIC_H2D_DATA_ID_53 : i16 = -1; // input of demux adaptor 53 (data from LVDS)
+param FABRIC_H2D_DATA_ID_54 : i16 = -1; // input of demux adaptor 54 (data from LVDS)
+param FABRIC_H2D_DATA_ID_55 : i16 = -1; // input of demux adaptor 55 (data from LVDS)
+param FABRIC_H2D_DATA_ID_56 : i16 = -1; // input of demux adaptor 56 (data from LVDS)
+param FABRIC_H2D_DATA_ID_57 : i16 = -1; // input of demux adaptor 57 (data from LVDS)
+param FABRIC_H2D_DATA_ID_58 : i16 = -1; // input of demux adaptor 58 (data from LVDS)
+param FABRIC_H2D_DATA_ID_59 : i16 = -1; // input of demux adaptor 59 (data from LVDS)
+//---
+
+// routing between demux adaptor and demux
+param GC_RXACT_DEMUX_ID : i16;  // input of demux, output of demux adaptor
+param GC_TXACT_DEMUX_ID : i16;  // output of demux, input of cmd fan
+param GC_RXACT_CMD_ID : i16; // internal color of cmd fan
+                             // receive data from fifo_cmd
+param GC_BUF_DEMUX_ID : i16; // color swapping for buffer
+
+param height: i16 ;       // height of the demux = height of CMD fan
+param num_inputs: i16;    // number of user's H2D colors
+param width_west_buf: i16; // width of buffer, >=0
+
+// num_demux decides how many demux modules are created
+// even though we may define more colors for FABRIC_H2D_DATA_ID_<j> and height_demux_<j>
+// the layout block will check
+// - height_demux_list[idx] > 0
+// - 0 <= FABRIC_H2D_DATA_ID_<idx> <= 23
+// - 0 <= start_pos_y_demux_list[idx] < height
+//
+param num_demux: i16;  // number of demux modules
+
+//--- AUTO-2: height_demux_<j>: j=0,1,2,...,15
+param height_demux_0: i16 = -1;  // h0
+param height_demux_1: i16 = -1;  // h1
+param height_demux_2: i16 = -1;  // h2
+param height_demux_3: i16 = -1;  // h3
+param height_demux_4: i16 = -1;  // h4
+param height_demux_5: i16 = -1;  // h5
+param height_demux_6: i16 = -1;  // h6
+param height_demux_7: i16 = -1;  // h7
+param height_demux_8: i16 = -1;  // h8
+param height_demux_9: i16 = -1;  // h9
+param height_demux_10: i16 = -1;  // h10
+param height_demux_11: i16 = -1;  // h11
+param height_demux_12: i16 = -1;  // h12
+param height_demux_13: i16 = -1;  // h13
+param height_demux_14: i16 = -1;  // h14
+param height_demux_15: i16 = -1;  // h15
+param height_demux_16: i16 = -1;  // h16
+param height_demux_17: i16 = -1;  // h17
+param height_demux_18: i16 = -1;  // h18
+param height_demux_19: i16 = -1;  // h19
+param height_demux_20: i16 = -1;  // h20
+param height_demux_21: i16 = -1;  // h21
+param height_demux_22: i16 = -1;  // h22
+param height_demux_23: i16 = -1;  // h23
+param height_demux_24: i16 = -1;  // h24
+param height_demux_25: i16 = -1;  // h25
+param height_demux_26: i16 = -1;  // h26
+param height_demux_27: i16 = -1;  // h27
+param height_demux_28: i16 = -1;  // h28
+param height_demux_29: i16 = -1;  // h29
+param height_demux_30: i16 = -1;  // h30
+param height_demux_31: i16 = -1;  // h31
+param height_demux_32: i16 = -1;  // h32
+param height_demux_33: i16 = -1;  // h33
+param height_demux_34: i16 = -1;  // h34
+param height_demux_35: i16 = -1;  // h35
+param height_demux_36: i16 = -1;  // h36
+param height_demux_37: i16 = -1;  // h37
+param height_demux_38: i16 = -1;  // h38
+param height_demux_39: i16 = -1;  // h39
+param height_demux_40: i16 = -1;  // h40
+param height_demux_41: i16 = -1;  // h41
+param height_demux_42: i16 = -1;  // h42
+param height_demux_43: i16 = -1;  // h43
+param height_demux_44: i16 = -1;  // h44
+param height_demux_45: i16 = -1;  // h45
+param height_demux_46: i16 = -1;  // h46
+param height_demux_47: i16 = -1;  // h47
+param height_demux_48: i16 = -1;  // h48
+param height_demux_49: i16 = -1;  // h49
+param height_demux_50: i16 = -1;  // h50
+param height_demux_51: i16 = -1;  // h51
+param height_demux_52: i16 = -1;  // h52
+param height_demux_53: i16 = -1;  // h53
+param height_demux_54: i16 = -1;  // h54
+param height_demux_55: i16 = -1;  // h55
+param height_demux_56: i16 = -1;  // h56
+param height_demux_57: i16 = -1;  // h57
+param height_demux_58: i16 = -1;  // h58
+param height_demux_59: i16 = -1;  // h59
+//---
+
+
+
+//--- system reserved
+const sys_params = @import_module( "<memcpy/sys_params>" );
+
+const MEMCPYH2D_DATA: color = sys_params.MEMCPYH2D_DATA;
+const RXCOMMAND : color     = sys_params.RXCOMMAND;
+
+const SYS_CMD_MEMCPYH2D: control_task_id = sys_params.SYS_CMD_MEMCPYH2D;
+const SYS_CMD_MEMCPYD2H: control_task_id = sys_params.SYS_CMD_MEMCPYD2H;
+const SYS_CMD_LAUNCH: control_task_id = sys_params.SYS_RPC;
+
+// command in index field, used by CMD fan
+const CODE_MEMCPYH2D :i16 = @get_int(SYS_CMD_MEMCPYH2D) ;
+const CODE_MEMCPYD2H :i16 = @get_int(SYS_CMD_MEMCPYD2H) ;
+const CODE_LAUNCH:i16 = @get_int(SYS_CMD_LAUNCH);
+
+//---
+
+
+const MEMCPYH2D_DATA_1 : color = @get_color(MEMCPYH2D_DATA_1_ID);
+const MEMCPYH2D_DATA_2 : color = @get_color(MEMCPYH2D_DATA_2_ID);
+const MEMCPYH2D_DATA_3 : color = @get_color(MEMCPYH2D_DATA_3_ID);
+const MEMCPYH2D_DATA_4 : color = @get_color(MEMCPYH2D_DATA_4_ID);
+
+const FABRIC_CMD : color = @get_color(FABRIC_CMD_ID);
+const GC_RXACT_DEMUX : color = @get_color(GC_RXACT_DEMUX_ID);
+const GC_TXACT_DEMUX : color = @get_color(GC_TXACT_DEMUX_ID);
+const GC_RXACT_CMD : color = @get_color(GC_RXACT_CMD_ID);
+
+const GC_BUF_DEMUX : color = @get_color(GC_BUF_DEMUX_ID);
+
+// ---- buffer: entrypoints
+const BUF_STARTUP : local_task_id      = @get_local_task_id(24);
+
+// ---- cmd fan: entrypoints
+const CMD_STARTUP : local_task_id      = @get_local_task_id(24);
+const CMD_TXACT_NEXT_TENSOR: local_task_id = @get_local_task_id(26);
+const CMD_TXACT_NEXT_CHUNK: local_task_id = @get_local_task_id(27);
+const CMD_H2D_TD: local_task_id = @get_local_task_id(28);
+// ---- end cmd fan
+
+// ---- demux adaptor: entrypoints
+const DEMUX_ADAPTOR_STARTUP : local_task_id     = @get_local_task_id(24);
+const DEMUX_ADAPTOR_CONFIG : local_task_id      = @get_local_task_id(25);
+const DEMUX_ADAPTOR_TXTD0_DONE : local_task_id  = @get_local_task_id(26);
+const DEMUX_ADAPTOR_TXCFG3_DONE : local_task_id = @get_local_task_id(27);
+const DEMUX_ADAPTOR_TXTD1_DONE : local_task_id  = @get_local_task_id(28);
+const DEMUX_ADAPTOR_RXDONE : local_task_id      = @get_local_task_id(30);
+// ---- end demux adaptor
+
+// ---- demux: entrypoints
+const DEMUX_STARTUP : local_task_id          = @get_local_task_id(25);
+const DEMUX_CONFIG : local_task_id           = @get_local_task_id(26);
+const DEMUX_TXACT_NEXT_TENSOR: local_task_id = @get_local_task_id(27);
+const DEMUX_TXACT_NEXT_CHUNK: local_task_id  = @get_local_task_id(28);
+// ---- end demux
+
+
+
+layout{
+
+    @comptime_assert( 60 >= num_demux );
+
+//--- AUTO-3: extend FABRIC_H2D_DATA_ID_list and height_demux_list
+    const FABRIC_H2D_DATA_ID_list = [60]i16 {
+               FABRIC_H2D_DATA_ID_0,
+               FABRIC_H2D_DATA_ID_1,
+               FABRIC_H2D_DATA_ID_2,
+               FABRIC_H2D_DATA_ID_3,
+               FABRIC_H2D_DATA_ID_4,
+               FABRIC_H2D_DATA_ID_5,
+               FABRIC_H2D_DATA_ID_6,
+               FABRIC_H2D_DATA_ID_7,
+               FABRIC_H2D_DATA_ID_8,
+               FABRIC_H2D_DATA_ID_9,
+               FABRIC_H2D_DATA_ID_10,
+               FABRIC_H2D_DATA_ID_11,
+               FABRIC_H2D_DATA_ID_12,
+               FABRIC_H2D_DATA_ID_13,
+               FABRIC_H2D_DATA_ID_14,
+               FABRIC_H2D_DATA_ID_15,
+               FABRIC_H2D_DATA_ID_16,
+               FABRIC_H2D_DATA_ID_17,
+               FABRIC_H2D_DATA_ID_18,
+               FABRIC_H2D_DATA_ID_19,
+               FABRIC_H2D_DATA_ID_20,
+               FABRIC_H2D_DATA_ID_21,
+               FABRIC_H2D_DATA_ID_22,
+               FABRIC_H2D_DATA_ID_23,
+               FABRIC_H2D_DATA_ID_24,
+               FABRIC_H2D_DATA_ID_25,
+               FABRIC_H2D_DATA_ID_26,
+               FABRIC_H2D_DATA_ID_27,
+               FABRIC_H2D_DATA_ID_28,
+               FABRIC_H2D_DATA_ID_29,
+               FABRIC_H2D_DATA_ID_30,
+               FABRIC_H2D_DATA_ID_31,
+               FABRIC_H2D_DATA_ID_32,
+               FABRIC_H2D_DATA_ID_33,
+               FABRIC_H2D_DATA_ID_34,
+               FABRIC_H2D_DATA_ID_35,
+               FABRIC_H2D_DATA_ID_36,
+               FABRIC_H2D_DATA_ID_37,
+               FABRIC_H2D_DATA_ID_38,
+               FABRIC_H2D_DATA_ID_39,
+               FABRIC_H2D_DATA_ID_40,
+               FABRIC_H2D_DATA_ID_41,
+               FABRIC_H2D_DATA_ID_42,
+               FABRIC_H2D_DATA_ID_43,
+               FABRIC_H2D_DATA_ID_44,
+               FABRIC_H2D_DATA_ID_45,
+               FABRIC_H2D_DATA_ID_46,
+               FABRIC_H2D_DATA_ID_47,
+               FABRIC_H2D_DATA_ID_48,
+               FABRIC_H2D_DATA_ID_49,
+               FABRIC_H2D_DATA_ID_50,
+               FABRIC_H2D_DATA_ID_51,
+               FABRIC_H2D_DATA_ID_52,
+               FABRIC_H2D_DATA_ID_53,
+               FABRIC_H2D_DATA_ID_54,
+               FABRIC_H2D_DATA_ID_55,
+               FABRIC_H2D_DATA_ID_56,
+               FABRIC_H2D_DATA_ID_57,
+               FABRIC_H2D_DATA_ID_58,
+               FABRIC_H2D_DATA_ID_59
+    };
+    const height_demux_list = [60]i16 {
+               height_demux_0,
+               height_demux_1,
+               height_demux_2,
+               height_demux_3,
+               height_demux_4,
+               height_demux_5,
+               height_demux_6,
+               height_demux_7,
+               height_demux_8,
+               height_demux_9,
+               height_demux_10,
+               height_demux_11,
+               height_demux_12,
+               height_demux_13,
+               height_demux_14,
+               height_demux_15,
+               height_demux_16,
+               height_demux_17,
+               height_demux_18,
+               height_demux_19,
+               height_demux_20,
+               height_demux_21,
+               height_demux_22,
+               height_demux_23,
+               height_demux_24,
+               height_demux_25,
+               height_demux_26,
+               height_demux_27,
+               height_demux_28,
+               height_demux_29,
+               height_demux_30,
+               height_demux_31,
+               height_demux_32,
+               height_demux_33,
+               height_demux_34,
+               height_demux_35,
+               height_demux_36,
+               height_demux_37,
+               height_demux_38,
+               height_demux_39,
+               height_demux_40,
+               height_demux_41,
+               height_demux_42,
+               height_demux_43,
+               height_demux_44,
+               height_demux_45,
+               height_demux_46,
+               height_demux_47,
+               height_demux_48,
+               height_demux_49,
+               height_demux_50,
+               height_demux_51,
+               height_demux_52,
+               height_demux_53,
+               height_demux_54,
+               height_demux_55,
+               height_demux_56,
+               height_demux_57,
+               height_demux_58,
+               height_demux_59
+    };
+//---
+
+
+    var start_pos_y_demux_list = @zeros([num_demux+1]i16);
+    var idx : i16 = 0;
+    while(idx < num_demux) : (idx +=1) {
+        start_pos_y_demux_list[idx+1] = start_pos_y_demux_list[idx] + height_demux_list[idx];
+    }
+    // 1st demux must starts from 0
+    @comptime_assert( 0 == start_pos_y_demux_list[0] );
+    // summation of heights of all demux modules must be height
+    @comptime_assert( height == start_pos_y_demux_list[num_demux] );
+//---
+
+    const start_pos_x_demux_adaptor : i16 = 0;
+    const width_demux_adaptor : i16 = 1;
+
+    const start_pos_x_demux : i16 = start_pos_x_demux_adaptor + width_demux_adaptor; // 1
+    const width_demux : i16 = 1;
+
+    const start_pos_x_buf : i16 = start_pos_x_demux + width_demux; // 2
+    const start_pos_y_buf : i16 = 0;
+    const width_buf : i16 = width_west_buf;
+    const height_buf : i16 = height;
+
+    const start_pos_x_cmd : i16 = start_pos_x_buf + width_buf; // 2 + width_west_buf
+    const start_pos_y_cmd : i16 = 0;
+    const width_cmd : i16 = 1;
+    const height_cmd : i16 = height;
+
+    @comptime_assert( start_pos_x_demux_adaptor == 0 );
+    @comptime_assert( start_pos_x_demux == 1 );
+    @comptime_assert( start_pos_x_cmd == (2 + width_west_buf) );
+
+    // WARNING: only support up to 4 H2D colors
+    @comptime_assert( 0 <= num_inputs );
+    @comptime_assert( 4 >= num_inputs );
+
+    // step 1: configure the rectangle which does not include the halo
+    // demux adaptor is at 1st column
+    // demux is at 2nd column
+    // cmd fan is at 3rd column
+    @set_rectangle( 3 + width_west_buf, height );
+
+    // step 2: compile csl code for a set of PEx.y and generate out_x_y.elf
+    //   format: @set_tile_code(x, y, code.csl, param_binding);
+
+    idx = 0;
+    while(idx < num_demux) : (idx +=1) {
+
+        // both are used in demux adaptor and demux
+        // height_demux = h0, h1, ...
+        const height_demux :i16 = height_demux_list[idx];
+        // start_pos_y_demux = 0, h0, h0+h1, ...
+        const start_pos_y_demux : i16 = start_pos_y_demux_list[idx];
+
+        // a demux must be non-empty
+        @comptime_assert( 1 <= height_demux );
+
+        // 0 <= start_pos_y_demux < height
+        @comptime_assert( 0 <= start_pos_y_demux );
+        @comptime_assert( height > start_pos_y_demux );
+
+        // FABRIC_H2D_DATA must be a routable color
+        @comptime_assert( 0  <= FABRIC_H2D_DATA_ID_list[idx]);
+        @comptime_assert( 23 >= FABRIC_H2D_DATA_ID_list[idx]);
+
+        // demux adaptor has RXACT = FABRIC_H2D_DATA_<j>
+        const FABRIC_H2D_DATA: color = @get_color(FABRIC_H2D_DATA_ID_list[idx]);
+
+        var py: i16 = 0;
+
+        // keep I/O of demux because all demux modules are running independently
+        if ( 1 == height_demux ){
+            @set_tile_code(start_pos_x_demux, start_pos_y_demux, "demux_N1.csl", .{
+                .RXACT = GC_RXACT_DEMUX,
+                .TXACT = GC_TXACT_DEMUX,
+                // entrypoints
+                .STARTUP = DEMUX_STARTUP,
+                .CONFIG = DEMUX_CONFIG,
+                .TXACT_NEXT_TENSOR= DEMUX_TXACT_NEXT_TENSOR,
+                .TXACT_NEXT_CHUNK = DEMUX_TXACT_NEXT_CHUNK,
+
+                ._pe_id=py,
+                .height=height_demux } );
+
+        }else{
+            while(py < height_demux) : (py +=1) {
+                const first_pe: bool = (0 == py);
+                const last_pe: bool = ((height_demux-1) == py);
+                // retrieve runtime py in the kernel to reduce the ELFs
+                // only 3 ELFs are generated for any height_demux
+                @set_tile_code(start_pos_x_demux, start_pos_y_demux + py, "demux.csl", .{
+                    .RXACT = GC_RXACT_DEMUX,
+                    .TXACT = GC_TXACT_DEMUX,
+                    // entrypoints
+                    .STARTUP = DEMUX_STARTUP,
+                    .CONFIG = DEMUX_CONFIG,
+                    .TXACT_NEXT_TENSOR= DEMUX_TXACT_NEXT_TENSOR,
+                    .TXACT_NEXT_CHUNK = DEMUX_TXACT_NEXT_CHUNK,
+
+                    .height=height_demux,
+                    .first_pe=first_pe,
+                    .last_pe=last_pe,
+                    .start_pos_y_demux = start_pos_y_demux } );
+            }
+        }
+
+        // "demux adaptor" only connects to 1st PE of demux, so compile empty kernel (nop.csl) for other PEs
+        if ( 1 == height_demux ){
+            @set_tile_code(start_pos_x_demux_adaptor, start_pos_y_demux, "demux_adaptor_N1.csl", .{
+                .RXACT = FABRIC_H2D_DATA, // each adaptor may have different color
+                .TXACT = GC_RXACT_DEMUX,
+                // entrypoints
+                .CONFIG = DEMUX_ADAPTOR_CONFIG,
+                .TXTD0_DONE=DEMUX_ADAPTOR_TXTD0_DONE,
+                .TXCFG3_DONE=DEMUX_ADAPTOR_TXCFG3_DONE,
+                .TXTD1_DONE=DEMUX_ADAPTOR_TXTD1_DONE,
+                .RXDONE=DEMUX_ADAPTOR_RXDONE,
+                .STARTUP= DEMUX_ADAPTOR_STARTUP,
+                .N = height_demux } );
+        }else{
+            py = 0;
+            while(py < height_demux) : (py +=1) {
+                if ( 0 == py ){
+                    @set_tile_code(start_pos_x_demux_adaptor, start_pos_y_demux + py, "demux_adaptor.csl", .{
+                        .RXACT = FABRIC_H2D_DATA,  // each adaptor may have different color
+                        .TXACT = GC_RXACT_DEMUX,
+                        // entrypoints
+                        .CONFIG = DEMUX_ADAPTOR_CONFIG,
+                        .TXTD0_DONE=DEMUX_ADAPTOR_TXTD0_DONE,
+                        .TXCFG3_DONE=DEMUX_ADAPTOR_TXCFG3_DONE,
+                        .TXTD1_DONE=DEMUX_ADAPTOR_TXTD1_DONE,
+                        .RXDONE=DEMUX_ADAPTOR_RXDONE,
+                        .STARTUP= DEMUX_ADAPTOR_STARTUP,
+                        .N = height_demux } );
+                }else{
+                    @set_tile_code(start_pos_x_demux_adaptor, start_pos_y_demux + py, "nop.csl" );
+                }
+            }
+       }
+
+    }// for each demux
+
+    var px: i16 = 0;
+    while( px < width_buf) : (px +=1) {
+        // color swapping
+        var RXACT_BUF : color = GC_TXACT_DEMUX;
+        var TXACT_BUF : color = GC_BUF_DEMUX;
+        if (1 == px % 2){
+            RXACT_BUF = GC_BUF_DEMUX;
+            TXACT_BUF = GC_TXACT_DEMUX;
+        }
+        const comm_params = .{
+            .RXACT=RXACT_BUF,
+            .TXACT=TXACT_BUF,
+            .STARTUP=BUF_STARTUP
+        };
+        var py:i16 = 0;
+        while(py < height_buf) : (py +=1) {
+            @set_tile_code(start_pos_x_buf + px, start_pos_y_buf + py, "buffer.csl", comm_params);
+        }
+    }
+
+    // "cmd fan" occupies a column of PEs, broadcasting the commands to the core rectangle
+    var py:i16 = 0;
+    while(py < height_cmd) : (py +=1) {
+        const first_pe: bool = (0 == py);
+        const last_pe: bool = ((height_cmd-1) == py);
+        // retrieve runtime py in the kernel to reduce the ELFs
+        // only 3 ELFs are generated for any height_cmd
+
+        var RXACT_DATA_CMD_FAN: color = GC_TXACT_DEMUX;
+        if ( 1 == width_buf % 2 ){
+            RXACT_DATA_CMD_FAN = GC_BUF_DEMUX;
+        }
+        const comm_params = .{
+            .RXACT_CMD_FIFO=FABRIC_CMD,
+            .RXACT_CMD=GC_RXACT_CMD,
+            .TXACT_CMD=RXCOMMAND,
+            .RXACT_DATA = RXACT_DATA_CMD_FAN,
+
+            .STARTUP=CMD_STARTUP,
+            .TXACT_NEXT_TENSOR=CMD_TXACT_NEXT_TENSOR,
+            .TXACT_NEXT_CHUNK=CMD_TXACT_NEXT_CHUNK,
+            .H2D_TD=CMD_H2D_TD,
+            .CODE_MEMCPYH2D=CODE_MEMCPYH2D,
+            .CODE_MEMCPYD2H=CODE_MEMCPYD2H,
+            .CODE_LAUNCH=CODE_LAUNCH,
+
+            .TXACT_DATA=MEMCPYH2D_DATA,
+
+            .height=height_cmd,
+            .first_pe=first_pe,
+            .last_pe=last_pe,
+            .start_pos_y_cmd=start_pos_y_cmd
+        };
+
+        @set_tile_code(start_pos_x_cmd, start_pos_y_cmd + py, "cmd_fan.csl", comm_params);
+    }
+
+    // step 3: global and internal routing
+    //  format: @set_color_config(x, y, color, route);
+
+    // routing of demux: see demux.csl
+
+    // routing of demux adaptor: see demux_adaptor.csl
+
+} // end of layout

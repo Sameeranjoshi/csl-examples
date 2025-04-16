@@ -1,0 +1,71 @@
+// ----------------------------------------------------------------
+// internal helpers to validate type parameters
+// ----------------------------------------------------------------
+
+fn is_float(comptime T: type) bool {
+  return @is_same_type(T, f16) or
+    @is_same_type(T, f32);
+}
+
+fn is_signed(comptime T: type) bool {
+  return is_float(T) or
+    @is_same_type(T, i8) or
+    @is_same_type(T, i16) or
+    @is_same_type(T, i32) or
+    @is_same_type(T, i64);
+}
+
+fn is_numeric(comptime T: type) bool {
+  return is_signed(T) or
+    @is_same_type(T, u8) or
+    @is_same_type(T, u16) or
+    @is_same_type(T, u32) or
+    @is_same_type(T, u64);
+}
+
+// ----------------------------------------------------------------
+// internal helpers for the representation of types
+// these may be good candidates to become compiler builtins
+// ----------------------------------------------------------------
+
+fn word_size_of(comptime T: type) u16 {
+  if (@is_same_type(T, i64) or @is_same_type(T, u64)) {
+    return 4;
+  } else if (@is_same_type(T, f32) or
+      @is_same_type(T, i32) or
+      @is_same_type(T, u32)) {
+    return 2;
+  } else if (@is_same_type(T, f16) or
+      @is_same_type(T, i16) or
+      @is_same_type(T, u16)) {
+    return 1;
+  }
+  // currently only support ≥16-bit primitive types
+  @comptime_print("unsupported type", T);
+  @comptime_assert(false);
+}
+
+fn byte_size_of(comptime T: type) u16 {
+  if (@is_same_type(T, i8) or
+      @is_same_type(T, u8)) {
+    return 1;
+  }
+  return 2 * word_size_of(T);
+}
+
+fn word_align_of(comptime T: type) u16 {
+  if (@is_same_type(T, i64) or @is_same_type(T, u64)) {
+    return 4;
+  } else if (@is_same_type(T, f32) or
+      @is_same_type(T, i32) or
+      @is_same_type(T, u32)) {
+    return 2;
+  } else if (@is_same_type(T, f16) or
+      @is_same_type(T, i16) or
+      @is_same_type(T, u16)) {
+    return 1;
+  }
+  // currently only support ≥16-bit primitive types
+  @comptime_print("unsupported type", T);
+  @comptime_assert(false);
+}

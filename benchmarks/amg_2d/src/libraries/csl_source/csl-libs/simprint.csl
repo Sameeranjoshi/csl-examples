@@ -1,0 +1,63 @@
+param enable: bool = true;
+
+const internal = @import_module(
+    "<simprint/internal>",
+    .{ .enable = enable }
+);
+
+fn print_string(comptime s: comptime_string) void {
+    internal.print_string(s);
+}
+
+fn print_u16_binary(x: u16) void {
+    internal.print_u16_binary(x);
+}
+
+fn print_u16_decimal(x: u16) void {
+    internal.print_u16_decimal(x);
+}
+
+fn print_u16_hex(x: u16) void {
+    internal.print_u16_hex(x);
+}
+
+fn print_f16(x: f16) void {
+    internal.print_f16(x);
+}
+
+fn print_u32_binary(x: u32) void {
+    internal.print_u32_binary(x);
+}
+
+fn print_u32_decimal(x: u32) void {
+    internal.print_u32_decimal(x);
+}
+
+fn print_u32_hex(x: u32) void {
+    internal.print_u32_hex(x);
+}
+
+fn print_f32(x: f32) void {
+    internal.print_f32(x);
+}
+
+fn fmt(comptime fstr: comptime_string, args: anytype) void {
+    const append_newline = true;
+    internal.fmt_impl(fstr, args, append_newline);
+}
+
+fn fmt_no_nl(comptime fstr: comptime_string, args: anytype) void {
+    const append_newline = false;
+    internal.fmt_impl(fstr, args, append_newline);
+}
+
+const lm = @import_module("<layout>");
+
+fn fmt_with_coords(comptime fstr: comptime_string, args: anytype) void {
+    internal.fmt_impl(
+        "PE({d},{d}): ",
+        .{ lm.get_x_coord(), lm.get_y_coord() },
+        false
+    );
+    internal.fmt_impl(fstr, args, true);
+}

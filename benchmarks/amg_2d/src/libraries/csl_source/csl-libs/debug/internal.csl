@@ -1,0 +1,94 @@
+/// We co-opt the python formater from
+///  * <https://docs.python.org/3/library/struct.html>
+/// to use for char-based prefixes. This allows the
+/// python decoder to be generic, if needed.
+
+param key : comptime_string;
+param buffer_size : comptime_int;
+
+fn mangle_symbol(sym: comptime_string) comptime_string {
+  return @strcat("$$csl_debug.", key, ".", sym);
+}
+
+export var buffer linkname(mangle_symbol("buffer")) = @zeros([buffer_size]u16);
+export var buffer_index : u16 linkname(mangle_symbol("buffer_index")) = 0;
+
+const types = @import_module("<math/type_helpers>");
+const ts = @import_module("<time>");
+
+// The put functions are internal, recording raw words.
+fn tagged_put_u8(tag : u8, x : u8) void {
+  put(@as(u16, x) << 8 | @as(u16, tag));
+}
+
+fn put(x: anytype) void {
+  const T = @type_of(x);
+  if (buffer_index + types.word_size_of(T) <= buffer_size) {
+    const ptr = @ptrcast(*T, &buffer[buffer_index]);
+    ptr.* = x;
+    buffer_index += types.word_size_of(T);
+  }
+}
+
+fn get_tag(comptime T: type) comptime_int {
+  return if (@is_same_type(T, bool)) 63 // '?'
+    else if (@is_same_type(T, u8)) 66 // 'B'
+    else if (@is_same_type(T, i8)) 98 // 'b'
+    else if (@is_same_type(T, u16)) 72 // 'H'
+    else if (@is_same_type(T, i16)) 104 // 'h'
+    else if (@is_same_type(T, f16)) 101 // 'e'
+    else if (@is_same_type(T, u32)) 73 // 'I'
+    else if (@is_same_type(T, i32)) 105 // 'i'
+    else if (@is_same_type(T, f32)) 102 // 'f'
+    else if (@is_same_type(T, u64)) 81 // 'Q'
+    else if (@is_same_type(T, i64)) 113 // 'q'
+    else if (@is_same_type(T, comptime_string)) 115 // 's'
+    else @comptime_assert(false, "Unsupported type");
+}
+
+fn trace(x: anytype) void {
+  const T = @type_of(x);
+  const tag = comptime get_tag(T);
+  if (@is_same_type(T, comptime_string)) {
+    trace_string(x);
+  } else if (@is_same_type(T, bool)) {
+    tagged_put_u8(tag, @as(u8, x));
+  } else if (comptime types.byte_size_of(T) == 1) {
+    tagged_put_u8(tag, @bitcast(u8, x));
+  } else {
+    put(@as(u16, tag));
+    put(x);
+  }
+}
+
+fn trace_string(comptime str : comptime_string) void {
+  const arr = @get_array(str);
+  const len : comptime_int = @strlen(str);
+  // Size of u16 vector needed, include padding
+  const sz : comptime_int = (len+1) / 2;
+  // We can only encode buffers up to size 254
+  @comptime_assert(sz * 2 < 256);
+  tagged_put_u8(115, sz * 2); // 's', size of buffer (in bytes)
+  for(@range(u16, sz)) |ix| {
+    const low = arr[ix*2];
+    const high = if (ix*2+1 >= len) 0x0 else arr[ix*2+1];
+    put(@as(u16, high) << 8 | @as(u16, low));
+  }
+}
+
+// Initialize the timer only on the first call to trace_timestamp.
+var timer_initialized = false;
+
+// The trace functions append a tag before recording data,
+// which allows python to pretty-print the output.
+fn trace_timestamp() void {
+  if (buffer_index + 3 < buffer_size) {
+    if (!timer_initialized) {
+      ts.enable_tsc();
+      timer_initialized = true;
+    }
+    put(@as(u16, 116)); // 't'
+    ts.get_timestamp(@ptrcast(*[3]u16, &buffer[buffer_index]));
+    buffer_index += 3;
+  }
+}

@@ -1,0 +1,12 @@
+comptime {
+  @comptime_assert(@is_arch("wse3"));
+}
+
+const valid_task_id_types = [3]type {
+  input_queue,
+  data_task_id,
+  local_task_id,
+};
+
+const valid_task_id_error_message =
+  "Expected task_id to have type 'input_queue', 'data_task_id', or 'local_task_id'";

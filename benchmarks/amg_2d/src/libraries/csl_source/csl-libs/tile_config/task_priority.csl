@@ -1,0 +1,87 @@
+param target : imported_module;
+
+const addresses = target.addresses;
+const reg_type = target.reg_type;
+const double_reg_type = target.double_reg_type;
+const word_size = target.word_size;
+
+// Task priority functions.
+///////////////////////////
+
+// Enum for task priorities: either HIGH or LOW.
+const level = enum(u16) {
+  LOW = 0,
+  HIGH = 1
+};
+
+const target_name = @import_module("<target_name>");
+const __target_details = @import_module(
+  @strcat("<tile_config/task_priority/target/", target_name.get_target_name(), ">")
+);
+
+fn __check_task_id_type(comptime T: type) void {
+  comptime {
+    for (__target_details.valid_task_id_types) |t| {
+      if (@is_same_type(t, T)) {
+        return;
+      }
+    }
+  };
+
+  @comptime_assert(false, __target_details.valid_task_id_error_message);
+}
+
+fn __compute_new_task_pri_vector(
+  current_task_pri_hi: double_reg_type,
+  current_task_pri_lo: double_reg_type,
+  task_id: anytype,
+  priority: level)
+  double_reg_type {
+  __check_task_id_type(@type_of(task_id));
+  const current_task_pri_vector = current_task_pri_hi << 16 | current_task_pri_lo;
+
+  const color_id_mask = @as(double_reg_type, 1) << @get_int(task_id);
+
+  if(priority == level.HIGH) {
+    return (current_task_pri_vector | color_id_mask);
+  } else {
+    return (current_task_pri_vector & ~color_id_mask);
+  }
+}
+
+// Updates the task priority associated with `task_id` to `priority`.
+// `task_id` can be a `data_task_id` or `local_task_id` to set the priority of
+// the associated task.
+//
+// In addition, the priority of tasks activated by wavelets, including tasks
+// bound to a ``control_task_id``, can be specified using the ``color``
+// on ``wse2``, or the ``input_queue`` on ``wse3``, that carries the wavelets.
+//
+// Note that updates to task priority made at runtime may take a few clock
+// cycles to take effect. This function may be used at comptime or at runtime.
+fn update_task_priority(task_id: anytype, priority: level) void {
+  const task_pri_lo_addr = @as(reg_type, addresses.TASK_PRIORITY) / word_size;
+  const task_pri_hi_addr = task_pri_lo_addr + 1;
+  const current_task_pri_lo = @as(double_reg_type, @get_config(task_pri_lo_addr));
+  const current_task_pri_hi = @as(double_reg_type, @get_config(task_pri_hi_addr));
+
+  const new_task_pri_vector = __compute_new_task_pri_vector(
+    current_task_pri_hi,
+    current_task_pri_lo,
+    task_id,
+    priority
+  );
+
+  @set_config(task_pri_lo_addr, @as(reg_type, new_task_pri_vector & 0xFFFF));
+  @set_config(task_pri_hi_addr, @as(reg_type, (new_task_pri_vector >> 16) & 0xFFFF));
+}
+
+// Sets the task priority associated with `task_id` to high.
+fn set_task_priority(task_id: anytype) void {
+  update_task_priority(task_id, level.HIGH);
+}
+
+// Sets the task priority associated with `task_id` to low.
+fn clear_task_priority(task_id: anytype) void {
+  update_task_priority(task_id, level.LOW);
+}

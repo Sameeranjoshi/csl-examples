@@ -1,0 +1,78 @@
+// The tally library implements a two-phase tally.
+//
+// In the first phase, every PE must signal completion at least once. For
+// kernels where each PE knows when it is finished, this is the only phase
+// needed.
+//
+// The first phase ends when every PE has signaled completion at least once.
+// During the second phase, PEs can bump (increase) the global tally. When the
+// global tally meets or exceeds the 'phase2_tally' parameter, kernel signals
+// completion by sending the the total to the North on 'output_color' from the
+// PE at (kernel_width - 1, 0).
+//
+// The second phase is optional. If 'phase2_tally == 0', the second phase will
+// be skipped and the output signal on 'output_color' will be 0.
+param kernel_height:u16;
+param kernel_width:u16;
+param phase2_tally:u32;
+param colors:[3]color;
+
+param output_color: color;
+const poll_color: color = colors[0];
+const tally_c1: color = colors[1];
+const tally_c2: color = colors[2];
+
+fn get_params(i:u16, j:u16) comptime_struct {
+  const is_last_column:bool = i == kernel_width - 1;
+  const is_output_tally:bool = is_last_column and j == 0;
+  const receives_horizontally:bool = is_last_column and kernel_height > 1;
+
+  var desired:u32 = 0;
+  if (is_output_tally) {
+    desired = phase2_tally;
+  }
+
+  var is_first_tally_pe:bool = i == 0;
+  if (receives_horizontally) {
+    is_first_tally_pe = j == kernel_height - 1;
+  }
+
+  var recv_color = tally_c2;
+  var send_color = tally_c1;
+  if (i % 2 == 0) {
+    recv_color = tally_c1;
+    send_color = tally_c2;
+  }
+
+  var recv_horizontal = recv_color;
+
+  if (is_last_column) {
+    if (kernel_height > 1) {
+      recv_color = output_color;
+
+      if (j % 2 == 0) {
+        var tmp_swap = recv_color;
+        recv_color = send_color;
+        send_color = tmp_swap;
+      }
+    } else {
+      send_color = output_color;
+    }
+  }
+
+  if (is_first_tally_pe) {
+    recv_color = poll_color;
+  }
+
+  return .{
+    .phase2_tally = desired,
+    .is_first_tally_pe = is_first_tally_pe,
+    .receives_horizontally = receives_horizontally,
+    .is_output_tally = is_output_tally,
+    .poll_color = poll_color,
+    .recv_horizontal = recv_horizontal,
+    .recv_color = recv_color,
+    .send_color = send_color,
+    .kernel_width = kernel_width,
+  };
+}

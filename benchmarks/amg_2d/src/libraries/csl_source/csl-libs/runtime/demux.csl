@@ -1,0 +1,630 @@
+//
+// Reconfigurable demux kernel which forwards wavelets from one input LVDS to
+// many output PEs. This kernel is preceded by an adapter kernel which assists
+// in reconfiguration. The reconfiguration process is as follows:
+//   1. Adapter kernel sends teardown NOCE wavelet to demux
+//   2. Demux configures all PEs to default state (all receive)
+//   3. Adapter kernel broadcasts config parameters to each demux PE indicating
+//      - whether it should receive data on next round and its counter init value,
+//      - number of receivers for the next round, which is used to determine
+//        the filter limit.
+//      - pes_per_receiver
+//      - pe_length
+//   4. Adapter kernel sends teardown NOCE wavelet to demux
+//   5. Demux configures only receiver PEs to accept data
+
+// a collective communication: the data is broadcasted from LVDS to demux from north to south
+//
+// demux uses a counter filter with the following routing on color RXACT
+//
+// north                                south
+// LVDS  -->-->   --->-->   -->-->  -->
+//          |        |        |       |
+//          V        V        V       V
+//
+// The data from LVDS broadcasts to a column PEs of size num_receivers
+// Each PE must set up the counter filter before the data arrives
+// This reconfiguration should be triggered by demux adaptor
+//
+// The demux does round-robin a wavelet along a column PEs
+//    order of tensor: x[l][h], where h = num_receivers
+//    PE0: 0, h  , 2*h  , ...
+//    PE1: 1, h+1, 2*h+1, ...
+//    PE2: 2, h+2, 2*h+2, ...
+//
+//  l = 4, h = 4
+//  data from demux  x0  x4  x8 x12  x1  x5  x9 x13  x2  x6 x10 x14  x3  x7 x11 x15
+//  P0:               0   1   2   3   0   1   2   3   0   1   2   3   0   1   2   3
+//  P1:               3   0   1   2   3   0   1   2   3   0   1   2   3   0   1   2
+//  P2:               2   3   0   1   2   3   0   1   2   3   0   1   2   3   0   1
+//  P3:               1   2   3   0   1   2   3   0   1   2   3   0   1   2   3   0
+//
+// limit = height - 1
+// PE pid filters [pid, (pid+1))
+// init_count = (limit+1 - pid) % (limit+1)
+// range [0, max_pass] where max_pass = 0
+//
+//
+// Here is I/O of a demux
+//   The color RXACT broadcasts data from LVDS into all receivers in the demux
+//   Each PE filters corresponding segments and redirects the data to color TXACT
+//
+//  RXACT   +-------------+
+// --->     | receiver 0  | --> TXACT
+//          +-------------+
+//                | RXACT
+//                V
+//          +-------------+
+//          | receiver 1  | --> TXACT
+//          +-------------+
+//                | RXACT
+//                V
+//          +-------------+
+//          | receiver 1  | --> TXACT
+//          +-------------+
+//
+// Assumption 1: the system must reserve input queue 0 for microthread 0 to forward
+//    data from RXACT to TXACT, if not, the user can collide input queue 0 with
+//    other color, and the consequence may hang the program
+//
+// Assumption 2: there is no control wavelet in the data stream, the counter filter
+//    skips control wavelets
+//
+
+//
+// design issue: race condition if teardown is not properly handled
+//
+//   we need to block task 29 when we receive 2nd teardown, then unblock it
+//   when the tensor is sent out
+//
+// The correct control flow is
+// receive 1st TD --> block 29 --> f_config --> unblock 29 --> receive 2nd TD --> block 29 --> send tensor --> unblock 29
+//       ^                                                                                                       |
+//       |--------------------------------------------------------------------------------------------------------
+//
+
+
+// local colors
+param RXACT: color; // receive data from LVDS
+param TXACT: color; // send data to the core rectangle, only data wavelets
+
+// local tasks
+param STARTUP: local_task_id;
+param CONFIG: local_task_id;  // received config parameters
+param TXACT_NEXT_TENSOR: local_task_id;
+param TXACT_NEXT_CHUNK: local_task_id;
+
+
+// parameters
+param height: i16; // number of receivers of this demux
+
+param first_pe: bool; // (0 == py);
+param last_pe: bool;  // ((height-1) == py);
+param start_pos_y_demux: i16; // starting y coordinate of the demux
+
+
+const N = height;
+
+// The config_buf has N+4 u16
+// - enable_receiver[N] = config_buf[0:N-1]
+// - pes_per_receiver = config_buf[N]
+// - pe_length = config_buf[N+1]
+// - num_receivers = config_buf[N+2]
+// - memcpy_optype = config_buf[N+3]
+const NUM_U16_PARAMS = 4;
+
+const sys_params = @import_module( "<memcpy/sys_params>" );
+const MemcpyOpType = sys_params.MemcpyOpType;
+
+//--------------------- system utility for teardown
+
+const tile_config = @import_module("<tile_config>");
+
+const color_config = tile_config.color_config;
+const rxact_addr = color_config.get_color_config_addr(RXACT);
+
+const fabric = @import_module("<layout>");
+
+const switch_config = tile_config.switch_config;
+
+// mux is a column of PEs, the pe_id = 0,1,2,..., h-1
+// The relative y-coordinate is the id of the mux, independent of x-coordinate
+// for multi-lvds, we need to introduce start_pos_y_demux, which varies per demux module
+// ---
+//        start_pos_y_demux = 0, h0, h0+h1, ...
+//        const start_pos_y_demux : i16 = start_pos_y_demux_list[idx];
+// ---
+fn get_pe_id() u16 {
+    return fabric.get_y_coord() - @as(u16,start_pos_y_demux);
+}
+
+const iq_rxact = @get_input_queue(0);
+const task_id_rxact = if (@is_arch("wse3")) @get_data_task_id(iq_rxact) else @get_data_task_id(RXACT);
+
+const oq_txact = @get_output_queue(0);
+
+////////////////////////////////////////////////////////////////////////////////
+// Main memory (48KB)
+////////////////////////////////////////////////////////////////////////////////
+
+// enable_receiver[N] = config_buf[0:N-1]
+// pes_per_receiver = config_buf[N]
+// pe_length = config_buf[N+1]
+// num_receivers = config_buf[N+2]
+// memcpy_optype = config_buf[N+3]
+//
+var config_buf = @zeros([N+NUM_U16_PARAMS]i16);
+
+// Counter init value for the next RXACT tensor. This value is equal to the
+// PE's index in the order of receivers. If the PE does not receive any data
+// then this value will be 0xffff.
+var receiver_idx: i16 = -1; // 0xffff;
+
+// State of the kernel which controls teardown handling behavior:
+// config_state = 0: PE configures filter_counter=0 (broadcasting)
+// config_state = 1: PE configures filter_counter=receiver_idx
+var config_state: i16 = 0;
+
+// Number of receivers for the next tensor, corresponds to filter limit
+var num_receivers: i16 = 0;
+
+var memcpy_optype: i16 = 0; // { MEMCPY_OP_DENSE = 0, MEMCPY_OP_ROW_BCAST = 1, MEMCPY_OP_COL_BCAST = 2, MEMCPY_OP_STRIDE = 3 }
+
+// Number of PEs in demux minus 1, corresponds to initial filter limit
+const num_demux: i16 = N-1;
+
+// Location for saving number of PEs when meta FIFO is full
+var num_pes_save: i16 = 0;
+
+// Location for saving per-PE length when meta FIFO is full
+var pe_len_save: i16 = 0;
+
+// if the receiver is inactive, we still send out zero data, otherwise
+// we will hang the output y because it is Cliff distribution
+// the adaptor will send the same pes_per_receiver and pe_length for all
+// receivers
+// First of all, we will receive
+//      receiver_idx = enable_receiver[i] = k >= 0: position of filtering
+//                                         -1    : receiver is off
+//
+// if receiver_idx=-1, we reset num_pes_save =0, otherwise
+// num_pes_save = pes_per_receiver
+//
+var pes_per_receiver: i16 = 0; // number of active PEs per receiver
+var pe_length: i16 = 0;        // number of data wavelets per PE
+
+
+// (num_send, idx_send) is used to send the data
+// for i in range(num_receivers):
+//   for j in range(pes_per_receiver):
+//      send pe_length wavelets via microthread
+//
+// This is a workaround since the single-step cannot across the task boundary
+// see demux_adaptor_casm.csl for the implementation of single-step
+//
+// num_send = num_receivers <= N <= dim(WSE) ~= 1000, i16 is enough
+var num_send : i16 = @as(i16, 0);
+var idx_send : i16 = @as(i16, 0);
+
+// (_pe_id, height) can identify which PE starts to send the data and
+var _pe_id : i16 = 0 ;
+
+
+////////////////////////////////////////////////////////////////////////////////
+// DSDs
+// data-structure descriptors (DSDs), loaded into data-structure registers (DSRs)
+//
+// Queues 0,1: input depth 6 wavelets
+// Queues 2,3: input depth 4 wavelets
+// Queues 4-7: input depth 2 wavelets
+//
+// queues 0,1: output depth 2 wavelets
+// queues 2,3: output depth 6 wavelets
+// queues 4,5: output depth 2 wavelets
+////////////////////////////////////////////////////////////////////////////////
+
+// Each receiver only filters (pe_length*pes_per_receiver) wavelets
+// Assume there is no control wavelets in RXACT, so we remove control wavelets
+
+var fab_recv_wdsd =  @get_dsd(fabin_dsd, .{
+   .extent = 1,
+   .fabric_color = RXACT,
+   .input_queue = iq_rxact
+});
+
+var fab_trans_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .fabric_color = TXACT,
+    .output_queue = oq_txact
+});
+
+// receive N+4 i16 config parameters
+const mem_buf_config_np4_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N+4} -> config_buf[i] });
+const fab_rx_config_wdsd = @get_dsd(fabin_dsd, .{
+   .extent = N+4,
+   .fabric_color = RXACT,
+   .input_queue = iq_rxact
+});
+
+
+// show 16 filter registers
+// compiler choose counter 0 for color 10
+// filter[0] = 0x226a  : counter 0 config
+// filter[1] = 0x1     : counter 0 limit
+// filter[2] = 0x0     : counter 0 max_pass
+// filter[3] = 0x0     : counter 0 init_count
+//
+// bits 4:0: color 10
+// bit-5: count_control = true
+// bit-6: count_data = true
+// bit-9: master filter enable
+// bit-13: sparse mode filter cfg_limit valid
+
+
+////////////////////////////////////////////////////////////////////////////////
+// Tasks
+// syntax
+//     task_begin(name, entrypoint, color)
+////////////////////////////////////////////////////////////////////////////////
+
+
+
+// config_state = 0
+//    init_counter = 0 (broadcasting)
+// config_state = 1
+//    init_counter = (num_receivers - receiver_idx) % num_receivers
+//
+// Each tensor reconfigures init_counter, so the comptime value of init_counter is don't care
+//
+task f_teardown() void {
+    // Read TIP register (TAMAP_TEARDOWN_PEND_ADDR_[LO|HI]) to clear
+    const pending = tile_config.teardown.get_pending();
+    const offramp = color_config.fabric_io.TX_RAMP;
+
+    if (0 == config_state){
+// config_default: 1st teardown
+        // Block teardown handler from running again until config wavelets are received
+        @block( tile_config.teardown.get_task_id() );
+
+        // Swap config_state
+        config_state = 1;
+
+        // [optional] check this the color already processed by teardown handler
+        // if (tile_config.teardown.is_pending(pending, RXACT)), reconfigure filter
+
+        // Set filter counter and active limit
+        // broadcast mode: every receiver receives the same config parameters
+        // counter init value is 0
+        // counter limit is 0 (repeat every 1 wavelet)
+        const filter_id = @get_filter_id(RXACT);
+        // max_counter = 0 (no change)
+        // SDR removes the "limits" on the counter filter, instead, we need to set
+        // the pass_cnt and drop_cnt. To be compatible with old API which still uses
+        // "limits", we need to set pass_cnt (in this case, max_counter) before
+        // calling SET_ACTIVE_LIMIT. Otherwise the drop_cnt may not be set correctly.
+        tile_config.filters.set_max_counter(filter_id, 0);
+
+        const dummy_1 = switch_config.get_switch_config_addr(RXACT, tile_config.target.switch_status);
+        var r_switch_state_1 = @get_config(dummy_1);
+
+        tile_config.filters.set_counter(filter_id, 0);
+
+        const dummy_2 = switch_config.get_switch_config_addr(RXACT, tile_config.target.switch_status);
+        var r_switch_state_2 = @get_config(dummy_2);
+
+        tile_config.filters.set_active_limit(filter_id, 0);
+
+        // Set offramp bit on all PEs
+        color_config.set_io_direction(rxact_addr, offramp);
+
+        // insert one instruction to resolve RAW hazard
+        const dummy = switch_config.get_switch_config_addr(RXACT, tile_config.target.switch_status);
+        var r_switch_state = @get_config(dummy);
+
+        // clear teardown-in-progress bit
+        tile_config.teardown.exit(RXACT);
+
+        // receive config parameters N+4 i16
+        // f_config will parse config parameters and unblock color 29 to process 2nd teardown
+        @mov16(mem_buf_config_np4_dsd, fab_rx_config_wdsd, .{.async=true, .activate=f_config} );
+
+    }else{
+// 2nd teardown
+        // Block teardown handler from running again until whole tensor is sent out
+        @block( tile_config.teardown.get_task_id() );
+
+        // Configure PE to receive next tensor
+        // Swap config_state
+        config_state = 0;
+
+        @activate(TXACT_NEXT_TENSOR);
+
+        if ( -1 == receiver_idx ){
+            // this receiver is not active, no data is filtered
+            // config_no_receive
+
+            // PE does not receive data, remove offramp connection
+            color_config.toggle_io_direction(rxact_addr, offramp);
+
+            // insert one instruction to resolve RAW hazard
+            const dummy = switch_config.get_switch_config_addr(RXACT, tile_config.target.switch_status);
+            var r_switch_state = @get_config(dummy);
+
+            // clear teardown-in-progress bit
+            tile_config.teardown.exit(RXACT);
+
+            // wait for the 1st teardown of next tensor
+
+        }else{
+            // PE receives data, configure filter
+
+            // WARNING: column broadcast mode broadcasts data to all active PEs.
+            //   we need to set
+            //     - counter init value is 0
+            //     - counter limit is 0 (repeat every 1 wavelet)
+            //   i.e.
+            //   tile_config.filters.set_max_counter(filter_id, 0);
+            //   tile_config.filters.set_active_limit(filter_id, 0);
+            //   tile_config.filters.set_counter(filter_id, 0);
+
+            // [optional] check this the color already processed by teardown handler
+            // if (tile_config.teardown.is_pending(pending, RXACT)), reconfigure filter
+
+            const filter_id = @get_filter_id(RXACT);
+
+            // ".max_counter = 0"
+            // SDR removes the "limits" on the counter filter, instead, we need to set
+            // the pass_cnt and drop_cnt. To be compatible with old API which still uses
+            // "limits", we need to set pass_cnt (in this case, max_counter) before
+            // calling SET_ACTIVE_LIMIT. Otherwise the drop_cnt may not be set correctly.
+            tile_config.filters.set_max_counter(filter_id, 0);
+
+            const dummy_1 = switch_config.get_switch_config_addr(RXACT, tile_config.target.switch_status);
+            var r_switch_state_1 = @get_config(dummy_1);
+
+            // num_receivers = # of active receviers
+            // limit1 = (num_receivers-1), similar to limit1 = N-1 for 1st teardown
+            if (memcpy_optype == @get_int(MemcpyOpType.MEMCPY_OP_COL_BCAST)){
+                num_receivers = 1;
+            }
+            tile_config.filters.set_active_limit(filter_id, @bitcast(u16, num_receivers-1));
+
+            const dummy_2 = switch_config.get_switch_config_addr(RXACT, tile_config.target.switch_status);
+            var r_switch_state_2 = @get_config(dummy_2);
+
+            // init_count = (num_receivers - receiver_idx) % num_receivers
+            // so if receiver_idx = 0, then init_count = 0
+            // Here receiver_idx != -1
+            var r_tmp : i16 = num_receivers;
+            var r_state : i16 = receiver_idx;
+            r_tmp = r_tmp - r_state;
+            if (0 == r_state){
+                r_tmp = 0;
+            }
+            if (memcpy_optype == @get_int(MemcpyOpType.MEMCPY_OP_COL_BCAST)){
+                r_tmp = 0;
+            }
+            tile_config.filters.set_counter(filter_id, @bitcast(u16,r_tmp));
+
+            // insert one instruction to resolve RAW hazard
+            const dummy = switch_config.get_switch_config_addr(RXACT, tile_config.target.switch_status);
+            var r_switch_state = @get_config(dummy);
+
+            // Clear teardown-in-progress bit on receive color
+            // config_reg[c] ^= mask where mask = 1 << 14
+            tile_config.teardown.exit(RXACT);
+
+            // wait 1st teardown of next tensor, which follows the data
+        }
+    }
+}
+
+
+// pseudocode of single-step:
+//    for j in range(pes_per_receiver):
+//       send pe_length wavelets via microthread
+//
+task f_txact_next_tensor() void {
+
+    @block( task_id_rxact ); // use microthread to receive data wavelets
+
+// num_pes_save = -1 if this receiver is inactive
+// num_pes_save = pes_per_receiver if this receiver is active
+// pe_len_save = pe_length for each receiver
+//
+// if this receiver is in active, num_send = 0, no action
+
+    fab_recv_wdsd  = @set_dsd_length(fab_recv_wdsd, @as(u16, pe_length));
+    fab_trans_wdsd = @set_dsd_length(fab_trans_wdsd, @as(u16, pe_length));
+    if ( -1 != receiver_idx ){
+        num_send = @as(i16, num_pes_save);
+        idx_send = 0;
+        @activate(TXACT_NEXT_CHUNK);
+    }else{
+// WARNING: need to unblock task 29 to receive 1st TD of next tensor
+// without this fix, if tensor A is a sbumatrix, then inactive receiver will
+// not receive 1st TD of tensor B because task 29 is still blocked.
+        @unblock( tile_config.teardown.get_task_id() );
+    }
+}
+
+// WARNING: RXACT is always blocked, so we can remove @block(task_id_rxact)
+task f_txact_next_chunk() void {
+    if ( idx_send >= num_send ){
+        //@block( task_id_rxact ); // necessary to receive config parameters (control wavelets) for next tensor
+
+        // 2nd teardown will block task 29
+        // send whole tensor, unblock task 29, wait for 1st teardown of next tensor
+        @unblock( tile_config.teardown.get_task_id() );
+    }else{
+        @mov32(fab_trans_wdsd, fab_recv_wdsd, .{.async=true, .activate=f_txact_next_chunk } );
+        idx_send = idx_send+1;
+    }
+}
+
+
+//
+// config_buf[N+4] is received, including
+// - enable_receiver[N] = config_buf[0:N-1]
+// - pes_per_receiver = config_buf[N]
+// - pe_length = config_buf[N+1]
+// - num_receivers = config_buf[N+2]
+// - memcpy_optype = config_buf[N+3]
+//
+task f_config() void {
+    // (1) enable_receiver[i] = k >= 0: position of filtering
+    //                         -1    : receiver is off
+    // handled by header_sentinel
+    receiver_idx = config_buf[_pe_id];
+
+    // (2) Use received values unless this PE does not act as a receiver for the
+    // next tensor
+    // handled by pes_sentinel
+    pes_per_receiver = config_buf[N];
+    if (-1 != receiver_idx){
+       // Store received value into num_pes_save
+       num_pes_save = pes_per_receiver;
+    }else{
+       // Store length 0 for this PE, since it is not active
+       num_pes_save = 0;
+    }
+
+    // (3) number of wavelets per PE
+    // handled by len_sentinel
+    pe_length = config_buf[N+1];
+    pe_len_save = pe_length;
+
+    // (4) number of active receivers
+    // handled by num_receivers_sentinel
+    num_receivers = config_buf[N+2];
+
+    // (5) memcpy op
+    // only MEMCPY_OP_COL_BCAST needs to change demux
+    memcpy_optype = config_buf[N+3];
+
+    // 1st teardown will block task 29
+    // receive all config parameters, unblock task 29, wait for 2nd teardown
+    @unblock( tile_config.teardown.get_task_id() );
+}
+
+
+task f_startup() void {
+
+    // retrieve PE id in the beginning to avoid keep updating pe_id
+    // because pe_id is no longer a comptime parameter
+    _pe_id = @as(i16, get_pe_id());
+
+    // unblock 29 to receive teardown from demux adaptor
+    @unblock(tile_config.teardown.get_task_id());
+}
+
+comptime {
+
+    @activate(STARTUP);
+
+// WARNING: WS receives config parameters as control wavelets, so we must unblock RXACT
+// memcpy uses microthread to read config params, so blocks RXACT
+    @block(task_id_rxact); // use microthread
+
+// block 29 until _pe_id is retrieved
+    @block(tile_config.teardown.get_task_id());
+
+    @bind_local_task( f_teardown, tile_config.teardown.get_task_id() );
+
+    @bind_local_task( f_txact_next_tensor, TXACT_NEXT_TENSOR );
+    @bind_local_task( f_txact_next_chunk, TXACT_NEXT_CHUNK );
+
+    @bind_local_task( f_config, CONFIG);
+
+    @bind_local_task( f_startup, STARTUP);
+
+
+}
+
+
+// Assumption 1: height >= 2
+//     if height = 1, just forward data without any filter.
+//     the routing is {.rx = RXACT, .tx = TXACT}
+// Assumption 2: LVDS connects to 1st PE
+// Assumption 3: no control wavelets are delivered by the demux
+//
+comptime {
+
+    @comptime_assert(height >= 2);
+
+    // round-robin per wavelet, one round-robin iteration consums "num_receivers" wavelets
+
+    var limit_plus_1 :i16 = N;
+
+// The casm design sends config parameters by control wavelets,
+// so we need to accept control wavelets, otherwise it hangs.
+//
+// However we have remove control wavelets, so ".count_control = true" is not required
+//
+// WARNING: each tensor reconfigures the init_counter, so comptime value of
+// init_counter is don't care.
+// The original setting is
+//    .init_counter = (limit_plus_1 - _pe_id) % limit_plus_1,
+//
+    // 1st PE has data from WEST, others have data from NORTH
+    const baseConfig_1st = .{
+        .routes = .{ .rx = .{ WEST }, .tx = .{RAMP, SOUTH} },
+        .filter = .{
+            .kind = .{ .counter = true },
+            .count_data = true,
+            //.count_control = true,
+            .init_counter = 0,
+            .max_counter  = 0,
+            .limit1 = (limit_plus_1 - 1)
+        },
+    };
+
+    const baseConfig = .{
+        .routes = .{ .rx = .{ NORTH }, .tx = .{RAMP, SOUTH} },
+        .filter = .{
+            .kind = .{ .counter = true },
+            .count_data = true,
+            .count_control = true,
+            .init_counter = 0,
+            .max_counter  = 0,
+            .limit1 = (limit_plus_1 - 1)
+        },
+    };
+
+    const baseConfig_last = .{
+        .routes = .{ .rx = .{ NORTH }, .tx = .{ RAMP } },
+        .filter = .{
+            .kind = .{ .counter = true },
+            .count_data = true,
+            .count_control = true,
+            .init_counter = 0,
+            .max_counter  = 0,
+            .limit1 = (limit_plus_1 - 1)
+        },
+    };
+
+    if ( first_pe ){
+        // 1st PE must has w --> r|s, receive wavelets from adaptor
+        @set_local_color_config(RXACT, baseConfig_1st);
+    }else if ( last_pe ){
+        // last PE has n --> r
+        @set_local_color_config(RXACT, baseConfig_last );
+    }else{
+        // middle PE has n --> r|s
+        // 0 < pe < h-1
+        @set_local_color_config(RXACT, baseConfig );
+    }
+
+    // WARNING: each receiver sends filtered data to the row PEs
+    @set_local_color_config(TXACT, .{ .routes = .{.rx = .{ RAMP }, .tx = .{ EAST} } } );
+}
+
+comptime {
+    @initialize_queue(iq_rxact, .{.color = RXACT} );
+}
+
+comptime {
+    if (@is_arch("wse3")){
+        @initialize_queue(oq_txact, .{.color = TXACT});
+    }
+}

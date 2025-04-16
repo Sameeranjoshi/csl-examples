@@ -1,0 +1,204 @@
+const directions = @import_module("<directions>");
+
+// Tally expected during Phase 2.
+param phase2_tally:u32;
+// Whether this PE is the first one in the poll ring.
+param is_first_tally_pe:bool;
+// Whether to bind the task that receives tally horizontally (for last column).
+param receives_horizontally:bool;
+// Whether this PE is the special one that polls and outputs the final tally.
+param is_output_tally:bool;
+// Which output queues to use. The first one is used for sending tally to
+// neigbor. The second one is only used by the output PE to initiate a poll.
+param output_queues:[2]u16;
+
+// WTT must bind an input queue explicitly.
+// The input queues bind to recv_color and recv_horizontal
+param input_queues:[2]u16;
+
+param kernel_width:u16;
+
+// Colors
+param poll_color: color;
+param recv_color: color;
+param send_color: color;
+
+// PEs in the last column are wired vertically using {recv, send}_color. This
+// color is used to receive the tally from the same row, connecting the
+// horizontal and vertical loops.
+param recv_horizontal: color;
+
+// Task IDs
+// the callback may send out ``local_tally`` via streaming D2H
+param callback: local_task_id;
+
+const iq_1 = @get_input_queue(input_queues[0]);
+const iq_2 = @get_input_queue(input_queues[1]);
+
+const oq_1 = @get_output_queue(output_queues[0]);
+const oq_2 = @get_output_queue(output_queues[1]);
+
+// data task recv_tally recvs wlts along recv_color
+const recv_tally_task_id: data_task_id = if (@is_arch("wse3")) @get_data_task_id(iq_1) else @get_data_task_id(recv_color);
+
+// data task horizontal_receive recvs wlts along recv_horizontal
+const recv_horizontal_task_id: data_task_id = if (@is_arch("wse3")) @get_data_task_id(iq_2) else @get_data_task_id(recv_horizontal);
+
+var local_tally:u32 = 0;
+
+// Public API
+
+// Add to the tally that is accumulated in Phase 2. This may be called during
+// either phase.
+fn bump_tally(the_tally:u32) void {
+  local_tally += the_tally;
+  // The output tally can send on any bump, whereas other PEs only send when
+  // they receive a tally from a neighbor. This is mostly to handle the
+  // pathalogical case of a 1x1 tally kernel.
+  if (is_output_tally) {
+    if (local_tally >= phase2_tally) {
+      send_and_reset_tally();
+    }
+  }
+}
+
+// Signal the end of Phase 1. This must be called at least once per PE.
+var run_once:bool = false;
+fn signal_completion() void {
+  if (run_once) {
+    return;
+  }
+
+  run_once = true;
+  @unblock(recv_tally_task_id);
+  if (is_first_tally_pe and local_tally >= phase2_tally) {
+    send_and_reset_tally();
+  }
+}
+
+// Private API
+
+var num_polls:u32 = 0;
+fn do_poll() void {
+  // Only the special output tally is allowed to initiate a poll. For every
+  // other PE this is a no-op.
+  if (is_output_tally) {
+    const poll_dsd = @get_dsd(fabout_dsd, .{
+      .fabric_color=poll_color,
+      .extent=1,
+      .output_queue=oq_2
+    });
+
+    num_polls += 1;
+    @mov32(poll_dsd, @as(u32, 0));
+  }
+}
+
+fn send_and_reset_tally() void {
+  const send_dsd = @get_dsd(fabout_dsd, .{
+    .fabric_color=send_color,
+    .extent=1,
+    .output_queue=oq_1
+  });
+
+  if (is_output_tally){
+    // the tally is done, output queue 0 is free to use by memcpy
+    // the caller may send local_tally via streaming D2H
+    @activate(callback);
+  }else{
+    @mov32(send_dsd, local_tally);
+  }
+  // Never reset the tally on the output tally, as it is the global count.
+  if (!is_output_tally) {
+    local_tally = 0;
+  }
+}
+
+task recv_tally(tally_from_neighbor:u32) void {
+  bump_tally(tally_from_neighbor);
+  if (is_output_tally) {
+    if (local_tally < phase2_tally) {
+      do_poll();
+    }
+  } else {
+    send_and_reset_tally();
+  }
+}
+
+task horizontal_receive(the_tally:u32) void {
+  bump_tally(the_tally);
+}
+
+
+comptime {
+  @block(recv_tally_task_id);
+  @bind_data_task(recv_tally, recv_tally_task_id);
+  @initialize_queue(iq_1, .{ .color = recv_color });
+  if (receives_horizontally) {
+    @bind_data_task(horizontal_receive, recv_horizontal_task_id);
+    @initialize_queue(iq_2, .{ .color = recv_horizontal });
+  }
+
+  const recv_dir = getRecvDir(receives_horizontally);
+
+  var send_dir = directions.flip(recv_dir);
+  var poll_recv_dir = send_dir;
+  if (is_output_tally) {
+    send_dir = NORTH;
+    poll_recv_dir = RAMP;
+  }
+
+  const send_route = .{ .rx = .{ RAMP }, .tx = .{ send_dir } };
+  @set_local_color_config(send_color, .{ .routes = send_route });
+
+  if (is_first_tally_pe) {
+    // For PEs at the start of the ring, poll_color and recv_color are the same
+    // color, so we don't set a color config for poll_color here.
+    const recv_route = .{ .rx = .{ poll_recv_dir }, .tx = getRecvTxDirs(receives_horizontally) };
+    @set_local_color_config(recv_color, .{ .routes = recv_route });
+  } else {
+    const poll_route = .{ .rx = .{ poll_recv_dir }, .tx = getPollTxDirs(receives_horizontally) };
+    @set_local_color_config(poll_color, .{ .routes = poll_route });
+
+    const recv_route = .{ .rx = .{ recv_dir }, .tx = .{ RAMP } };
+    @set_local_color_config(recv_color, .{ .routes = recv_route });
+  }
+
+  if (receives_horizontally) {
+    const recvh_route = .{ .rx = .{ WEST }, .tx = .{ RAMP } };
+    @set_local_color_config(recv_horizontal, .{ .routes = recvh_route });
+  }
+}
+
+fn getRecvDir(receives_horizontally:bool) direction {
+  if (receives_horizontally) {
+    return SOUTH;
+  }
+  return WEST;
+}
+
+fn getRecvTxDirs(receives_horizontally:bool) comptime_struct {
+  if (receives_horizontally and kernel_width > 1) {
+    return .{ RAMP, WEST };
+  }
+  return .{ RAMP };
+}
+
+fn getPollTxDirs(receives_horizontally:bool) comptime_struct {
+  if (receives_horizontally) {
+    if (kernel_width > 1) {
+      return .{ SOUTH, WEST };
+    }
+    return .{ SOUTH };
+  }
+
+  return .{ WEST };
+}
+
+comptime {
+  // necessary, otherwise the data is not sent into the output queue
+  if (@is_arch("wse3")){
+    @initialize_queue(oq_1, .{.color = send_color});
+    @initialize_queue(oq_2, .{.color = poll_color});
+  }
+}

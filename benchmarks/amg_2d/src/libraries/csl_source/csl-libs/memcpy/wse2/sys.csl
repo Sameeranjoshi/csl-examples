@@ -1,0 +1,108 @@
+
+// system utility
+// - routing of RXCOMMAND (RXACT_CMD)
+// - f_push
+// - f_sys_exit
+// - stack manipulation
+//
+param  RXACT_CMD: color ;     // receive command (control wavelet), map to RXCOMMAND
+param  COLOR_PUSH: control_task_id ;  // [system] push a 16-bit data on the stack
+param  COLOR_SYS_EXIT: local_task_id; // [system] unblock command stream
+param  COLOR_SYS_CHECK_AND_IGNORE: control_task_id; // [system] ignore the wavelet
+
+//param first_pe: bool; // (0 == px);
+param last_pe: bool;  // ((width-1) == px);
+param width : i16 ;
+
+// user's callback from memcpy.csl
+param f_callback : fn ()void;
+
+// define a pseudo task id to RXACT_CMD
+// neither WTT nor input queue binds to PSEUDO_WTT_RXACT_CMD
+// a workaround to avoid compilation warning on @unblock(RXACT_CMD)
+const PSEUDO_WTT_RXACT_CMD: data_task_id = @get_data_task_id(RXACT_CMD);
+
+// The stack is used to keep the parameters of H2D/D2H command
+// it only has 7 u16
+//    color, px, py, w, h, d_A, pe_length
+// so 32 u16 is enough
+//
+const _STACK_SIZE : i16 = 32 ;
+
+// WARNING: the unit of the stack is u16, but the granularity of RPC is u32.
+// To avoid error of mov32, declare stack_u32 with type u32 to ailgn 32-bit
+// boundary
+var stack_u32 = @zeros([_STACK_SIZE]u32);
+var stack_last : i16 = 0; // stack is empty
+
+
+// stack manipulation
+// stack.top
+// stack.push
+// stack.pop
+
+fn stack_top() u16 {
+    // stack_last points to next available entry.
+    // stack_last-1 points to the lastest element on the stack.
+    @assert(stack_last > 0);
+    const stack = @ptrcast([*]u16, &stack_u32);
+    return stack[stack_last-1];
+}
+
+fn stack_push( data : u16 ) void {
+    // stack_last is valid from 0 to _STACK_SIZE-1.
+    // stack_last points to the available entry.
+    // stack_list = 0 implies stack is empty.
+    // stack_list = _STACK_SIZE implies stack is full.
+    @assert(stack_last < _STACK_SIZE);
+    const stack = @ptrcast([*]u16, &stack_u32);
+    stack[stack_last] = data;
+    stack_last = stack_last + 1;
+}
+
+fn stack_pop() void {
+    // stack_last is valid from 0 to _STACK_SIZE-1.
+    // stack_last = 0 implies stack is empty.
+    @assert(stack_last > 0);
+    stack_last = stack_last - 1;
+}
+
+task f_push(data : u16, ep : i16) void {
+    stack_push(data);
+}
+
+fn block_cmd_stream() void {
+    @block( PSEUDO_WTT_RXACT_CMD );
+}
+
+fn unblock_cmd_stream() void {
+    @unblock( PSEUDO_WTT_RXACT_CMD );
+}
+
+// system callback: unblock the command stream to process next command
+task f_sys_exit() void {
+    unblock_cmd_stream();
+    f_callback();
+}
+
+task f_sys_check_and_ignore( data:u32 ) void {
+    // ignore the wavelet, do nothing
+}
+
+comptime {
+    @bind_control_task( f_push, COLOR_PUSH);
+    @bind_local_task( f_sys_exit, COLOR_SYS_EXIT);
+    @bind_control_task( f_sys_check_and_ignore, COLOR_SYS_CHECK_AND_IGNORE);
+    @unblock(PSEUDO_WTT_RXACT_CMD);
+}
+
+// routing of RXACT_CMD
+comptime {
+    if (!last_pe){
+        // px < (w-1)
+        @set_local_color_config(RXACT_CMD, .{ .routes = .{ .rx = .{WEST}, .tx = .{RAMP, EAST} } } );
+    }else{
+        // last PE, no forwarding
+        @set_local_color_config(RXACT_CMD, .{ .routes = .{ .rx = .{WEST}, .tx = .{RAMP} } } );
+    }
+}

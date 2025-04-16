@@ -1,0 +1,35 @@
+param target : imported_module;
+
+const addresses = target.addresses;
+const reg_type = target.reg_type;
+const word_size = target.word_size;
+
+// Main thread priority functions.
+//////////////////////////////////
+
+// Enum for main thread priorities. The meanings of main thread priority levels
+// are relative to microthread priorities, as follows:
+//
+//   MEDIUM_LOW: Between low- and medium-priority microthreads.
+//   MEDIUM: Same priority as medium-priority microthreads.
+//   MEDIUM_HIGH: Between medium- and high-priority microthreads.
+//   HIGH: Same priority as high-priority microthreads.
+const level = target.main_thread_priority_level;
+
+fn __compute_new_misc_cfg(current_misc_cfg: reg_type, priority: level)
+  reg_type {
+  return (current_misc_cfg & ~target.main_thread_priority_mask)
+           | (@as(reg_type, priority) << target.main_thread_priority_offset);
+}
+
+// Updates the priority for the main thread to `priority`. Note that updates
+// to main thread priority made at runtime make take a few clock cycles to
+// take effect. This function may be used at comptime or at runtime.
+fn update_main_thread_priority(priority: level) void {
+  const misc_cfg_addr = @as(reg_type, addresses.MISC_CFG) / word_size;
+  const current_misc_cfg = @get_config(misc_cfg_addr);
+
+  const new_misc_cfg = __compute_new_misc_cfg(current_misc_cfg, priority);
+
+  @set_config(misc_cfg_addr, new_misc_cfg);
+}

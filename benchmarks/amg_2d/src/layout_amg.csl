@@ -110,7 +110,10 @@ const memcpy = @import_module( "<memcpy/get_params>", .{
     .width = total_pe_cols,
     .height = total_pe_rows
     });
-const c2d = @import_module("./libraries/csl_source/csl-libs/collectives_2d/params.csl");
+const c2d = @import_module("./libraries/csl_source/csl-libs/collectives_2d/params.csl"); // Modified CC.
+// const c2d = @import_module("<collectives_2d/params>");
+
+
 const c2d_struct = .{
     .x_colors = .{collective_x_color_left, collective_x_color_right},
     .y_colors = .{collective_y_color_down, collective_y_color_up},
@@ -176,7 +179,8 @@ layout {
             const memcpy_params = memcpy.get_params(px);
             while (py < layer_end_y) : (py += 1) {
                 const reduce_params = reduce_module.get_params(px, py);
-                const c2d_params = c2d.get_params(px, py, c2d_struct, current_layer_params);
+                const c2d_params = c2d.get_params(px, py, c2d_struct, current_layer_params);    // Modified CC.
+                // const c2d_params = c2d.get_params(px, py, c2d_struct);
                 const layer_params = current_layer_params;
 
                 var params: comptime_struct = .{
@@ -217,12 +221,12 @@ layout {
     @export_name("x", [*]f32, true);
     @export_name("x_coarse", [*]f32, true);
     @export_name("b", [*]f32, true);
-    @export_name("v_cycle_down", fn()void);
-    @export_name("v_cycle_up", fn()void);
+    @export_name("v_cycle_down", fn(u32)void);
+    @export_name("v_cycle_up", fn(u32)void);
     @export_name("b_next", [*]f32, true);
     @export_name("omega", [*]f32, true);
     @export_name("iterations", [*]i32, true);
-    @export_name("layout_print", fn()void);
+    @export_name("layout_print", fn(u32)void);
 
     // timing
     @export_name("time_memcpy", [*]f32, true);

@@ -1,0 +1,512 @@
+
+//
+// special version of mux when N = 1 (height = 1 )
+//
+// The runtime only issues the D2H command when the D2H is not empty, so
+// there is no need for switch
+//
+//               RXACT                             RXACT_CONFIG
+//    +-------+  MEMCPYD2H_DATA(23)    +------+  GC_RXACT_CONFIG_MU(14)   +---------+ FABRIC_D2H_DATA_CMD (9)
+//    | core  | ---------------------> | mux  | <------------------------ | mux     | <-----------------------
+//    |       |                        |      | ------------------------> | adaptor | ----------------------->
+//    |       |                        |      |   GC_TXACT_MUX (12)       |         | FABRIC_D2H_DATA (8)
+//    +-------+                        +------+   MEMCPYD2H_DATA          +---------+
+//
+
+
+// mux adaptor (similar to demux adaptor)
+//
+//     +------+     +------+     +-------------+
+//     | core | --> | mux  | --> | mux adaptor |
+//     +------+     +------+     +-------------+
+//
+// mux adaptor reads data into a buffer first, and then write it out.
+// The purpose of this addition buffer is to remove the backpressure
+// from halo.
+// i.e. backpressure of halo only affects the timing of mux adaptor.
+// gather and mux should be in full speed.
+//
+//
+// Adapter for demux kernel sends teardowns and configuration sentinels to the
+// demux kernel before each received tensor. The adapter receives a header from
+// the driver on each channel with this format:
+//  struct {
+//      u16 enable_receiver[N];
+//      u16 pes_per_receiver;
+//      u16 pe_length;
+//  };
+// Each demux receives from one LVDS channel and sends to N columns of PEs in
+// the core kernel. enable_receiver[i] is a boolean value indicating whether
+// the ith receiver gets any data for the next tensor. The pes_per_receiver
+// field represents the number of PEs receiving data in each column of the
+// core kernel. pe_length is the number of wavelets received by each individual
+// PE in the core for the next tensor.
+//
+// This adapter performs the following steps upon receiving a header for the
+// next tensor:
+// 1. Sends a signal to "mux td" which then sends a teardown with NOCE bit to the mux
+// 2. Sends config parameters to mux, including
+//   - enable_receiver[i]
+//   - pes_per_receiver
+//   - pe_length
+//   - number of receivers
+// 4. Begins receiving data (from mux) for the next tensor with total length equal to
+//    sum(enable_receiver) * pes_per_receiver * pe_length.
+//
+
+// control flow
+//  f_startup: read config parameters
+//  --> f_config: compute offset of each active receiver
+//  --> f_txtd0_done: send config parameters to mux
+//  --> f_txtd1_done: prepare the loop to send out the data
+//      --> f_rxdone: send out data
+//      --> f_config: start next tensor
+//
+
+// local colors
+param RXACT: color; // receive data from mux
+param TXACT: color; // send data to LVDS, only data wavelets
+param RXACT_CMD: color; // meta data command to trigger teardown
+param TXACT_CONFIG: color; // send config parameters to mux
+
+
+// local tasks
+param STARTUP: local_task_id; // receive config parameter of next tensor
+param CONFIG: local_task_id;  // recompute enable_tensor[N]
+param TXTD0_DONE: local_task_id;
+param TXTD1_DONE: local_task_id;
+param RXDONE: local_task_id;
+param PADDING_DONE: local_task_id;
+
+// parameters
+param N: i16; // number of receivers in mux
+param num_config_wvlt: i16;
+
+param num_mux: i16; // number of mux
+param _pe_id: i16;  // 0 <= _pe_id < num_mux
+
+// bind RXACT_XXX to an input queue
+// all colors have distinct input queues and output queues
+const iq_rxact = @get_input_queue(0);
+const iq_rxact_cmd = @get_input_queue(1);
+
+const oq_txact = @get_output_queue(2);
+const oq_txact_config = @get_output_queue(4);
+
+const task_id_rxact = if (@is_arch("wse3")) @get_data_task_id(iq_rxact) else @get_data_task_id(RXACT);
+const task_id_rxact_cmd = if (@is_arch("wse3")) @get_data_task_id(iq_rxact_cmd) else @get_data_task_id(RXACT_CMD);
+
+//
+// The host sends enable_receiver[0:N-1], pes_per_receiver, and pe_length,
+// N+2 i16 packed into i32 wavelet, so the host may do zero extension if
+// N+2 is not even.
+// Here we compute Np6_even>=N+6 is an even number
+//
+// example 1: N=3
+//   Np6 = 9, Np6_div_2=5, Np6_even=10
+// example 2: N=4
+//   Np6 = 10, Np6_div_2=5, Np6_even=10
+//
+
+//---
+// WARNING: To support multiple LVDS, we need single channel for FABRIC_D2H_DATA_CMD, so
+// all mux adaptors must receive the same amount of data for config parameters even they
+// may not have the same N.
+// To solve this issue, we define a constant num_config_wvlt = max{ ceil((Nj+6)/2) },
+// adaptor reads num_config_wvlt wavelets from LVDS
+//
+//const Np6 = N+6;
+//const Np6_div_2 = (Np6+1)/2; // ceil((N+6)/2)
+//
+
+const Np6_div_2 = num_config_wvlt;
+const Np6_even = 2*Np6_div_2;
+//---
+
+////////////////////////////////////////////////////////////////////////////////
+// Main memory (48KB)
+////////////////////////////////////////////////////////////////////////////////
+
+// u16 enable_receiver[0:N-1] = config_buf[0:N-1]
+// u16 pes_per_receiver = config_buf[N]
+// u16 pe_length = config_buf[N+1]
+// u16 num_receivers = config_buf[N+2]
+var config_buf_i32 = @zeros([Np6_even+1]i32);
+
+var num_receivers = @zeros([1]i16);
+
+var pes_per_receiver : i16 = 0;
+var pe_length : i16 = 0;
+
+// (dsd_length, num_send, dsd_length_r) is used to send the data
+//   number of wavelets = dsd_length * num_send + dsd_length_r
+//
+//   for j in range(num_send):
+//      send dsd_length wavelets via microthread
+//   end
+//   send dsd_length_r wavelets via microthread
+
+var idx_send : u16 = 0;
+
+var dsd_length: u16 = 0;
+var num_send : u16 = 0;
+var dsd_length_r: u16 = 0;
+var is_odd: u16 = 0;
+
+// state = 0: process dsd_length_r
+// state = 1: read config params of next tensor
+var state : i16 = 0;
+
+var zero_padding = @zeros([1]i32);
+
+////////////////////////////////////////////////////////////////////////////////
+// DSDs
+// data-structure descriptors (DSDs), loaded into data-structure registers (DSRs)
+//
+// Queues 0,1: input depth 6 wavelets
+// Queues 2,3: input depth 4 wavelets
+// Queues 4-7: input depth 2 wavelets
+//
+// queues 0,1: output depth 2 wavelets
+// queues 2,3: output depth 6 wavelets
+// queues 4,5: output depth 2 wavelets
+////////////////////////////////////////////////////////////////////////////////
+
+const tile_config = @import_module("<tile_config>");
+
+var gdsr_rxact_s1 =  @get_dsd(fabin_dsd, .{
+   .extent = 1,
+   .fabric_color = RXACT,
+   .input_queue = iq_rxact
+});
+
+var gdsr_txact_dst = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .fabric_color = TXACT,
+    .output_queue = oq_txact
+});
+
+
+// the length Np6_div_2 is independent of data type of config_buf_i32
+// it depends on the instruction mov16 or mov32
+// we use mov32 for mem_buf_config_dsd, so it needs Np6_div_2 wavelets
+const mem_buf_config_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Np6_div_2} -> config_buf_i32[i] });
+
+const gdsr_rxcfg_s1 =  @get_dsd(fabin_dsd, .{
+   .extent = Np6_div_2,
+   .fabric_color = RXACT_CMD,
+   .input_queue = iq_rxact_cmd
+});
+
+
+// However we use mov16 for mem_buf_config_np3_dsd, so it trasmits N+3 i16
+const mem_buf_config_np3_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N+3} -> config_buf_i32[i] });
+
+// we use mov16 for fab_tx_config_dst, so it trasmits N+3 i16
+const fab_tx_config_dst = @get_dsd(fabout_dsd, .{
+    .extent = N+3,
+    .fabric_color = TXACT_CONFIG,
+    .output_queue = oq_txact_config
+});
+
+
+const mem_padding_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> zero_padding[i] });
+const gdsr_txact_padding_dst = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .fabric_color = TXACT,
+    .output_queue = oq_txact
+});
+
+
+////////////////////////////////////////////////////////////////////////////////
+// Tasks
+// syntax
+//     task_begin(name, entrypoint, color)
+////////////////////////////////////////////////////////////////////////////////
+
+
+task f_startup() void {
+    // Begin receiving config header for next tensor
+    // The data cmd is packed N+2 i16 into 32-bit wavelets
+    //    - receivers[N]
+    //    - pes_per_receiver
+    //    - pe_length
+    // runtime has to do zero extension such that Np6_div_2 wavelets holds N+6 i16
+    @mov32(mem_buf_config_dsd, gdsr_rxcfg_s1, .{.async=true, .activate=f_config} );
+}
+
+
+// copy from demux_adaptor.csl
+task f_config() void {
+    // Compute prefix sum of enable bits to represent the receiver order
+    // PEs which don't receive get a value of 0xffff (-1)
+    // Use the final value as the number of receivers for tracking DSR
+
+    var config_buf : [*]i16 = @ptrcast([*]i16, &config_buf_i32);
+
+    dsd_length = @bitcast(u16, config_buf[N+2]);
+    num_send = @bitcast(u16, config_buf[N+3]);
+    dsd_length_r = @bitcast(u16, config_buf[N+4]);
+    is_odd = @bitcast(u16, config_buf[N+5]);
+
+    // (1) update enable_receiver[N]
+    // enable_receiver[0:N-1] = config_buf[0:N-1]
+    // prefix_sum(enable_receiver[N])
+    var row : i16 = 0;
+    var r_length: i16 = 0;
+    while(row < N) : (row +=1) {
+        var r_enable : i16 = config_buf[row];
+        var r_order : i16 = r_length;
+        if ( 0 == r_enable ){
+            r_order = -1; // "row" receiver is off
+        }
+        config_buf[row] = r_order;
+        r_length = r_length + r_enable;
+    }
+
+    // (2) num_receivers = sum{ enable_receivers[N] }
+    // receiver_loop_done:
+    // mov16 [num_receivers] = r_length
+    num_receivers[0] = r_length;
+
+    // record pes_per_receiver, pe_length to increase readability
+    // WARNING: pes_per_receiver = config_buf[N] is not changed
+    // WARNING: pe_length = config_buf[N+1] is not changed
+    pes_per_receiver = config_buf[N];
+    pe_length = config_buf[N+1];
+
+    // (3) append num_receivers back to config_buf
+    config_buf[N+2] = num_receivers[0];
+
+    // (4) send config parameters to mux
+    @activate(TXTD0_DONE);
+}
+
+
+// (4) send config parameters to mux
+//    {enable_receiver[N], pes_per_receiver, pe_length, num_receivers}
+//
+task f_txtd0_done() void {
+
+    @mov16(fab_tx_config_dst, mem_buf_config_np3_dsd, .{.async=true, .activate=f_txtd1_done} );
+}
+
+
+// (6) forward data from mux to LVDS
+// copy from demux_adaptor.csl
+task f_txtd1_done() void {
+
+    if (0 == num_receivers[0]){
+// no active receivers, continue next tensor
+// skip_forwarding:
+        // recv config header for next tensor
+        @mov32(mem_buf_config_dsd, gdsr_rxcfg_s1, .{.async=true, .activate=f_config} );
+    }else{
+        gdsr_rxact_s1  = @set_dsd_length(gdsr_rxact_s1,  dsd_length);
+        gdsr_txact_dst = @set_dsd_length(gdsr_txact_dst, dsd_length);
+        // num_send is received from config header
+        idx_send = 0;
+        @activate(RXDONE);
+    }
+}
+
+
+// copy from demux_adaptor.csl
+// pseudocode
+// for i in range(num_receivers):
+//    for j in range(pes_per_receiver):
+//       send pe_length wavelets via microthread
+//
+task f_rxdone() void {
+    if ( idx_send >= num_send ){
+        if (0 == state){
+            // process dsd_length_r
+            if ( 0 == dsd_length_r ){
+                @activate(RXDONE);
+            }else{
+                gdsr_rxact_s1  = @set_dsd_length(gdsr_rxact_s1,  dsd_length_r);
+                gdsr_txact_dst = @set_dsd_length(gdsr_txact_dst, dsd_length_r);
+                @mov32(gdsr_txact_dst, gdsr_rxact_s1, .{.async=true, .activate=f_rxdone} );
+            }
+            state = 1;
+        }else{
+            // recv config header for next tensor
+            if ( 0 < is_odd){
+                // odd wavelets, pad one zero
+                @mov32(gdsr_txact_padding_dst, mem_padding_dsd, .{.async=true, .activate=f_padding_done} );
+            }else{
+                // even wavelets, no padding
+                @mov32(mem_buf_config_dsd, gdsr_rxcfg_s1, .{.async=true, .activate=f_config} );
+            }
+            state = 0;
+        }
+    }else{
+        // idx_send = 0:(num_send-1)
+        // send pe_length wavelets by a microthread
+        @mov32(gdsr_txact_dst, gdsr_rxact_s1, .{.async=true, .activate=f_rxdone} );
+        idx_send = idx_send + 1;
+    }
+}
+
+// padding is done, read next config parameters
+task f_padding_done() void {
+    @mov32(mem_buf_config_dsd, gdsr_rxcfg_s1, .{.async=true, .activate=f_config} );
+}
+
+
+// "mux td" sends teardown to the mux, and such teardown will propagate
+// down to last PE of mux, then "mux adaptor", so we need to clear TIP,
+// otherwise, "mux adaptor" cannot receive data from mux
+task f_teardown() void {
+
+    // (1) Read TIP register (TAMAP_TEARDOWN_PEND_ADDR_[LO|HI]) to clear
+    const pending = tile_config.teardown.get_pending();
+
+    // (2) Clear teardown-in-progress bit on transmit color
+    //    bit-14 = 1 (teardonw in progress), or 0x4000
+    tile_config.teardown.exit(RXACT);
+}
+
+
+comptime {
+
+    @comptime_assert( 1 == N );
+
+    @activate(STARTUP);
+    @block(task_id_rxact); // use microthread
+    @block(task_id_rxact_cmd); // use microthread
+
+    @bind_local_task( f_startup, STARTUP);
+    @bind_local_task( f_config, CONFIG);
+    @bind_local_task( f_rxdone, RXDONE);
+    @bind_local_task( f_txtd0_done, TXTD0_DONE);
+    @bind_local_task( f_txtd1_done, TXTD1_DONE);
+    @bind_local_task( f_teardown, tile_config.teardown.get_task_id());
+    @bind_local_task( f_padding_done, PADDING_DONE);
+}
+
+//         +-------------+
+//  c1 --> | mux adaptor | --> c0
+//  c3 <-- |             | <-- c2
+//         +-------------+
+// where
+//    c0 = TXACT
+//    c1 = RXACT
+//    c2 = RXACT_CMD
+//    c3 = TXACT_CONFIG
+//
+comptime {
+    @set_local_color_config(RXACT, .{ .routes = .{ .rx = .{WEST}, .tx = .{RAMP} } } );
+    @set_local_color_config(TXACT, .{ .routes = .{ .rx = .{RAMP}, .tx = .{EAST} } } );
+    @set_local_color_config(TXACT_CONFIG, .{ .routes = .{ .rx = .{RAMP}, .tx = .{WEST} } } );
+}
+
+//
+// case 1: num_mux = 1 (no filter)
+//     +-------------------+
+//     | pid = 0  adaptor  | <--- RXACT_CMD
+//     +-------------------+
+//
+// case 2: num_mux > 1
+//     +-------------------+
+//     | pid = 0  adaptor  |
+//     +-------------------+
+//             ^
+//             | RXACT_CMD
+//     +-------------------+
+//     | pid = 1  adaptor  |
+//     +-------------------+
+//             ^
+//             | RXACT_CMD
+//     +-------------------+
+//     | pid = 2  adaptor  | <--- RXACT_CMD
+//     +-------------------+
+//
+// Example 3: round-robin chunk size along row PEs
+//    PE0: [0, chunk), w*chunk+[0, chunk)  , 2*w*chunk+[0, chunk)  , ...
+//    PE1: [chunk, 2*chunk), w*chunk+[chunk, 2*chunk)  , 2*w*chunk+[chunk, 2*chunk)  , ...
+//    PE2: [2*chunk, 3*chunk), w*chunk+[2*chunk, 3*chunk)  , 2*w*chunk+[2*chunk, 3*chunk)  , ...
+//
+// limit = width*chunk - 1
+// PE pid filters [pid*chunk, (pid+1)*chunk)
+// init_count = (limit+1 - pid*chunk) % (limit+1)
+// range [0, max_pass] where max_pass = chunk-1
+//
+// Here chunk = num_config_wvlt,
+//      w     = num_mux
+//
+comptime {
+
+    if (1 == num_mux){
+        // no filter
+        @set_local_color_config(RXACT_CMD, .{ .routes = .{ .rx = .{EAST}, .tx = .{RAMP} } } );
+
+    }else{
+
+// static filter, each mux adaptor receives num_config_wvlt wavelets, num_mux adaptors in total
+// cliff distribution on (num_config_wvlt * num_mux ) wavelets
+// production release: num_config_wvlt <= (16+2)/2 = 9
+//                     num_mux <= 60
+// so (num_config_wvlt * num_mux) is bounded by 16-bit
+//
+        const chunk: i16 = num_config_wvlt;
+        const width: i16 = num_mux;
+        const max_pass: i16 = chunk-1;
+        const limit_plus_1: i16 = width*chunk;
+
+        const baseConfig_1st = .{
+            .routes = .{ .rx = .{ SOUTH }, .tx = .{RAMP} },
+            .filter = .{
+                .kind = .{ .counter = true },
+                .count_data = true,
+                //.count_control = true,
+                .init_counter = (limit_plus_1 - _pe_id*chunk) % limit_plus_1,
+                .max_counter  = max_pass,
+                .limit1 = (limit_plus_1 - 1)
+            },
+        };
+
+        const baseConfig_middle = .{
+            .routes = .{ .rx = .{ SOUTH }, .tx = .{RAMP, NORTH} },
+            .filter = .{
+                .kind = .{ .counter = true },
+                .count_data = true,
+                //.count_control = true,
+                .init_counter = (limit_plus_1 - _pe_id*chunk) % limit_plus_1,
+                .max_counter  = max_pass,
+                .limit1 = (limit_plus_1 - 1)
+            },
+        };
+
+        const baseConfig_last = .{
+            .routes = .{ .rx = .{ EAST }, .tx = .{ RAMP, NORTH } },
+            .filter = .{
+                .kind = .{ .counter = true },
+                .count_data = true,
+                //.count_control = true,
+                .init_counter = (limit_plus_1 - _pe_id*chunk) % limit_plus_1,
+                .max_counter  = max_pass,
+                .limit1 = (limit_plus_1 - 1)
+            },
+        };
+
+        if ( 0 == _pe_id ){
+            @set_local_color_config(RXACT_CMD, baseConfig_1st);
+        }else if (_pe_id < (num_mux-1)){
+            @set_local_color_config(RXACT_CMD, baseConfig_middle );
+        }else{
+            @set_local_color_config(RXACT_CMD, baseConfig_last );
+        }
+    }
+}
+//---
+
+// routable color must bind to an input queue
+comptime {
+    @initialize_queue(iq_rxact, .{.color = RXACT} );
+    @initialize_queue(iq_rxact_cmd, .{.color = RXACT_CMD} );
+    if (@is_arch("wse3")) {
+        @initialize_queue(oq_txact, .{.color = TXACT});
+        @initialize_queue(oq_txact_config, .{.color = TXACT_CONFIG});
+    }
+}

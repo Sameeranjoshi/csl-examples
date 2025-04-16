@@ -1,0 +1,306 @@
+param enable: bool;
+
+fn __internal_simfabprint(r2: u16, r3: *const u8) void {
+    asm volatile (
+        @strcat(
+            "nop\n",
+            "nop\n",
+            "simprt"
+        )
+        :: [r2] "{r2}" (r2), [r3] "{r3}" (r3)
+    );
+}
+
+// Opcodes for __internal_simfabprint.
+const opcodes = enum(u16) {
+    PUTC     = 0b00,
+    REGPRINT = 0b01,
+    MEMPRINT = 0b10
+};
+const opcode_width = 2;
+
+// Log categories. NOTE: for now, only INFO is actually exposed by this library.
+const log_categories = enum(u16) {
+    FATAL   = 0b000,
+    ERROR   = 0b001,
+    WARNING = 0b010,
+    INFO    = 0b011,
+    DEBUG   = 0b100
+};
+const log_category_width = 3;
+
+// Operand types for MEMPRINT.
+const memprint_operand_type = enum(u16) {
+    NUL_TERMINATED_STRING = 0b0000,
+    MEMORY_DUMP           = 0b0001, // not exposed by this library
+    WAVELET               = 0b0010, // not exposed by this library
+    NARROW_DSD            = 0b0100, // not exposed by this library
+    WIDE_DSD              = 0b0101, // not exposed by this library
+    UINT_BINARY_16        = 0b1000,
+    UINT_DECIMAL_16       = 0b1001,
+    UINT_HEX_16           = 0b1010,
+    FLOAT_16              = 0b1011,
+    UINT_BINARY_32        = 0b1100,
+    UINT_DECIMAL_32       = 0b1101,
+    UINT_HEX_32           = 0b1110,
+    FLOAT_32              = 0b1111
+};
+
+fn get_memprint_op(comptime operand_type: memprint_operand_type) u16 {
+    return @get_int(opcodes.MEMPRINT)
+         | (@get_int(log_categories.INFO) << opcode_width)
+         | (@get_int(operand_type) << (opcode_width + log_category_width));
+}
+
+fn print_string(comptime s: comptime_string) void {
+    if(enable) {
+        // comptime_strings are not NUL-terminated, but the simfab printing
+        // mode we are using here requires a NUL terminator. So we must
+        // manually add one.
+        const buf = @__internal_promote_to_const_global(@strcat(s, "\x00"));
+
+        __internal_simfabprint(
+            get_memprint_op(memprint_operand_type.NUL_TERMINATED_STRING),
+            @ptrcast(*const u8, buf)
+        );
+    }
+}
+
+fn __print_scalar(x: anytype, comptime operand_type: memprint_operand_type) void {
+    if (enable) {
+        __internal_simfabprint(
+            get_memprint_op(operand_type),
+            @ptrcast(*const u8, &x)
+        );
+    }
+}
+
+fn print_u16_binary(x: u16) void {
+    __print_scalar(x, memprint_operand_type.UINT_BINARY_16);
+}
+
+fn print_u16_decimal(x: u16) void {
+    __print_scalar(x, memprint_operand_type.UINT_DECIMAL_16);
+}
+
+fn print_u16_hex(x: u16) void {
+    __print_scalar(x, memprint_operand_type.UINT_HEX_16);
+}
+
+fn print_f16(x: f16) void {
+    __print_scalar(x, memprint_operand_type.FLOAT_16);
+}
+
+fn print_u32_binary(x: u32) void {
+    __print_scalar(x, memprint_operand_type.UINT_BINARY_32);
+}
+
+fn print_u32_decimal(x: u32) void {
+    __print_scalar(x, memprint_operand_type.UINT_DECIMAL_32);
+}
+
+fn print_u32_hex(x: u32) void {
+    __print_scalar(x, memprint_operand_type.UINT_HEX_32);
+}
+
+fn print_f32(x: f32) void {
+    __print_scalar(x, memprint_operand_type.FLOAT_32);
+}
+
+const fmt_spec_kind = enum(u16) {
+    UNDEFINED,
+    INT_BIN,      // 'b'
+    INT_DECIMAL,  // 'd'
+    INT_HEX,      // 'X'
+    FLOAT         // 'f'
+};
+
+fn get_fmt_spec_kind(comptime byte: comptime_int) fmt_spec_kind {
+    return switch(byte) {
+        'b' => fmt_spec_kind.INT_BIN,
+        'd' => fmt_spec_kind.INT_DECIMAL,
+        'X' => fmt_spec_kind.INT_HEX,
+        'f' => fmt_spec_kind.FLOAT,
+        else =>
+            @comptime_assert(
+                false,
+                @strcat("Invalid format specifier: '", @get_string_from_byte(byte), "'")
+            )
+    };
+}
+
+// Helper for 'fmt_impl' to check the type of 'arg' and dispatch the correct
+// print function based on the format specifier kind. The caller is
+// responsible for ensuring that spec_kind is not UNDEFINED.
+fn dispatch_print(comptime spec_kind: fmt_spec_kind, arg: anytype) void {
+    const arg_type = @type_of(arg);
+
+    switch(spec_kind) {
+        fmt_spec_kind.UNDEFINED => {
+            // Since the caller (fmt_impl) was responsible for ensuring that
+            // fmt_spec is not UNDEFINED, we'll call this an "internal error".
+            @comptime_assert(false, "Internal error: current_fmt_spec is UNDEFINED");
+        },
+        fmt_spec_kind.INT_BIN => {
+            @comptime_assert(
+                @is_same_type(arg_type, u32)
+                  or @is_same_type(arg_type, u16),
+                "Invalid argument type for format specifier 'b'. Expected u32 or u16."
+            );
+
+            if(@is_same_type(arg_type, u16)) {
+                print_u16_binary(arg);
+            } else {
+                print_u32_binary(arg);
+            }
+        },
+        fmt_spec_kind.INT_DECIMAL => {
+            @comptime_assert(
+                @is_same_type(arg_type, u32)
+                  or @is_same_type(arg_type, u16),
+                "Invalid argument type for format specifier 'd'. Expected u32 or u16."
+            );
+
+            if(@is_same_type(arg_type, u16)) {
+                print_u16_decimal(arg);
+            } else {
+                print_u32_decimal(arg);
+            }
+        },
+        fmt_spec_kind.INT_HEX => {
+            @comptime_assert(
+                @is_same_type(arg_type, u32)
+                  or @is_same_type(arg_type, u16),
+                "Invalid argument type for format specifier 'X'. Expected u32 or u16."
+            );
+
+            if(@is_same_type(arg_type, u16)) {
+                print_u16_hex(arg);
+            } else {
+                print_u32_hex(arg);
+            }
+        },
+        fmt_spec_kind.FLOAT => {
+            @comptime_assert(
+                @is_same_type(arg_type, f32)
+                  or @is_same_type(arg_type, f16),
+                "Invalid argument type for format specifier 'f'. Expected f32 or f16."
+            );
+
+            if(@is_same_type(arg_type, f16)) {
+                print_f16(arg);
+            } else {
+                print_f32(arg);
+            }
+        },
+    }
+}
+
+//
+// 'fmt_impl' scans the format string via a finite state machine with three
+// states:
+//
+//  - OUTSIDE_FORMAT_SCANNER: We are scanning "normal" text outside any format
+//    specifier.
+//  - EXPECT_FMT_SPEC_KIND: We have just encountered a '{' and are now inside
+//    a format specifier. The next thing we expect is a specifier kind.
+//  - EXPECT_RCURLY: We are inside a format specifier, have just encountered
+//    a specifier kind, and are now expecting a '}' to close the specifier.
+//
+const scanner_state = enum(u16) {
+    OUTSIDE_FORMAT_SPECIFIER,
+    EXPECT_FMT_SPEC_KIND,
+    EXPECT_RCURLY
+};
+
+fn fmt_impl(comptime fstr: comptime_string, args: anytype, append_newline: bool) void {
+    if (enable) {
+        comptime var state = scanner_state.OUTSIDE_FORMAT_SPECIFIER;
+
+        // Runs of "regular" text (i.e. text that is not part of a format
+        // specifier) are accumulated into current_text. Once a format
+        // specifier is encountered, current_text is printed and reset.
+        comptime var current_text = "";
+
+        // The current format specifier kind. This is set when we transition
+        // to the EXPECT_RCURLY state.
+        comptime var current_fmt_spec = fmt_spec_kind.UNDEFINED;
+
+        // The position within 'args' of the next argument to print. This is
+        // incremented with each format specifier we encounter.
+        comptime var arg_pos = 0;
+
+        inline for(@get_array(fstr)) |byte| {
+            switch(state) {
+                scanner_state.OUTSIDE_FORMAT_SPECIFIER => {
+                    switch (byte) {
+                        '{' => {
+                            state = scanner_state.EXPECT_FMT_SPEC_KIND;
+                        },
+                        else => {
+                            current_text = @strcat(current_text, @get_string_from_byte(byte));
+                        }
+                    }
+                },
+                scanner_state.EXPECT_FMT_SPEC_KIND => {
+                    switch (byte) {
+                        // Double '{' is an escape sequence for a single '{'.
+                        // Push the '{' into the current_text and transition
+                        // back to the OUTSIDE_FORMAT_SPECIFIER state.
+                        '{' => {
+                            current_text = @strcat(current_text, "{");
+                            state = scanner_state.OUTSIDE_FORMAT_SPECIFIER;
+                        },
+                        '}' => {
+                            @comptime_assert(false, "Format specifier kind missing in format string");
+                        },
+                        else => {
+                            current_fmt_spec = get_fmt_spec_kind(byte);
+                            state = scanner_state.EXPECT_RCURLY;
+                        }
+                    }
+                },
+                scanner_state.EXPECT_RCURLY => {
+                    switch(byte) {
+                        '}' => {
+                            if (current_text != "") {
+                                print_string(current_text);
+                                current_text = "";
+                            }
+                            dispatch_print(current_fmt_spec, args[arg_pos]);
+                            arg_pos += 1;
+                            state = scanner_state.OUTSIDE_FORMAT_SPECIFIER;
+                        },
+                        else => {
+                            @comptime_assert(false, "Missing '}' for format specifier");
+                        }
+                    }
+                }
+            }
+        }
+
+        // We expect to end in the OUTSIDE_FORMAT_SPECIFIER state. If we do,
+        // flush any remaining text and return successfully. If we are in some
+        // other state, we produce an assertion failure.
+        switch(state) {
+            scanner_state.OUTSIDE_FORMAT_SPECIFIER => {
+                // TODO: We may want to check that arg_pos is equal to the
+                // number of arguments in 'args', but we don't currently have
+                // any way to get the length of a tuple. So for now, we'll
+                // just silently ignore any extra arguments.
+                if (append_newline) {
+                    print_string(@strcat(current_text, "\n"));
+                }
+                else if (current_text != "") {
+                    print_string(current_text);
+                }
+            },
+            scanner_state.EXPECT_FMT_SPEC_KIND => {
+                @comptime_assert(false, "Format specifier kind missing in format string");
+            },
+            scanner_state.EXPECT_RCURLY => {
+                @comptime_assert(false, "Missing '}' for format specifier");
+            }
+        }
+    }
+}

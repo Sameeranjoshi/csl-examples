@@ -1,0 +1,31 @@
+//
+// The nop.csl is used for those PEs who only provide routing
+// However we may send teardown over some route, to avoid hang, we need to add task 29 for these PEs
+//
+// Since we don't know who will receive the teardown, so just add task 29 to restore the router
+//
+
+// clear TIP for all routable colors except 29 and 31
+// however this is very expensive, it is better to customize the nop.csl case by case
+
+const tile_config = @import_module("<tile_config>");
+
+
+task f_teardown() void {
+
+    // (1) Read TIP register (TAMAP_TEARDOWN_PEND_ADDR_[LO|HI]) to clear
+    const pending = tile_config.teardown.get_pending();
+
+    // (2) Clear teardown-in-progress bit on transmit color
+    //    bit-14 = 1 (teardonw in progress), or 0x4000
+    // color 29: teardown
+    // color 31: no color
+    //
+    // routable color 0:28, 30
+    var c : u16 = 0;
+    while(c < 29) : (c +=1) {
+       tile_config.teardown.exit( @get_color(c) );
+    }
+    c = 30;
+    tile_config.teardown.exit( @get_color(c) );
+}

@@ -658,7 +658,7 @@ def perform_downward_pass(simple_memcpy, simulator,symbols, level_index, level, 
     hardwareTimer.start()
     # Compute
     print("Step 4: Compute")
-    simulator.launch("v_cycle_down", nonblock=False)
+    simulator.launch("v_cycle_down", np.uint32(level_index), nonblock=False)
     # timer
     print("Step 5: Timer Stop")
     hardwareTimer.stop()
@@ -745,7 +745,7 @@ def perform_upward_pass(simple_memcpy, simulator, symbols, level_index, level, c
     hardwareTimer.start()
     # Compute
     print("Step 4: Compute")
-    simulator.launch("v_cycle_up", nonblock=False)
+    simulator.launch("v_cycle_up", np.uint32(level_index), nonblock=False)
     # timer
     print("Step 5: Timer Stop")
     hardwareTimer.stop()
@@ -924,10 +924,10 @@ def main():
   print("############################################################")
   print("# INPUT DATA")
   print("############################################################")
-  N = 2
-  M = 2
+  N = 7
+  M = 7
   eps = 1.e-5
-  max_iterations = 20
+  max_iterations = 1
     
   A0, x0, b0 = generate_input2(M, N, type=np.float32)
   nrm_b = np.linalg.norm(b0, 2)
