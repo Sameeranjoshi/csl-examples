@@ -136,19 +136,19 @@ var communication_tsc_end = @zeros([timestamp.tsc_size_words]u16);
 var ptr_communication_time: [*]f32 = &communication_time_buf;
 
 // DSDs
-const dsd_A_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*@as(i16, N_local)] }); // 1 col of A_tile
-const dsd_A_diag = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*N_local + i] });
-const dsd_R_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> R_tile[i*@as(i16, R_N_local)] }); // 1 col of R_tile
-const dsd_P_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_N_local} -> P_tile[i*@as(i16, R_M_local)] }); // 1 col of P_tile
-const dsd_x_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N_local} -> x_tile[i]});
-const dsd_b_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> b_tile[i]});
-const dsd_Ax = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> Ax[i]});
-const dsd_Rx = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> Rx[i]});
-const dsd_Px = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_N_local} -> Px[i]});
-const dsd_residual_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> residual_tile[i]});
-const dsd_D_inv = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> D_inv[i] });
-const dsd_term_2 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> term_2[i] });
-const dsd_px_sum_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N_local} -> px_sum_tile[i] });
+var dsd_A_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*@as(i16, N_local)] }); // 1 col of A_tile
+var dsd_A_diag = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*N_local + i] });
+var dsd_R_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> R_tile[i*@as(i16, R_N_local)] }); // 1 col of R_tile
+var dsd_P_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_N_local} -> P_tile[i*@as(i16, R_M_local)] }); // 1 col of P_tile
+var dsd_x_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N_local} -> x_tile[i]});
+var dsd_b_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> b_tile[i]});
+var dsd_Ax = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> Ax[i]});
+var dsd_Rx = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> Rx[i]});
+var dsd_Px = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_N_local} -> Px[i]});
+var dsd_residual_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> residual_tile[i]});
+var dsd_D_inv = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> D_inv[i] });
+var dsd_term_2 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> term_2[i] });
+var dsd_px_sum_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N_local} -> px_sum_tile[i] });
 var dsd_w_dinv_a_x = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> w_dinv_a_x[i] });
 var dsd_i_into_x = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> i_into_x[i] });
 
@@ -249,6 +249,17 @@ fn f_reference_timestamps() void {
     sys_mod.unblock_cmd_stream();
 }
 
+
+fn matvec(N_tile: i16, dsd_mv_tile: mem1d_dsd, dsd_matrix_tile: mem1d_dsd, vector_tile_data: [*]const f32) void {
+  @fmovs(dsd_mv_tile, 0.0); // Initialize result to 0
+  var matrix_dsd = dsd_matrix_tile; // Create a mutable copy of the DSD
+  
+  for (@range(i16, N_tile)) |j| {
+    @fmacs(dsd_mv_tile, dsd_mv_tile, matrix_dsd, vector_tile_data[j]);
+    matrix_dsd = @increment_dsd_offset(matrix_dsd, 1, f32);
+  }
+}
+
 // AMG
 fn compute_mv_per_tile(N_tile: i16, dsd_mv_tile: anytype, dsd_matrix_tile: anytype, vector_tile_data: [*]const f32) void {
   @fmovs(dsd_mv_tile, 0.0); // this can cause error if not initialized.
@@ -265,7 +276,9 @@ fn compute_mv_per_tile(N_tile: i16, dsd_mv_tile: anytype, dsd_matrix_tile: anyty
 // The diagonal PEs add the term_1 so that we don't have to gather on diag PE.
 
 fn jacobi_local() void {
-    compute_mv_per_tile(N_local, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax(vector) = Ax(matrix * vector)
+    dsd_A_tile = @set_dsd_base_addr(dsd_A_tile, &A_tile); // make sure you do this before
+    // compute_mv_per_tile(N_local, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax(vector) = Ax(matrix * vector)
+    matvec(N_local, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax(vector) = Ax(matrix * vector)
     @fmuls(dsd_w_dinv_a_x, dsd_D_inv, dsd_Ax); // tmp = D_inv * Ax (vector * vector)
     @fmuls(dsd_w_dinv_a_x, omega[0], dsd_w_dinv_a_x); // tmp = w * D_inv * Ax (scalar * vector)
 
@@ -285,7 +298,9 @@ fn jacobi_local() void {
 
 // Ax = A_local * x_local
 fn residual_local() void {
-  compute_mv_per_tile(N_local, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax = A_tile * x_tile
+  dsd_A_tile = @set_dsd_base_addr(dsd_A_tile, &A_tile); // make sure you do this before
+  // compute_mv_per_tile(N_local, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax = A_tile * x_tile
+  matvec(N_local, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax = A_tile * x_tile
 }
 
 fn printdsd(val: f32) void {
@@ -392,7 +407,9 @@ fn bcast_residual() void {
 
 // Compute restriction
 fn compute_restriction() void {
-  compute_mv_per_tile(R_N_local, dsd_Rx, dsd_R_tile, @ptrcast([*]const f32, &residual_tile));
+  dsd_R_tile = @set_dsd_base_addr(dsd_R_tile, &R_tile); // make sure you do this before
+  // compute_mv_per_tile(R_N_local, dsd_Rx, dsd_R_tile, @ptrcast([*]const f32, &residual_tile));
+  matvec(R_N_local, dsd_Rx, dsd_R_tile, @ptrcast([*]const f32, &residual_tile));
   cur_state = next_state;
   mpi_x.reduce_fadds(layer_kernel_cols-1, @ptrcast([*]f32, &Rx), @ptrcast([*]f32, &b_next),
                      R_M_local, STATE_MACHINE); // reduce across rows towards left
@@ -401,7 +418,9 @@ fn compute_restriction() void {
 
 // Compute prolongation
 fn compute_prolongation() void {
-  compute_mv_per_tile(R_M_local, dsd_Px, dsd_P_tile, @ptrcast([*]const f32, &x_coarse));
+  dsd_P_tile = @set_dsd_base_addr(dsd_P_tile, &P_tile); // make sure you do this before
+  // compute_mv_per_tile(R_M_local, dsd_Px, dsd_P_tile, @ptrcast([*]const f32, &x_coarse));
+  matvec(R_M_local, dsd_Px, dsd_P_tile, @ptrcast([*]const f32, &x_coarse));
   cur_state = next_state;
   mpi_x.reduce_fadds(py, @ptrcast([*]f32, &Px), @ptrcast([*]f32, &px_sum_tile),
                      R_N_local, STATE_MACHINE); // reduce across rows towards left  
