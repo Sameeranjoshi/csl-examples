@@ -431,7 +431,7 @@ def host_calculations(v_cycle_data):
     # Iteration parameters
     
     for iteration in range(max_iterations):
-        
+        amg.debugprint(ml.levels, b_level, x_level)
         # V down
         for i, level in enumerate(ml.levels[:-1]):
             # Set context BEFORE the operation
@@ -441,6 +441,8 @@ def host_calculations(v_cycle_data):
             b_coarse_layer, x_coarse_layer, operator_timing = amg.each_layer_solver_down(level, x_level, b_level, ml, setup_config, i, hostprofiling)
             b_level[i + 1] = b_coarse_layer
             x_level[i + 1] = x_coarse_layer
+            print("DOWN PHASE\n")
+            amg.debugprint(ml.levels, b_level, x_level)
         
         # V coarse
         b_coarsest = b_level[-1]
@@ -457,6 +459,8 @@ def host_calculations(v_cycle_data):
             x_lower_level = x_level[i+1]
             x_current_updated, operator_timing = amg.each_layer_solver_up(level, x_level, b_level, ml, setup_config, i, x_lower_level, hostprofiling)
             x_level[i] = x_current_updated
+            print("UP PHASE\n")
+            amg.debugprint(ml.levels, b_level, x_level)
 
         # Check convergence
         residual = b_level[0] - ml.levels[0].A @ x_level[0]
@@ -480,7 +484,7 @@ class HardwareTimerManager:
     def __init__(self, simulator):
         self.simulator = simulator
         self.simulator.launch("f_enable_timer", nonblock=False)
-        self.simulator.launch("f_sync", nonblock=False)
+        # self.simulator.launch("f_sync", nonblock=False)
         
     def start(self):
         """Start hardware timer with proper synchronization"""
@@ -658,6 +662,7 @@ def perform_downward_pass(simple_memcpy, simulator,symbols, level_index, level, 
     hardwareTimer.start()
     # Compute
     print("Step 4: Compute")
+    simulator.launch("layout_print", np.uint32(level_index), nonblock=False)
     simulator.launch("v_cycle_down", np.uint32(level_index), nonblock=False)
     # timer
     print("Step 5: Timer Stop")
@@ -670,6 +675,7 @@ def perform_downward_pass(simple_memcpy, simulator,symbols, level_index, level, 
     x_coarse_device = np.zeros_like(b_coarse_device)
     x_smooth = np.zeros(N, dtype=np.float32)
     d2h_start_time = time.time()
+    print(f"D2H ROI: {px + (w-1) }, {py}, {1}, {h}")
     simple_memcpy.do_memcpy_d2h(b_coarse_device, symbols['b_next'], px + (w-1), py + 0, 1, h, per_pe_restrict_rows*1) # copy from symbol into result.
     simple_memcpy.do_memcpy_d2h(x_smooth, symbols['x'], px, py, w, 1, per_pe_cols*1)
     d2h_time = time.time() - d2h_start_time
@@ -745,6 +751,7 @@ def perform_upward_pass(simple_memcpy, simulator, symbols, level_index, level, c
     hardwareTimer.start()
     # Compute
     print("Step 4: Compute")
+    simulator.launch("layout_print", np.uint32(level_index), nonblock=False)
     simulator.launch("v_cycle_up", np.uint32(level_index), nonblock=False)
     # timer
     print("Step 5: Timer Stop")
@@ -850,9 +857,12 @@ def device_calculations(v_cycle_data):
                 simple_memcpy, simulator, symbols, level_index, ml.levels[level_index],
                 layer_coordinates_map[level_index], x_level, b_level, setup_config, iteration, deviceprofiling
             )
+            print(f"x_smooth: {x_smooth}, b_coarse: {b_coarse}, x_coarse: {x_coarse}")
             x_level[level_index] = x_smooth
             b_level[level_index + 1] = b_coarse
             x_level[level_index + 1] = x_coarse
+            amg.debugprint(ml.levels, b_level, x_level)
+        
         
         # Coarse solve
         x_level[-1] = perform_coarse_solve(ml.levels[-1], x_level, b_level, solver_callable_host)

@@ -50,7 +50,7 @@ def each_layer_solver_down(level, x_level, b_level, ml, setup_config, level_id, 
                  omega=get_omega_from_presmoother(setup_config), 
                  iterations=get_iterations_from_presmoother(setup_config))
     timing.smoothing_time = time.time() - smooth_start
-    
+    print("smooth X", x)
     # Time residual calculation
     residual_start = time.time()
     r = b - A @ x   # residual
@@ -344,12 +344,13 @@ def debugprint(levels, b_level, x_level):
     level_data_clone = []
     for i, level in enumerate(levels):
         A, b = level.A, level.B
+        
         level_data_clone.append({
             "level": i,
             "A": A.toarray()[0,0:10] if hasattr(A, 'toarray') else A[0,0:10],
             # "B_original": b[0:10].flatten(), // What values are these?
-            "b_computed": b_level[i][0:10].flatten(),
-            "x_computed": x_level[i][0:10].flatten()
+            "b_computed": b_level[i][0:10].flatten() if b_level[i] is not None else "--",
+            "x_computed": x_level[i][0:10].flatten() if x_level[i] is not None else "--",
         })
     print(tabulate(level_data_clone, headers="keys", tablefmt="grid"))  
 
