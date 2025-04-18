@@ -1,12 +1,14 @@
-
 // params
 param memcpy_params: comptime_struct;
 param c2d_params: comptime_struct;
 param layer_params: comptime_struct;
 param reduce_params: comptime_struct;
-param fast_bcast_colors: [7]color;
+param fast_bcast_colors: [3]color;
 param pe_id_x: i16;
 param pe_id_y: i16;
+param bridge_down_color: color; 
+param bridge_up_color: color;
+param total_pe_cols: i16;
 
 const M: i16 = layer_params.M; // Height of local matrix, or num rows per PE
 const N: i16 = layer_params.N; // Width of local matrix, or num cols per PE
@@ -611,6 +613,7 @@ comptime {
   // star_modified_right.configure_network();
   // upper_traingular_chain_reduce.configure_network();
   // lower_traingular_chain_reduce.configure_network();
+  configure_dataflow_bridge();
 }
 
 // Helper functions for MPI timing
@@ -622,4 +625,22 @@ fn communication_tic() void {
 fn communication_toc() void {
     timestamp.get_timestamp(&communication_tsc_end);
     sys_mod.unblock_cmd_stream();
+}
+
+fn configure_dataflow_bridge() void {
+  // For the end of the layer (right side)
+  if (pe_id_x == layer_end_x - 1) {
+    if (pe_id_x != total_pe_cols - 1) {
+      // Configure this PE to receive from RAMP and send EAST
+      @set_local_color_config(bridge_down_color, .{.routes = .{ .rx = .{RAMP}, .tx = .{EAST}  }});  
+      @set_local_color_config(bridge_up_color, .{.routes = .{ .rx = .{EAST}, .tx = .{RAMP}  }});  
+    }
+  }
+  // For the start of the layer (left side)
+  else if (pe_id_x == layer_start_x) {
+    if (pe_id_x != 0) {
+      @set_local_color_config(bridge_down_color, .{.routes = .{ .rx = .{WEST}, .tx = .{RAMP}  }});  
+      @set_local_color_config(bridge_up_color, .{.routes = .{ .rx = .{RAMP}, .tx = .{WEST}  }});  
+    }
+  }
 }

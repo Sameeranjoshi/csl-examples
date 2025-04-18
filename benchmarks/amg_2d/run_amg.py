@@ -174,6 +174,10 @@ def run_command(command):
     except subprocess.CalledProcessError as e:
         print("Error occurred:", e.stderr)
 
+def generate_layout_file_from_template(layer_param_map, total_pe_rows, total_pe_cols, total_levels, generated_layout_file, run_args):
+  pass
+
+
 def generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_cols, total_levels, generated_layout_file, run_args):
       # Generates below command.
       # cslc ./src/layout_amg.csl --arch=wse2 --fabric-dims=27,12 --fabric-offsets=4,1 \
@@ -297,7 +301,7 @@ def generate_dynamic_layout(run_args, ml, layer_coordinates_map:Optional[dict]=N
   layer_param_map, layer_coordinates_map = create_layer_param_map(ml, layer_coordinates_map)
   total_pe_cols, total_pe_rows = find_total_pes_used(layer_coordinates_map)
   
-  # generated_layout_file = ut.generate_layout_file_from_template(layer_param_map, run_args, total_pe_cols, total_pe_rows, tot_level_minus_one)
+  # generated_layout_file = generate_layout_file_from_template(layer_param_map, run_args, total_pe_cols, total_pe_rows, tot_level_minus_one)
   generated_layout_file = "./src/layout_amg.csl"
   
   print("Precompile disabled, compiling based on problem size.")
