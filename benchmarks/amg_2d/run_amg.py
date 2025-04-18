@@ -174,9 +174,35 @@ def run_command(command):
     except subprocess.CalledProcessError as e:
         print("Error occurred:", e.stderr)
 
-def generate_layout_file_from_template(layer_param_map, total_pe_rows, total_pe_cols, total_levels, generated_layout_file, run_args):
-  pass
-
+def autogenerate_amg_layout(layer_param_map, total_pe_rows, total_pe_cols, total_levels, filename):
+    # First prepare data 
+    """Generate layout file from layer parameters map."""
+    layers_params = []
+    for key, params in layer_param_map.items():
+        layer_data_shapes = params['layer_data_shapes']
+        layer_coordinates = params['layer_coordinates']
+        
+        params = {
+                'M': layer_data_shapes['layer_M'],
+                'N': layer_data_shapes['layer_N'],
+                'R_M': layer_data_shapes['layer_R_M'],
+                'R_N': layer_data_shapes['layer_R_N'],
+                'start_x': layer_coordinates['layer_start_x'],
+                'start_y': layer_coordinates['layer_start_y'],
+                'pe_cols': layer_coordinates['layer_pe_cols'],
+                'pe_rows': layer_coordinates['layer_pe_rows'],
+                'index': params['layer_index']
+        }
+        layers_params.append(params)
+    
+    # Sort layers by index to ensure correct order
+    layers_params.sort(key=lambda x: x['index'])
+    
+    # Call generate_layout_amg with the properly structured data
+    generate_layout_amg(total_pe_cols=total_pe_cols, 
+                       total_pe_rows=total_pe_rows, 
+                       total_levels=total_levels,
+                       layers=layers_params, filename=filename)
 
 def generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_cols, total_levels, generated_layout_file, run_args):
       # Generates below command.
@@ -301,8 +327,7 @@ def generate_dynamic_layout(run_args, ml, layer_coordinates_map:Optional[dict]=N
   layer_param_map, layer_coordinates_map = create_layer_param_map(ml, layer_coordinates_map)
   total_pe_cols, total_pe_rows = find_total_pes_used(layer_coordinates_map)
   
-  # generated_layout_file = generate_layout_file_from_template(layer_param_map, run_args, total_pe_cols, total_pe_rows, tot_level_minus_one)
-  generated_layout_file = "./src/layout_amg.csl"
+  generated_layout_file = "./src/auto_layout_amg.csl"
   
   print("Precompile disabled, compiling based on problem size.")
   layout_command, fabric_dimensions = generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_cols, tot_level_minus_one, generated_layout_file, run_args)
@@ -310,8 +335,10 @@ def generate_dynamic_layout(run_args, ml, layer_coordinates_map:Optional[dict]=N
   # ut.visualize_layout_with_empty_plotly(fabric_dimensions, layer_coordinates_map, layer_param_map, total_pe_cols, total_pe_rows, filename)
   print("############################################################")
   print("Generating blueprint layout with :\n")
+  print("\n1. Autogenerating layout file...")
+  autogenerate_amg_layout(layer_param_map, total_pe_rows, total_pe_cols, tot_level_minus_one, generated_layout_file)
+  print("\n2. Compiling layout file...")
   print(layout_command)
-  print("############################################################")
   run_command(layout_command)
   print("############################################################")
   find_max_memory_usage(layer_param_map, layer_coordinates_map)
