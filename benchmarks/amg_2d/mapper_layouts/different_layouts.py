@@ -134,6 +134,9 @@ amg_paper_layout = {
 amg_2_layers = {
     0: {"layer_start_x": 0, "layer_start_y": 0, "layer_pe_cols": 2, "layer_pe_rows": 2},  # Part 1 - Green
     1: {"layer_start_x": 2, "layer_start_y": 0, "layer_pe_cols": 2, "layer_pe_rows": 2},  # Part 2 - Red
+    # 2: {"layer_start_x": 8, "layer_start_y": 0, "layer_pe_cols": 4, "layer_pe_rows": 4},  # Part 3 - Blue
+    # 3: {"layer_start_x": 12, "layer_start_y": 0, "layer_pe_cols": 4, "layer_pe_rows": 4},  # Part 4 - Orange
+    # 4: {"layer_start_x": 16, "layer_start_y": 0, "layer_pe_cols": 4, "layer_pe_rows": 4},  # Part 5 - Orange
 }
 
 
@@ -169,9 +172,9 @@ STATIC_HEADER = textwrap.dedent("""\
 //   8 collective_y_color_up    17 STATE_MACHINE      26                    35
 
 // fixed parameters
-param total_pe_cols: i16 = {total_pe_cols}; // width of the core rectangle
-param total_pe_rows: i16 = {total_pe_rows}; // height of the core rectangle
-param total_levels: i16 = {num_layers};     // number of levels in the AMG hierarchy
+param total_pe_cols: i16; // = {total_pe_cols}; // width of the core rectangle
+param total_pe_rows: i16; //  = {total_pe_rows}; // height of the core rectangle
+param total_levels: i16; // = {num_layers};     // number of levels in the AMG hierarchy
 
 """)
 
@@ -374,15 +377,15 @@ def generate_layout_amg(total_pe_cols, total_pe_rows, total_levels, layers, file
     for i, L in enumerate(layers):
         param_blocks.append(textwrap.indent(textwrap.dedent(f"""\
             // ── LAYER {i} ───────────────────────────────────
-            param layer_M_{i}: i16 = {L['M']};
-            param layer_N_{i}: i16 = {L['N']};
-            param layer_R_M_{i}: i16 = {L['R_M']};
-            param layer_R_N_{i}: i16 = {L['R_N']};
-            param layer_start_x_{i}: i16 = {L['start_x']};
-            param layer_start_y_{i}: i16 = {L['start_y']};
-            param layer_pe_cols_{i}: i16 = {L['pe_cols']};
-            param layer_pe_rows_{i}: i16 = {L['pe_rows']};
-            param layer_index_{i}: i16 = {L['index']};
+            param layer_M_{i}: i16; // = {L['M']};
+            param layer_N_{i}: i16; // = {L['N']};
+            param layer_R_M_{i}: i16; // = {L['R_M']};
+            param layer_R_N_{i}: i16; // = {L['R_N']};
+            param layer_start_x_{i}: i16; // = {L['start_x']};
+            param layer_start_y_{i}: i16; // = {L['start_y']};
+            param layer_pe_cols_{i}: i16; // = {L['pe_cols']};
+            param layer_pe_rows_{i}: i16; // = {L['pe_rows']};
+            param layer_index_{i}: i16; // = {L['index']};
         """), prefix=""))
 
     out += "\n".join(param_blocks) + "\n\n"

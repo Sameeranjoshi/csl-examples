@@ -693,7 +693,7 @@ def perform_downward_pass(simple_memcpy, simulator,symbols, level_index, level, 
     hardwareTimer.start()
     # Compute
     print("Step 4: Compute")
-    simulator.launch("layout_print", np.uint32(level_index), nonblock=False)
+    # simulator.launch("layout_print", np.uint32(level_index), nonblock=False)
     simulator.launch("v_cycle_down", np.uint32(level_index), nonblock=False)
     # timer
     print("Step 5: Timer Stop")
@@ -782,7 +782,7 @@ def perform_upward_pass(simple_memcpy, simulator, symbols, level_index, level, c
     hardwareTimer.start()
     # Compute
     print("Step 4: Compute")
-    simulator.launch("layout_print", np.uint32(level_index), nonblock=False)
+    # simulator.launch("layout_print", np.uint32(level_index), nonblock=False)
     simulator.launch("v_cycle_up", np.uint32(level_index), nonblock=False)
     # timer
     print("Step 5: Timer Stop")
