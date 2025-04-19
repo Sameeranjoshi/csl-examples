@@ -311,6 +311,7 @@ layout {{
                     .bridge_down_color = bridge_down_color,
                     .bridge_up_color   = bridge_up_color,
                     .total_pe_cols     = total_pe_cols,
+                    .total_levels_count = total_levels,
                 }};
                 @set_tile_code(px, py, "./libraries/single_layer/single_layer_pe.csl", params);
                 // empty tiles indexing.
@@ -340,7 +341,7 @@ layout {{
     @export_name("x", [*]f32, true);
     @export_name("x_coarse", [*]f32, true);
     @export_name("b", [*]f32, true);
-    @export_name("v_cycle_down", fn(u32)void);
+    @export_name("v_cycle_down", fn(i16)void);
     @export_name("v_cycle_up", fn(u32)void);
     @export_name("b_next", [*]f32, true);
     @export_name("omega", [*]f32, true);
