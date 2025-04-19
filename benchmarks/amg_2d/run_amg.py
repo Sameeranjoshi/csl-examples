@@ -606,7 +606,127 @@ def perform_coarse_solve(level, x_level, b_level, solver_callable_host):
     ############################################################
     
     return x_coarsest
-      
+
+def copy_layer_on_device(simple_memcpy, simulator,symbols, level_index, level, coords, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer):
+    """Handle downward pass operations for a single level"""
+    print("\n" + "-"*40)
+    print(f"│ DOWN PHASE - LAYER {level_index}")
+    print("-"*40)
+    
+    # Extract coordinates
+    px, py = coords['layer_start_x'], coords['layer_start_y']
+    w, h = coords['layer_pe_cols'], coords['layer_pe_rows']
+    
+    # Get matrices and vectors
+    A, R = level.A, level.R
+    M, N = A.shape
+    R_M, R_N = R.shape
+    x = x_level[level_index]
+    b = b_level[level_index]
+    
+    # Calculate per-PE dimensions
+    per_pe_rows = M // h
+    per_pe_cols = N // w
+    per_pe_restrict_rows = R_M // h
+    per_pe_restrict_cols = R_N // w
+    
+    # Setup solver parameters
+    omega = np.zeros(h*w, dtype=np.float32)
+    iterations = np.zeros(h*w, dtype=np.int32)
+    omega[:] = amg.get_omega_from_presmoother(setup_config)
+    iterations[:] = amg.get_iterations_from_presmoother(setup_config)
+    
+    print(f"  A: {A.shape} | R: {R.shape}")
+    if (level_index == 0):
+        print(f"  b: {b.shape}")
+    print(f"  x: {x.shape}")
+    print(f"  omega: {omega.shape} | iterations: {iterations.shape}")
+    print("PE Configuration:")
+    print(f"  Position: ({px}, {py}) | Size: {w}x{h}")    
+    print(f"Per PE Data Sizes:")
+    print(f"  x: {per_pe_rows}x{1} | b: {per_pe_cols}x{1}")
+    print(f"  A: {per_pe_rows}x{per_pe_cols} | R: {per_pe_restrict_rows}x{per_pe_restrict_cols}")
+    print("Step 0: Collect layer data")
+                          
+    ############################################################
+    # TRANSFORM THE DATA TO MAP ON DEVICE.( single_layer_run.py ) 
+    ############################################################
+    # x is across rows and b is across cols (row major)
+    # A is across rows and cols (row major)
+    # R is across rows and cols (row major)
+    # P is across rows and cols (row major)
+    # b_next is across last col (row major)
+    
+    # As an example, consider A[4, 4], mapped onto a 2x2 grid of PEs:
+    #
+    #   Matrix A on host            2 x 2 PE grid, row major A submatrices
+    # +----+----+----+----+         +----------------+----------------+
+    # | 0  | 1  | 2  | 3  |         | PE (0, 0):     | PE (1, 0):     |
+    # +----+----+----+----+         |  0,  1,  4,  5 |  2,  3,  6,  7 |
+    # | 4  | 5  | 6  | 7  |         |                |                |
+    # +----+----+----+----+   --->  +----------------+----------------+
+    # | 8  | 9  | 10 | 11 |         | PE (0, 1):     | PE (1, 1):     |
+    # +----+----+----+----+         |  8,  9, 12, 13 | 10, 11, 14, 15 |
+    # | 12 | 13 | 14 | 15 |         |                |                |
+    # +----+----+----+----+         +----------------+----------------+
+    #
+    # So our input array for memcpy_h2d must be ordered as follows after ROW_MAJOR copy ordering.
+    # [ 0, 1, 4, 5, 2, 3, 6, 7, 8, 9, 12, 13, 10, 11, 14, 15 ]    
+    # Transform data for device layout
+    print("Step 1: Transform data for device layout")
+    A_transformed = np.stack(np.split(np.stack(np.split(A, h, axis=1)), w, axis=1)).ravel()
+    R_transformed = np.stack(np.split(np.stack(np.split(R, h, axis=1)), w, axis=1)).ravel()
+    x_transformed = x.flatten(order='C')
+    if (level_index == 0):
+      b_transformed = b.flatten(order='C')
+    
+
+    start_time = time.time()
+    print("Step 2: H2D Transfers")
+    simple_memcpy.do_memcpy_h2d(symbols['A'], A_transformed, px, py, w, h, per_pe_rows*per_pe_cols)
+    simple_memcpy.do_memcpy_h2d(symbols['R'], R_transformed, px, py, w, h, per_pe_restrict_rows*per_pe_restrict_cols)
+    simple_memcpy.do_memcpy_h2d_bcast(symbols['x'], x_transformed, px, py, w, h, per_pe_cols*1, is_rowbcast=False)
+    # Only first layer has b0
+    if (level_index == 0):
+        simple_memcpy.do_memcpy_h2d_bcast(symbols['b'], b_transformed, px, py, w, h, per_pe_rows*1, is_rowbcast=True)
+    simple_memcpy.do_memcpy_h2d(symbols['omega'], omega, px, py, w, h, 1)
+    simple_memcpy.do_memcpy_h2d(symbols['iterations'], iterations, px, py, w, h, 1)
+    h2d_time = time.time() - start_time
+    
+    # # timer
+    # print("Step 3: Timer Start")
+    # hardwareTimer.start()
+    # # Compute
+    # print("Step 4: Compute")
+    # # simulator.launch("layout_print", np.uint32(level_index), nonblock=False)
+    # simulator.launch("v_cycle_down", np.uint32(level_index), nonblock=False)
+    # # timer
+    # print("Step 5: Timer Stop")
+    # hardwareTimer.stop()
+    
+    
+    # # D2H transfers and update data
+    # print("Step 6: D2H Transfers")
+    # b_coarse_device = np.zeros(R_M, dtype=np.float32)
+    # x_coarse_device = np.zeros_like(b_coarse_device)
+    # x_smooth = np.zeros(N, dtype=np.float32)
+    # d2h_start_time = time.time()
+    # print(f"D2H ROI: {px + (w-1) }, {py}, {1}, {h}")
+    # simple_memcpy.do_memcpy_d2h(b_coarse_device, symbols['b_next'], px + (w-1), py + 0, 1, h, per_pe_restrict_rows*1) # copy from symbol into result.
+    # simple_memcpy.do_memcpy_d2h(x_smooth, symbols['x'], px, py, w, 1, per_pe_cols*1)
+    # d2h_time = time.time() - d2h_start_time
+    # # time retrival
+    # print("Step 7: Time Retrival")
+    # hardware_timing = hardwareTimer.get_timing_data(simple_memcpy, symbols, px, py, w, h)
+            
+    # # logging time
+    # print("Step 8: Logging Time")
+    # df = time_logs_new(h, w, hardware_timing, h2d_time, d2h_time, is_downward=True, 
+    #               level_index=level_index, iteration=iteration, filename="./v_cycle_up_down.csv", deviceprofiling=deviceprofiling)
+
+    # return x_smooth, b_coarse_device, x_coarse_device
+
+    
 def perform_downward_pass(simple_memcpy, simulator,symbols, level_index, level, coords, x_level, b_level, setup_config, iteration, deviceprofiling):
     """Handle downward pass operations for a single level"""
     print("\n" + "-"*40)
@@ -805,7 +925,143 @@ def perform_upward_pass(simple_memcpy, simulator, symbols, level_index, level, c
                   level_index=level_index, iteration=iteration, filename="./v_cycle_up_down.csv", deviceprofiling=deviceprofiling)
     
     return x_level_device
+def device_calculations_dataflow(v_cycle_data):
+    run_args, logs_dir = parse_args()
+    
+    ############################################################
+    # Get the layout for AMG layers given by user.
+    ############################################################
+    layer_coordinates_map = amg_2_layers
+    ############################################################
+    # TODO: When doing sparse remove this.
+    # Pad the data and make it dense.
+    ############################################################
+    pad_and_make_dense(layer_coordinates_map, v_cycle_data)
+        
+    ############################################################
+    # unpack data
+    ############################################################
+    # unpack the input data
+    ml = v_cycle_data["ml"] # Changed to dense and padded.
+    setup_config = v_cycle_data["setup_config"]
+    x_level = v_cycle_data["x_level"] # Changed to dense and padded.
+    b_level = v_cycle_data["b_level"] # Changed to dense and padded.
+    max_iterations = v_cycle_data["max_iterations"]
+    tol = v_cycle_data["tol"]
+    
+    ############################################################
+    # CREATE DYNAMIC LAYOUT
+    ############################################################
+    layer_param_map, layer_coordinates_map, total_pe_cols, total_pe_rows = generate_dynamic_layout(run_args, ml, layer_coordinates_map, filename="images/amg_2_layers.png")
+    ############################################################
+    # Setup simulator
+    ############################################################
+    simulator = SdkRuntime(run_args.elffolder, cmaddr=run_args.cmaddr)
+    start = time.time()
+    simulator.load()
+    end = time.time()
+    print(f"*** Layout Load done in {end-start}s")
 
+    simulator.run()
+     
+    ############################################################
+    # VARIABLES
+    ############################################################    
+    # Cache commonly used symbols
+    symbols = {
+        'A': simulator.get_id("A"),
+        'R': simulator.get_id("R"),
+        'P': simulator.get_id("P"),
+        'x': simulator.get_id("x"), 
+        'b': simulator.get_id("b"),
+        'b_next': simulator.get_id("b_next"),
+        'x_coarse': simulator.get_id("x_coarse"),
+        'omega': simulator.get_id("omega"),
+        'iterations': simulator.get_id("iterations"),
+        'time_memcpy': simulator.get_id("time_memcpy"),
+        'time_ref': simulator.get_id("time_ref"),
+        'communication_time': simulator.get_id("communication_time")
+    }
+    iteration = 0
+    residual = float('inf')
+    timing_map_all_iterations = {}
+    solver_callable_host = amg.scipy_direct_solver
+    memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
+    memcpy_order = MemcpyOrder.ROW_MAJOR
+    simple_memcpy = simplerMemcpy(simulator, memcpy_order, memcpy_dtype)
+    ############################################################
+    # AMG V-CYCLE
+    ############################################################    
+    # Initialize device profiler
+    deviceprofiling = time_ut.DeviceProfiling()
+    hardwareTimer = HardwareTimerManager(simulator) # enable_timer, sync
+    
+    while iteration < max_iterations and residual > tol:
+        print(f"\n{'='*40}\n│ ITERATION {iteration}\n{'='*40}")
+        
+        # Downward passes
+        for level_index in range(len(ml.levels) - 1):
+            # Set context before operation
+            deviceprofiling.add_other_info(iteration, level_index, "down")
+            
+            copy_layer_on_device(
+                simple_memcpy, simulator, symbols, level_index, ml.levels[level_index],
+                layer_coordinates_map[level_index], x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer
+            )
+            # check the data.
+            # simulator.launch("layout_print", np.uint32(level_index), nonblock=False)
+        
+        # timer
+        print("Step 3: Timer Start")
+        hardwareTimer.start()
+        # Compute
+        print("Step 4: Compute")
+        simulator.launch("v_cycle_down", np.int16(0), nonblock=False)
+        # timer
+        print("Step 5: Timer Stop")
+        hardwareTimer.stop()
+                
+        amg.debugprint(ml.levels, b_level, x_level)
+        
+        
+        # # Coarse solve
+        # x_level[-1] = perform_coarse_solve(ml.levels[-1], x_level, b_level, solver_callable_host)
+        
+        # # Upward passes
+        # for level_index in reversed(range(len(ml.levels) - 1)):
+        #     # Set context before operation
+        #     deviceprofiling.add_other_info(iteration, level_index, "up")
+            
+        #     x_new = perform_upward_pass(
+        #         simple_memcpy, simulator, symbols, level_index, ml.levels[level_index],
+        #         layer_coordinates_map[level_index], x_level, b_level, setup_config, iteration, deviceprofiling
+        #     )
+        #     x_level[level_index] = x_new
+        
+        # Check convergence
+        residual = np.linalg.norm(ml.levels[0].A @ x_level[0] - b_level[0])
+        print(f"\n{'='*40}\n│ ITERATION {iteration} SUMMARY\n{'='*40}\nResidual: {residual:.6e}, tol: {tol:.6e}" + ("\nConvergence achieved!" if residual <= tol else "") + f"\n{'='*40}\n")
+        amg.debugprint(ml.levels, b_level, x_level)
+        iteration += 1
+
+    # Print timing summary before cleanup
+    # deviceprofiling.print_timing_summary()
+    
+    ############################################################
+    # Cleanup simulator
+    ############################################################
+    simulator.stop()        
+    ############################################################
+    # Final results
+    ############################################################
+    b_solution_device, x_solution_device = b_level[0], x_level[0]
+
+    # time_ut.analyze_timing_data("reports/timing_data.csv")
+    # print("\nTiming analysis complete. Open timing_report.html to view the results.")
+
+    residual_device = np.linalg.norm(ml.levels[0].A @ x_solution_device - b_level[0])
+    return b_solution_device, x_solution_device, residual_device
+  
 def device_calculations(v_cycle_data):
     run_args, logs_dir = parse_args()
     
@@ -895,19 +1151,19 @@ def device_calculations(v_cycle_data):
             amg.debugprint(ml.levels, b_level, x_level)
         
         
-        # Coarse solve
-        x_level[-1] = perform_coarse_solve(ml.levels[-1], x_level, b_level, solver_callable_host)
+        # # Coarse solve
+        # x_level[-1] = perform_coarse_solve(ml.levels[-1], x_level, b_level, solver_callable_host)
         
-        # Upward passes
-        for level_index in reversed(range(len(ml.levels) - 1)):
-            # Set context before operation
-            deviceprofiling.add_other_info(iteration, level_index, "up")
+        # # Upward passes
+        # for level_index in reversed(range(len(ml.levels) - 1)):
+        #     # Set context before operation
+        #     deviceprofiling.add_other_info(iteration, level_index, "up")
             
-            x_new = perform_upward_pass(
-                simple_memcpy, simulator, symbols, level_index, ml.levels[level_index],
-                layer_coordinates_map[level_index], x_level, b_level, setup_config, iteration, deviceprofiling
-            )
-            x_level[level_index] = x_new
+        #     x_new = perform_upward_pass(
+        #         simple_memcpy, simulator, symbols, level_index, ml.levels[level_index],
+        #         layer_coordinates_map[level_index], x_level, b_level, setup_config, iteration, deviceprofiling
+        #     )
+        #     x_level[level_index] = x_new
         
         # Check convergence
         residual = np.linalg.norm(ml.levels[0].A @ x_level[0] - b_level[0])
@@ -1031,7 +1287,7 @@ def main():
   print("############################################################")
   print("# DEVICE CALCULATIONS")
   print("############################################################")
-  b_final_device, x_final_device, residual_device = device_calculations(v_cycle_data_device)
+  b_final_device, x_final_device, residual_device = device_calculations_dataflow(v_cycle_data_device) # changed to dataflow
   print("\nDEVICE CALCULATIONS DONE")
   print(f"\tResidual Device ||AX-b||:", residual_device)
   # print(f"\t x_solution_final Device:", x_final_device.ravel()) 

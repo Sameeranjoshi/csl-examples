@@ -9,6 +9,7 @@ param pe_id_y: i16;
 param bridge_down_color: color; 
 param bridge_up_color: color;
 param total_pe_cols: i16;
+param total_levels_count: i16;
 
 const M: i16 = layer_params.M; // Height of local matrix, or num rows per PE
 const N: i16 = layer_params.N; // Width of local matrix, or num cols per PE
@@ -39,7 +40,14 @@ const STATE_BCAST_RESIDUAL: i16 = 9;
 const STATE_COMPUTE_RESTRICTION: i16 = 10;
 const STATE_PROLONGATION: i16 = 11;
 const STATE_BCAST_PROLONGATION: i16 = 12;
+const STATE_SEND_DATA: i16 = 13;
+const STATE_RECV_DATA: i16 = 14;
+const STATE_CHANGE_LAYERS: i16 = 15;
 const DONE: local_task_id = @get_local_task_id(26);
+
+// Queue IDs
+const send_color_oq = @get_output_queue(2);
+const send_color_iq = @get_input_queue(2);
 
 
 const math_lib = @import_module("<math>");
@@ -122,6 +130,7 @@ var dot = @zeros([1]f32);
 
 // output
 var b_next = @zeros([R_M_local]f32);  // rightmost Column
+var dsd_b_next = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> b_next[i] });
 
 
 // Timing variables
@@ -329,8 +338,7 @@ fn initialize() void {
 
 fn layout_print(runtime_layer_index: u32) void {
   if (runtime_layer_index == @as(u32, layer_index)) {
-    simprint.fmt_with_coords("layout_print iteration: {d}\n", .{@as(u32, v_cycle_iteration)});
-    simprint.print_string("\n");
+    simprint.fmt_with_coords("layout_print layer index: {d}", .{@as(u32, layer_index)});
     // print x_tile
     for (x_tile) |val, i| {
       simprint.fmt_with_coords("x_tile[{d}] = {f}", .{ i, val });
@@ -348,8 +356,8 @@ fn layout_print(runtime_layer_index: u32) void {
       simprint.fmt_with_coords("R_tile[{d}] = {f}", .{ i, val });
     }
     // b_next
-    for (b_tile) |val, i| {
-      simprint.fmt_with_coords("b_tile[{d}] = {f}", .{ i, val });
+    for (b_next) |val, i| {
+      simprint.fmt_with_coords("b_next[{d}] = {f}", .{ i, val });
     }
   }
   sys_mod.unblock_cmd_stream();
@@ -415,6 +423,7 @@ fn compute_restriction() void {
   cur_state = next_state;
   mpi_x.reduce_fadds(layer_kernel_cols-1, @ptrcast([*]f32, &Rx), @ptrcast([*]f32, &b_next),
                      R_M_local, STATE_MACHINE); // reduce across rows towards left
+  sys_mod.unblock_cmd_stream();
   // lower_traingular_chain_reduce.transfer_data(&Rx, R_M_local, STATE_MACHINE, &communication_tsc_start); // Won't call STATE_MACHINE
 }
 
@@ -438,6 +447,50 @@ fn bcast_prolongation() void {
   // f_trigger_state_machine();  // calls next state.
 }
 
+fn send_right_bnext() void {
+  const out_dsd = @get_dsd(fabout_dsd, .{
+                    .fabric_color = bridge_down_color, 
+                    .extent = R_M_local,
+                    .output_queue = send_color_oq,
+                  });
+  cur_state = STATE_CHANGE_LAYERS;
+  // After fmovs is done, activate exit_task to unblock cmd_stream
+  @fmovs(out_dsd, dsd_b_next, .{ .async = true, .activate = STATE_MACHINE });
+}
+
+fn recv_left_bnext() void {
+  const in_dsd = @get_dsd(fabin_dsd, .{
+                   .fabric_color = bridge_down_color, 
+                   .extent = R_M_local,
+                   .input_queue = send_color_iq,
+                 });
+  cur_state = STATE_EXIT;
+  @fmovs(dsd_b_tile, in_dsd, .{ .async = true, .activate = STATE_MACHINE });// copy into b_tile.
+}
+
+fn is_last_column() bool {
+  return pe_id_x == (layer_end_x - 1) and pe_id_x != total_pe_cols - 1;
+}
+
+fn is_first_column() bool {
+  return pe_id_x == layer_start_x and pe_id_x != 0;
+}
+
+fn dataflow_bridge() void {
+  // keep flowing the data down.
+    for (b_next) |val, i| {
+      simprint.fmt_with_coords("b_next[{d}] = {f}", .{ i, val });
+    }
+
+    // send data to next layer.
+    if (is_last_column()) {
+      send_right_bnext(); // send data
+    } else if (is_first_column()) {
+      recv_left_bnext();
+    }
+
+}
+
 // State machine task
 task f_state() void {
   if (STATE_SYNC == cur_state) {
@@ -445,7 +498,13 @@ task f_state() void {
     next_state = STATE_EXIT;
     reduce_mod.allreduce(1, &dot, reduce_mod.TYPE_BINARY_OP.ADD); // 1 = Row reduction
     // sys_mod.unblock_cmd_stream();
-  } else if (STATE_INIT == cur_state) {
+  } else if (STATE_RECV_DATA == cur_state) {
+    simprint.print_string("STATE_RECV_DATA\n");
+    next_state = STATE_INIT;
+    dataflow_bridge();
+    f_trigger_state_machine();
+
+  } else if (STATE_INIT == cur_state) {     // inside a PE layer starts.
     simprint.print_string("STATE_INIT\n");
     next_state = STATE_COMPUTE_JACOBI;
     initialize();
@@ -457,12 +516,12 @@ task f_state() void {
     compute_jacobi();
 
   } else if (STATE_BCAST_JACOBI == cur_state) {
-    simprint.print_string("STATE_BCAST_JACOBI\n");
+    // simprint.print_string("STATE_BCAST_JACOBI\n");
     next_state = STATE_CHECK_JACOBI_ITERATION;
     bcast_jacobi();
 
   } else if (STATE_CHECK_JACOBI_ITERATION == cur_state) {
-    simprint.print_string("STATE_CHECK_JACOBI_ITERATION\n");
+    // simprint.print_string("STATE_CHECK_JACOBI_ITERATION\n");
     if (iter_count < iterations[0]) {
       next_state = STATE_COMPUTE_JACOBI;
     } else{
@@ -475,19 +534,41 @@ task f_state() void {
     f_trigger_state_machine();
 
   } else if (STATE_COMPUTE_RESIDUAL == cur_state) {
-    simprint.print_string("STATE_COMPUTE_RESIDUAL\n");
+    // simprint.print_string("STATE_COMPUTE_RESIDUAL\n");
     next_state = STATE_BCAST_RESIDUAL;
     compute_residual();
 
   } else if (STATE_BCAST_RESIDUAL == cur_state) {
-    simprint.print_string("STATE_BCAST_RESIDUAL\n");
+    // simprint.print_string("STATE_BCAST_RESIDUAL\n");
     next_state = STATE_COMPUTE_RESTRICTION;
     bcast_residual();
 
   } else if (STATE_COMPUTE_RESTRICTION == cur_state) {
     simprint.print_string("STATE_COMPUTE_RESTRICTION\n");
-    next_state = STATE_EXIT;
+    next_state = STATE_SEND_DATA;
     compute_restriction();
+
+  } else if (STATE_SEND_DATA == cur_state) {
+    simprint.print_string("STATE_SEND_DATA\n");
+    next_state = STATE_CHANGE_LAYERS;
+    dataflow_bridge();
+    f_trigger_state_machine();
+
+  } else if (STATE_CHANGE_LAYERS == cur_state) {
+    simprint.print_string("STATE_CHANGE_LAYERS\n");
+
+    var next_layer_index:i16 = layer_index + 1;
+    simprint.fmt_with_coords("next_layer_index = {d}\n", .{@as(u32, next_layer_index)});
+    if (next_layer_index < (total_levels_count)) {
+      simprint.print_string("YES\n");
+      @unblock(STATE_MACHINE);
+      @activate(STATE_MACHINE);
+      start_down_cycle(next_layer_index);
+    } else {
+      simprint.print_string("NO\n");
+      next_state = STATE_EXIT;
+      f_trigger_state_machine();
+    }
 
   } else if (STATE_PROLONGATION == cur_state) {
     simprint.print_string("STATE_PROLONGATION\n");
@@ -498,17 +579,12 @@ task f_state() void {
     simprint.print_string("STATE_BCAST_PROLONGATION\n");
     next_state = STATE_CHECK_JACOBI_ITERATION;
     bcast_prolongation();
-  } 
-  else if (STATE_EXIT == cur_state) {
+
+  }  else if (STATE_EXIT == cur_state) {
     simprint.print_string("STATE_EXIT\n");
-    // print b_tile before exit
-    for (b_next) |val, i| {
-      simprint.fmt_with_coords("b_next[{d}] = {f}", .{ i, val });
-    }
     sys_mod.unblock_cmd_stream();
 
-  }
-  else {
+  }else {
     @assert(false); // Error: unknown state
     // assert() is ignored by HW, it could hang here
     // To avoid a stall, trigger callback (the caveat is the wrong result)
@@ -519,38 +595,35 @@ task f_state() void {
 }
 
 // Entrypoint into kernel
-fn v_cycle_down(runtime_layer_index: u32) void {
-  if (runtime_layer_index == @as(u32, layer_index)) {
-    simprint.fmt_with_coords("v_cycle_down with runtime_layer_index = {d}\n", .{runtime_layer_index});
-    init_params();
-    // print x_temp before reduction
-    // for (x) |val, i| {
-    //   simprint.fmt_with_coords("x_before[{d}] = {f}", .{ i, val });
-    // }
-    //  ----------------------
+fn v_cycle_down(runtime_layer_index: i16) void {
+  init_params();
+
+  start_down_cycle(runtime_layer_index);
+}
+
+fn start_down_cycle(runtime_layer_index: i16) void {
+ //  ----------------------
     // upper_traingular_chain_reduce.transfer_data(&x, Nx, &communication_tsc_start); // Won't call STATE_MACHINE
     // lower_traingular_chain_reduce.transfer_data(&x, Nx, &communication_tsc_start);
     // if (Nx > 1) star_modified_right.transfer_data(&x, Nx, DONE, &communication_tsc_start) else star_modified_right.transfer_data_scalar(&x, Nx, DONE, &communication_tsc_start);
     // for (x) |val, i| {
     //   simprint.fmt_with_coords("x_after_star[] = {f}", .{ val });
     // }
-    // simprint.print_string("Finished printing\n");
+  simprint.fmt_with_coords("runtime_layer_index = {d} and layer_index = {d}\n", .{@as(u32, runtime_layer_index), @as(u32, layer_index)});
 
+  if (runtime_layer_index == layer_index) { 
+    simprint.fmt_with_coords("v_cycle_down with runtime_layer_index = {d}\n", .{@as(u32, runtime_layer_index)});
     // The iterations will always be greater than 0, ensured in run_amg.py
-    cur_state = STATE_INIT;
+    @unblock(STATE_MACHINE);
+    cur_state = STATE_RECV_DATA;
     @activate(STATE_MACHINE);
-  } else { 
+
+  } else {
+    simprint.print_string("noops");
     no_op();
+    @block(STATE_MACHINE);
   }
-  sys_mod.unblock_cmd_stream();
-
-  // } else{
-  //   sys_mod.unblock_cmd_stream();
-  //   // cur_state = STATE_EXIT;
-  //   // @activate(STATE_MACHINE);
-  // }
 }
-
 
 // V-cycle up function
 fn v_cycle_up(runtime_layer_index: u32) void {
@@ -579,6 +652,9 @@ fn no_op() void {
 }
 
 comptime {
+  // default 
+  @block(STATE_MACHINE);
+
   @bind_local_task(f_state, STATE_MACHINE);
 
   @export_symbol(ptr_A, "A");
@@ -614,6 +690,7 @@ comptime {
   // upper_traingular_chain_reduce.configure_network();
   // lower_traingular_chain_reduce.configure_network();
   configure_dataflow_bridge();
+
 }
 
 // Helper functions for MPI timing
