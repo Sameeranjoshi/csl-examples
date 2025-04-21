@@ -55,10 +55,10 @@ layout {
   for (@range(i16, kernel_x_dim)) |pe_x| {
     for (@range(i16, kernel_y_dim)) |pe_y| {
       if (pe_x % 2 == 0) {
-        @set_tile_code(pe_x, pe_y, "pe_program.csl", @concat_structs(
+        @set_tile_code(pe_x, pe_y, "wttway.csl", @concat_structs(
           .{ .memcpy_params = memcpy.get_params(pe_x), .pe_id = pe_x }, even_params));
       } else {
-        @set_tile_code(pe_x, pe_y, "pe_program.csl", @concat_structs(
+        @set_tile_code(pe_x, pe_y, "wttway.csl", @concat_structs(
           .{ .memcpy_params = memcpy.get_params(pe_x), .pe_id = pe_x }, odd_params));
       }
     }
