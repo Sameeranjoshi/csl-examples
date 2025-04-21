@@ -55,15 +55,18 @@ np.random.seed(seed=7)
 # mistake could be invisible. For example, if one entry is
 # not calculated correctly, it may still pass because the
 # error bound is too big. So rand() is better than arange().
-A = np.full(shape=(M, N), fill_value=1.0, dtype=np.float32)
-A1 = np.full(shape=(M, N), fill_value=2.0, dtype=np.float32)  # 4x4
+A = []
+for i in range(kernel_x_dim):
+    A.append(np.full((M, N), 1.0, dtype=np.float32))
 x = np.full(shape=N, fill_value=1.0, dtype=np.float32)
 
+x_copy = x.copy()
 # Calculate expected y
-y_expected = A@x
+for i in range(kernel_x_dim):
+    y_expected = A[i]@x
+    x = y_expected
+
 print(f"y_expected: {y_expected}")
-y_expected1 = A1@x
-print(f"y_expected1: {y_expected1}")
 
 
 # Size of N dimension on each PE
@@ -85,19 +88,15 @@ runner.run()
 # Copy chunks of A into all PEs
 # Each chunk on each PE is stored column major
 # A0
-A_prepared = A.ravel()
-runner.memcpy_h2d(A_symbol, A_prepared, 0, 0, 1, 1, M_per_PE*N_per_PE,
-  streaming=False, order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT,
-  nonblock=False)
-# A1
-A1_prepared = A1.ravel()
-runner.memcpy_h2d(A_symbol, A1_prepared, 1, 0, 1, 1, M_per_PE*N_per_PE,
-  streaming=False, order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT,
-  nonblock=False)
+for i in range(kernel_x_dim):
+    A_prepared = A[i].ravel()
+    runner.memcpy_h2d(A_symbol, A_prepared, i, 0, 1, 1, M_per_PE*N_per_PE,
+      streaming=False, order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT,
+      nonblock=False)
 
 # Copy x into PEs (0, 0) and (kernel_x_dim-1, 0)
 # PE (0, 0) gets first N/2 elements; PE (1, 0) gets last N/2 elements
-runner.memcpy_h2d(x_symbol, x, 0, 0, 1, 1, N_per_PE, streaming=False,
+runner.memcpy_h2d(x_symbol, x_copy, 0, 0, 1, 1, N_per_PE, streaming=False,
   order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
 
 # Launch the compute function on device
@@ -125,7 +124,7 @@ runner.stop()
 # Using the norm-wise error is perferred for large dimension.
 #   |y_result - y_expected|/(|A|*|x| + |b|) < tol
 #
-r = y_result - y_expected
+
 # The norm-wise estimate sometimes over-estimates too much, we can also
 # check the absolute error when the matrix is small.
 #
