@@ -83,25 +83,6 @@ fn is_first_pe() bool {
   return (pe_id == 0);
 }
 
-// // Task to receive y values
-// task recv_y(wavelet_data: f32) void {
-//   simprint.fmt_with_coords("recv_y {d}", .{ @as(u32, pe_id) });
-//   // print y
-//   // print wavelet_data
-//   simprint.fmt_with_coords("wavelet_data {f}", .{wavelet_data});
-//   // Block until computation is ready
-//   // @block(compute_task_id);
-  
-//   // const in_dsd = @get_dsd(fabin_dsd, .{
-//   //   .fabric_color = x_color,
-//   //   .extent = M_per_PE,
-//   //   .input_queue = recv_west_iq
-//   // });
-  
-//   @fmovs(x_dsd, wavelet_data);
-//   @activate(compute_task_id);
-// }
-
 
 fn recv_y_fabric() void {
   simprint.fmt_with_coords("recv_y fabric {d}", .{ @as(u32, pe_id) });

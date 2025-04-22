@@ -39,6 +39,7 @@ const send_y_id: local_task_id = @get_local_task_id(11);
 const send_done_id: local_task_id = @get_local_task_id(13);
 const recv_done_id: local_task_id = @get_local_task_id(14);
 
+
 // Data task ID for task recv_x, consumes x_color wlts
 // On WSE-2, data task IDs are created from colors; on WSE-3, from input queues
 // const recv_y_id: data_task_id = @get_data_task_id(recv_west_color); // WSE-2
@@ -115,23 +116,6 @@ task recv_y(wavelet_data: f32) void {
   }
 }
 
-
-// fn recv_y_fabric() void {
-//   simprint.fmt_with_coords("recv_y fabric {d}", .{ @as(u32, pe_id) });
- 
-//   const in_dsd  = @get_dsd(fabin_dsd, .{
-//                     .fabric_color = recv_west_color, 
-//                     .extent = M_per_PE,
-//                     .input_queue = recv_west_iq
-//                   });
-  
-//   @fmovs(x_dsd, in_dsd);
-//   // print x
-//   for (x) |val, i| {
-//     simprint.fmt_with_coords("x[{d}] = {f}", .{ i, val });
-//   }
-// }
-
 // Task to send y values
 task send_y() void {
   simprint.fmt_with_coords("send_y {d}", .{ @as(u32, pe_id) });
@@ -160,16 +144,6 @@ fn compute() void {
     A_dsd = @increment_dsd_offset(A_dsd, 1, f32);
   }
 
-  // // if (pe_id != @as(i16, kernel_x_dim)-1) {
-  // //   @activate(send_y_id);
-  // // } else {
-  // //   @activate(exit_task_id);
-  // // }
-  // if (is_last_pe()) {
-  //   @unblock(exit_task_id);
-  // } else {
-  //   @activate(send_y_id);
-  // }
 }
 
 // Host-facing function to start computation
@@ -180,18 +154,6 @@ fn host_facing_function(layer: i16) void {
   if (is_first_pe()) {
     compute();
     @activate(send_y_id);
-//   } else if (is_last_pe()) {
-//     @fmovs(x_dsd, in_dsd, .{ .async = true, .activate = recv_done});
-//     compute();
-//     // print y
-//     for (y) |val, i| {
-//       simprint.fmt_with_coords("y[{d}] = {f}", .{ i, val });
-//     }
-//     // exit_task();
-//   } else {
-//     @fmovs(x_dsd, in_dsd, .{ .async = true, .activate = recv_done });
-//     compute();
-//     @fmovs(out_dsd, y_dsd, .{ .async = true, .activate = send_done });
   }
 }
 
@@ -219,7 +181,6 @@ comptime {
   @bind_local_task(exit_task, exit_task_id);
   @bind_local_task(send_y, send_y_id);
   @bind_data_task(recv_y, recv_y_id);
-
   @bind_local_task(send_done, send_done_id);
   @bind_local_task(recv_done, recv_done_id);
 
