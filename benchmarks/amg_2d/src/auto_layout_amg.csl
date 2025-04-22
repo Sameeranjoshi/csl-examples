@@ -15,31 +15,31 @@
 //   8 collective_y_color_up    17 STATE_MACHINE      26                    35
 
 // fixed parameters
-param total_pe_cols: i16 = 4; // width of the core rectangle
-param total_pe_rows: i16 = 2; // height of the core rectangle
-param total_levels: i16 = 2;     // number of levels in the AMG hierarchy
+param total_pe_cols: i16; // = 4; // width of the core rectangle
+param total_pe_rows: i16; //  = 2; // height of the core rectangle
+param total_levels: i16; // = 2;     // number of levels in the AMG hierarchy
 
 // ── LAYER 0 ───────────────────────────────────
-param layer_M_0: i16 = 50;
-param layer_N_0: i16 = 50;
-param layer_R_M_0: i16 = 4;
-param layer_R_N_0: i16 = 50;
-param layer_start_x_0: i16 = 0;
-param layer_start_y_0: i16 = 0;
-param layer_pe_cols_0: i16 = 2;
-param layer_pe_rows_0: i16 = 2;
-param layer_index_0: i16 = 0;
+param layer_M_0: i16; // = 50;
+param layer_N_0: i16; // = 50;
+param layer_R_M_0: i16; // = 4;
+param layer_R_N_0: i16; // = 50;
+param layer_start_x_0: i16; // = 0;
+param layer_start_y_0: i16; // = 0;
+param layer_pe_cols_0: i16; // = 2;
+param layer_pe_rows_0: i16; // = 2;
+param layer_index_0: i16; // = 0;
 
 // ── LAYER 1 ───────────────────────────────────
-param layer_M_1: i16 = 4;
-param layer_N_1: i16 = 4;
-param layer_R_M_1: i16 = 2;
-param layer_R_N_1: i16 = 4;
-param layer_start_x_1: i16 = 2;
-param layer_start_y_1: i16 = 0;
-param layer_pe_cols_1: i16 = 2;
-param layer_pe_rows_1: i16 = 2;
-param layer_index_1: i16 = 1;
+param layer_M_1: i16; // = 4;
+param layer_N_1: i16; // = 4;
+param layer_R_M_1: i16; // = 2;
+param layer_R_N_1: i16; // = 4;
+param layer_start_x_1: i16; // = 2;
+param layer_start_y_1: i16; // = 0;
+param layer_pe_cols_1: i16; // = 2;
+param layer_pe_rows_1: i16; // = 2;
+param layer_index_1: i16; // = 1;
 
 
 // ── Layer const arrays ─────────────────────────────────
@@ -175,6 +175,7 @@ layout {
                     .bridge_down_color = bridge_down_color,
                     .bridge_up_color   = bridge_up_color,
                     .total_pe_cols     = total_pe_cols,
+                    .total_levels_count = total_levels,
                 };
                 @set_tile_code(px, py, "./libraries/single_layer/single_layer_pe.csl", params);
                 // empty tiles indexing.
@@ -204,7 +205,7 @@ layout {
     @export_name("x", [*]f32, true);
     @export_name("x_coarse", [*]f32, true);
     @export_name("b", [*]f32, true);
-    @export_name("v_cycle_down", fn(u32)void);
+    @export_name("v_cycle_down", fn(i16)void);
     @export_name("v_cycle_up", fn(u32)void);
     @export_name("b_next", [*]f32, true);
     @export_name("omega", [*]f32, true);
