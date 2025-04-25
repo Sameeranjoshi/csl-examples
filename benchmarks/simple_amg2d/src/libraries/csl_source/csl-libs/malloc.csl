@@ -1,0 +1,126 @@
+const types = @import_module("<math/type_helpers>");
+
+/// This file implements an arena allocator using a statically allocated
+/// buffer.
+
+/// In arena allocators, a single buffer (arena) is used to ensure that
+/// all objects are allocated sequentially in memory. Allocating and
+/// deallocating memory are fast operations, requiring an addition and/or
+/// assignment. The free operation frees all allocated objects at once.
+
+/// If the param `asserts_enabled` is true, all allocations assert that the
+/// buffer has enough free memory. The default is false.
+
+/// Calls to the `malloc_` functions do not have a way to indicate failure:
+/// they either return a valid pointer or assert failure; it is the
+/// programmer's responsibility to ensure that the assert is not triggered.
+
+/// Number of words of the statically allocated buffer.
+param buffer_num_words : comptime_int;
+
+/// Whether allocations assert that the buffer has enough free memory.
+param asserts_enabled : bool = false;
+
+const word_type = u16;
+var buffer = @zeros([buffer_num_words]word_type);
+var next_idx:u16 = 0;
+
+/// Deallocates the entire arena.
+fn free() void {
+  next_idx = 0;
+}
+
+/// Allocates `num_values` elements of type i16.
+fn malloc_i16(num_values:u16) [*]i16 {
+  return malloc(i16, num_values);
+}
+
+/// Allocates `num_values` elements of type u16.
+fn malloc_u16(num_values:u16) [*]u16 {
+  return malloc(u16, num_values);
+}
+
+/// Allocates `num_values` elements of type f16.
+fn malloc_f16(num_values:u16) [*]f16 {
+  return malloc(f16, num_values);
+}
+
+/// Allocates `num_values` elements of type i32.
+fn malloc_i32(num_values:u16) [*]i32 {
+  return malloc(i32, num_values);
+}
+
+/// Allocates `num_values` elements of type u32.
+fn malloc_u32(num_values:u16) [*]u32 {
+  return malloc(u32, num_values);
+}
+
+/// Allocates `num_values` elements of type f32.
+fn malloc_f32(num_values:u16) [*]f32 {
+  return malloc(f32, num_values);
+}
+
+/// Allocates `num_values` elements of type T.
+/// Currently only supports f16, i16, u16, f32, i32, u32
+fn malloc(comptime T: type, num_values: u16) [*]T {
+  if (asserts_enabled) {
+    @assert(has_enough_space(T, num_values));
+  }
+
+  // SW-81174: casting straight from const *word_type to [*]T misbehaves.
+  // Must ptrcast from const *word_type to [*]word_type first before ptrcast to
+  // [*]T instead
+  const ptr = @ptrcast([*]word_type, &buffer[__align_up(T, next_idx)]);
+  next_idx += __align_up(T, num_values * types.word_size_of(T));
+  return @ptrcast([*]T, ptr);
+}
+
+/// Returns true if and only if an allocation of `num_elements` elements of
+/// type T would succeed.
+fn has_enough_space(comptime T: type, num_values: u16) bool {
+  @comptime_assert(__is_supported_by_malloc(T));
+  const U16_MAX: u16 = 0xffff;
+  // overflow check: num_words won't fit in u16
+  if (U16_MAX / types.word_size_of(T) < num_values) {
+    return false;
+  }
+  const num_words = num_values * types.word_size_of(T);
+  return next_idx + __align_up(T, num_words) <= buffer_num_words and
+    // Overflow check.
+    next_idx + __align_up(T, num_words) >= next_idx;
+}
+
+// Increments `value` by the difference between `next_idx` and the alignment of
+// `T`. For instance if T requires 4-word alignment and next_idx % 4 == 1 then
+// value is incremented by 3. Useful to e.g. correctly align `next_idx` in
+// order to serve an allocation request or to calculate the total amount of
+// buffer space used to serve an allocation request.
+fn __align_up(comptime T: type, value: u16) u16 {
+  const word_align = types.word_align_of(T);
+  const remainder = next_idx % word_align;
+  if (remainder == 0) {
+    return value;
+  }
+  return value + word_align - remainder;
+}
+
+fn __is_supported_by_malloc(comptime T: type) bool {
+  return @is_same_type(T, f16) or @is_same_type(T, f32) or
+    @is_same_type(T, i16) or @is_same_type(T, i32) or @is_same_type(T, i64) or
+    @is_same_type(T, u16) or @is_same_type(T, u32) or @is_same_type(T, u64);
+}
+
+/// Returns true if and only if an allocation of `num_words` elements of type
+/// `i16, u16, f16` would succeed.
+/// Clients should not attempt to convert a number of double words to words and
+/// call this function; the function `has_enough_double_words` should be used
+/// instead.
+fn has_enough_words(num_words:u16) bool {
+  return has_enough_space(u16, num_words);
+}
+
+/// Returns true if and only if an allocation of `num_double_words` elements of
+/// type `i32, u32, f32` would succeed.
+fn has_enough_double_words(num_double_words:u16) bool {
+  return has_enough_space(u32, num_double_words);
+}

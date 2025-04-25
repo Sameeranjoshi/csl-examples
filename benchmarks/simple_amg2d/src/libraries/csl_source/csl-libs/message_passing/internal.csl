@@ -1,0 +1,99 @@
+param bank_id: u16;
+
+// Config reg vals for debugging purposes
+const debug_regs = struct {
+  color_configs: [5]u16,
+  switch_configs: [2]u16,
+  misc_fabric_cfg: u16,
+};
+
+const tc = @import_module("<tile_config>");
+
+// Base fabric color register
+const COLOR_WORD_ADDR = @get_int(tc.addresses.COLOR_CONFIG) / tc.word_size;
+
+// Base fabric switch register
+// This is register 0. register 1 is +2, register 2 is +4, register 3 is +6
+const SWITCH_WORD_ADDR = @get_int(tc.addresses.SWITCH_CONFIG) / tc.word_size;
+
+// Fabric misc cfg register
+const MISC_FABRIC_CFG_WORD_ADDR = @get_int(tc.addresses.MISC_FABRIC_CFG) / tc.word_size;
+
+
+// Description: Initialize config registers for message passing
+fn init() void {
+
+    // COLOR REGISTERS
+    // base sets E/W (bits 11:9) and N/S (bits 14:12) color swap fields to 7
+    //const mp_color_reg_base = 0x7e00;
+    const COLOR_SWAP_MSG_PASSING_ENABLE = 7;
+    const NS_COLOR_SWAP_BIT_POSN = 12;
+    const EW_COLOR_SWAP_BIT_POSN = 9;
+
+    const mp_color_reg_base = (COLOR_SWAP_MSG_PASSING_ENABLE << NS_COLOR_SWAP_BIT_POSN)
+                            | (COLOR_SWAP_MSG_PASSING_ENABLE << EW_COLOR_SWAP_BIT_POSN);
+
+    // Input directions are set as follows
+    // Table 3-11: Message passing color allocation for rx
+    // Bank A:          14    15     16  17     18
+    // Bank B:          19    20     21  22     23
+    // Input direction: EAST, NORTH, CE, SOUTH, WEST
+
+    // Input positions are bits 7:5
+    // 000 (0) - West
+    // 001 (1) - East
+    // 010 (2) - South
+    // 011 (3) - North
+    // 100 (4) - CE
+    // 101 (5) – Disabled (color is disabled and no wavelets are accepted)
+
+    const INPUT_DIR_WEST  = 0;
+    const INPUT_DIR_EAST  = 1;
+    const INPUT_DIR_SOUTH = 2;
+    const INPUT_DIR_NORTH = 3;
+    const INPUT_DIR_RAMP  = 4;
+    const INPUT_DIR_BIT_POSN = 5;
+
+    const input_dirs = [5]u16 { INPUT_DIR_EAST, INPUT_DIR_NORTH, INPUT_DIR_RAMP,
+                                INPUT_DIR_SOUTH, INPUT_DIR_WEST };
+    for (input_dirs) |input_dir, i| {
+        @set_config(COLOR_WORD_ADDR + (bank_id + i),
+                    mp_color_reg_base | (input_dir << INPUT_DIR_BIT_POSN));
+    }
+
+    // SWITCH REGISTERS
+    // Switching colors are bank A: 16, 17; and bank B: 20, 21
+    // Switching colors must disable input in pos1
+    // Set pos1 input (bits 7:5 in switch reg 0) to 101 (5)
+    const SWITCH_POS1_DISABLE = 5;
+    const SWITCH_POS1_BIT_POSN = 5;
+
+    const mp_switch_reg_base = SWITCH_POS1_DISABLE << SWITCH_POS1_BIT_POSN;
+
+    @set_config(SWITCH_WORD_ADDR + (bank_id + 2) * 4, mp_switch_reg_base);
+    @set_config(SWITCH_WORD_ADDR + (bank_id + 3) * 4, mp_switch_reg_base);
+
+    // MISC FABRIC REGISTER
+    // Get current state; if one bank is already enable, we do not want to overwrite it
+    const BANK_ENABLE = 1;
+    const BANK_A_BIT_POSN = 2;
+    const BANK_B_BIT_POSN = 3;
+
+    var fab_misc_reg = @get_config(MISC_FABRIC_CFG_WORD_ADDR);
+    fab_misc_reg |= if (bank_id == 14) (BANK_ENABLE << BANK_A_BIT_POSN)
+                    else               (BANK_ENABLE << BANK_B_BIT_POSN);
+    @set_config(MISC_FABRIC_CFG_WORD_ADDR, fab_misc_reg);
+}
+
+// Description: Return values of config registers involved in message passing for debug purposes
+fn check_registers(reg_vals: *debug_regs) void {
+
+    for (@range(u16, 5)) |i| {
+        reg_vals.*.color_configs[i] = @get_config(COLOR_WORD_ADDR + (bank_id + i));
+    }
+
+    reg_vals.*.switch_configs[0] = @get_config(SWITCH_WORD_ADDR + (bank_id + 2) * 4);
+    reg_vals.*.switch_configs[1] = @get_config(SWITCH_WORD_ADDR + (bank_id + 3) * 4);
+
+    reg_vals.*.misc_fabric_cfg = @get_config(MISC_FABRIC_CFG_WORD_ADDR);
+}

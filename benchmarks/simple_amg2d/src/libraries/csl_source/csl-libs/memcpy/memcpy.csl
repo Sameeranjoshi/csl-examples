@@ -1,0 +1,97 @@
+// wse3 reuses input queue 0 and output queue 0 for streaming H2D/D2H, so there
+// is no additional queueus compared to wse2.
+// However the user must not use input queue 1, otherwise compilation fails.
+//
+// To keep backward compatibility, the old memcpy kernels are put under
+// csl-libs/memcpy/wse2. The new memcpy kernels are put under csl-libs/memcpy/wse3.
+// The new memcpy kernels can also work on wse2 but old memcpy kernels can NOT work
+// on wse3.
+//
+// csl-libs/memcpy.csl is a wrapper to import either wse2/memcpy.csl or wse3/memcpy.csl
+// based on the following rules:
+// (1) if --arch=wse3 is specified, import wse3/memcpy.csl
+// (2) import wse2/memcpy.csl otherwise
+//
+// The existing kernels without streaming H2D/D2H colors may work with --arch=wse3
+// if queue 1 is NOT used because memcpy reserves queue 1 on SDR. If the queue 1 is
+// used in the user's kernel, compilation fails.
+
+param MEMCPYH2D_1 = {};  // 1-th H2D specified at runtime
+param MEMCPYH2D_2 = {};  // 2-th H2D specified at runtime
+param MEMCPYH2D_3 = {};  // 3-th H2D specified at runtime
+param MEMCPYH2D_4 = {};  // 4-th H2D specified at runtime
+
+param MEMCPYD2H_1 = {};  // 1-th D2H specified at runtime
+param MEMCPYD2H_2 = {};  // 2-th D2H specified at runtime
+param MEMCPYD2H_3 = {};  // 3-th D2H specified at runtime
+param MEMCPYD2H_4 = {};  // 4-th D2H specified at runtime
+
+param LAUNCH = {}; // RPC via memcpy streaming
+                                      // not necessary
+
+// (first_pe, last_pe) is used in H2D and D2H to set up counter filter and switch
+param first_pe: bool; // (0 == px);
+param last_pe: bool;  // ((width-1) == px);
+
+// When D2H finishes, sys.exit() is called which unblocks C22 and
+// calls f_callback() which is the user's callback.
+// if not specified, NOP (sys_nop)
+param f_callback : fn ()void = sys_nop;
+
+fn undefined(comptime x: anytype) bool {
+  return @is_same_type(@type_of(x), void);
+}
+
+fn defined(comptime x: anytype) bool {
+  return !@is_same_type(@type_of(x), void);
+}
+
+// case 1: --arch=wse3
+//   use wse3/memcpy.csl
+// case 2: --arch=wse1|wse2
+//   use wse2/memcpy.csl
+
+const api_wse3 = @is_arch("wse3");
+
+const memcpyParams = .{
+  .first_pe = first_pe,
+  .last_pe = last_pe,
+
+  .MEMCPYH2D_1 = MEMCPYH2D_1,
+  .MEMCPYH2D_2 = MEMCPYH2D_2,
+  .MEMCPYH2D_3 = MEMCPYH2D_3,
+  .MEMCPYH2D_4 = MEMCPYH2D_4,
+  .MEMCPYD2H_1 = MEMCPYD2H_1,
+  .MEMCPYD2H_2 = MEMCPYD2H_2,
+  .MEMCPYD2H_3 = MEMCPYD2H_3,
+  .MEMCPYD2H_4 = MEMCPYD2H_4,
+  .LAUNCH = LAUNCH,
+  .f_callback = f_callback
+};
+
+fn get_memcpy_module() comptime_string {
+  if (api_wse3) {
+    return "<memcpy/wse3/memcpy>";
+  }else{
+    return "<memcpy/wse2/memcpy>";
+  }
+}
+
+
+const sys_mod = @import_module(get_memcpy_module(), memcpyParams);
+
+fn sys_nop() void {
+  // do nothing
+}
+
+// All commands are running sequential on command color
+// which can be blocked by block_cmd_stream() or unblocked
+// by unblock_cmd_stream().
+// The user must call unblock_cmd_stream() at the end of a RPC.
+fn block_cmd_stream() void {
+  sys_mod.block_cmd_stream();
+}
+
+fn unblock_cmd_stream() void {
+  sys_mod.unblock_cmd_stream();
+}

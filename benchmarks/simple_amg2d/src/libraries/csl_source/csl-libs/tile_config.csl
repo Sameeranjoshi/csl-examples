@@ -1,0 +1,38 @@
+// Hardware configuration library for the Wafer-Scale Engine (WSE).
+const target_name = @import_module("<target_name>");
+const mnemonic = target_name.get_target_name();
+const target = @import_module(@strcat("<target/", mnemonic, ">"));
+// Filter configuration functions.
+const filters = @import_module("<tile_config/filters>", .{.target = target});
+// Teardown functions.
+const teardown = @import_module("<tile_config/teardown>", .{.target = target});
+// Task priority functions.
+const task_priority = @import_module("<tile_config/task_priority>", .{.target = target});
+// Main thread priority functions.
+const main_thread_priority = @import_module("<tile_config/main_thread_priority>", .{.target = target});
+// Control wavelet transform functions.
+const control_transform = @import_module("<tile_config/control_transform>", .{.target = target});
+// exception mask functions.
+const exceptions = @import_module("<tile_config/exceptions>", .{.target = target});
+// color configuration
+const color_config = @import_module("<tile_config/color_config>", .{.target = target});
+// switch configuration
+const switch_config = @import_module("<tile_config/switch_config>", .{.target = target});
+
+const queue_flush = @import_module("<tile_config/queue_flush>", .{.target = target});
+// input queue configuration
+const input_queue_config = @import_module("<tile_config/input_queue_config>", .{.target = target});
+// output queue configuration
+const output_queue_config = @import_module("<tile_config/output_queue_config>", .{.target = target});
+
+const addresses = target.addresses;
+const word_size = target.word_size;
+const reg_type = target.reg_type;
+const double_reg_type = target.double_reg_type;
+
+const fabric_coord = target.fabric_coord;
+
+fn get_fabric_coord(dimension: fabric_coord) u16 {
+  const fabric_coord_mask = target.fabric_coord_mask;
+  return @get_config((@as(reg_type, addresses.FABRIC_COORD) + @as(reg_type, dimension)) / word_size) & fabric_coord_mask;
+}

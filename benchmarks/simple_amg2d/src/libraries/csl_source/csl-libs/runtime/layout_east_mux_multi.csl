@@ -1,0 +1,646 @@
+
+// layout of mux, mux td, and dmux adaptor to support 60 mux modules:
+
+//
+// Compilation of mux, mux adaptor and mux td
+// The following figure is for 1 LVDS
+//
+//
+//       +-----+      +--------+
+//       | mux | <--- | mux td |
+//       +-----+      +--------+
+//          |             ^
+//          V             |
+//       +-----+          |
+//       | mux |          |
+//       +-----+          |
+//          |             |
+//          V             |
+//       +-----+      +--------+
+//       | mux | ---> | mux    | --->  egress
+//       |     | <--- | adaptor| <---  ingress
+//       +-----+      +--------+
+//
+//
+// The following is for two LVDS
+//
+//       +-----+      +-------------+
+//       | mux | <--- | mux td      |
+//       +     +      +-------------+
+//       |     |          ^
+//       |     |          | GC_RXACT_MUX_TD
+//       |     |      +-------------+
+//       |     | ---> | mux adaptor | ---> FABRIC_D2H_DATA
+//       |     | <--- |             |
+//       +-----+      +-------------+
+//                               ^
+//                               |
+//       +-----+      +----------|---+
+//       | mux | <--- | mux td   |   |
+//       +     +      +----------|---+
+//       |     |          ^      |
+//       |     |          |      | FABRIC_D2H_DATA_CMD
+//       |     |      +-------------+
+//       |     | ---> | mux adaptor | ---> FABRIC_D2H_DATA
+//       |     | <--- |             | <--- FABRIC_D2H_DATA_CMD
+//       +-----+      +-------------+
+//
+//
+// placement : the mux is at west edge of the core, it has two columns of PEs.
+//     The --fabric-offsets=1+3+w,1
+//   where (1,1) is halo
+//         3+w = "demux adaptor" + demux + "cmd fan" + core
+//
+//   x
+//  -->
+//           +-------------------------+----------------+----------------+-------------+-------------+----------------+
+//  "height" | demux adaptor           |   demux        |  cmd fan       |  core       | mux         | mux adaptor    |
+//           +-------------------------+----------------+----------------+-------------+-------------+----------------+
+//  "width"    width_demux_adaptor = 1   widith_demux=1    width_cmd=1    width_core    width_mux=1   width_mux_adaptor=1
+//
+//
+// Example: core rectangle is 4-by-3, with a demux and a demux adaptor at west edge,
+//    surrounded by a halo of size 1, here is the layout
+//    A LVDS connects to a demux adaptor which is 1-by-3
+//
+//       px  0     1       2           3     4     5     6     7     8     9             10
+//   py  +-----+-----+--------------+-----+-----+-----+-----+-----+-----+--------------+---+
+//    0  |  h  | h   |  h           |  h  |  h  |  h  |  h  |  h  |  h  | h            | h |
+//       +-----+--------------+-----+-----+-----+-----+-----+-----+-----+--------------+---+
+//    1  |  h  |demux adaptor |demux| cmd |core |core |core |core | mux | mux td       | h |
+//       +-----+--------------+-----+-----+-----+-----+-----+-----+-----+--------------+---+
+//    2  |  h  |   nop        |demux| cmd |core |core |core |core | mux | nop          | h |
+//       +-----+--------------+-----+-----+-----+-----+-----+-----+-----+--------------+---+
+//    3  |  h  |   nop        |demux| cmd |core |core |core |core | mux | mux_adaptor  | h | ---> LVDS
+//       +-----+--------------+-----+-----+-----+-----+-----+-----+-----+--------------+---+
+//    4  |  h  |  h           |  h  |  h  |  h  |  h  |  h  |  h  |  h  | h            | h |
+//       +-----+--------------+-----+-----+-----+-----+-----+-----+-----+--------------+---+
+//
+// mux:
+//    start_pos = (x = 0, y = 0)
+//    width = 1
+//    height = 3
+//
+// mux adaptor:
+//    start_pos = (x = 1, y = 0)
+//    width = 1
+//    height = 3
+
+//
+//       +------+ MEMCPYD2H_DATA (2)  +-----+  GC_TXACT_MUX (12)   +-------------+ FABRIC_D2H_DATA (8)
+//       | core | ------------------> | mux | -------------->      | mux adaptor | ------------>
+//       |      |                     |     |                      |             | FABRIC_D2H_DATA_CMD (9)
+//       |      |                     |     |                      |             | <------------
+//       +------+                     +-----+                      +-------------+
+//
+
+//--- parameters
+
+param height: i16 ;  // height of mux
+
+param width_east_buf: i16; // width of buffer, >= 0
+
+// routing of mux adaptor
+//--- AUTO-1: FABRIC_D2H_DATA_ID_<j>: j=0,1,2,...,15
+// if FABRIC_D2H_DATA_ID_<j> = -1, then it is not valid
+// In production, prefer one color, and the routing solves the crossing issue
+param FABRIC_D2H_DATA_ID_0 : i16 = -1; // output of mux adaptor 0 (data to LVDS)
+param FABRIC_D2H_DATA_ID_1 : i16 = -1; // output of mux adaptor 1 (data to LVDS)
+param FABRIC_D2H_DATA_ID_2 : i16 = -1; // output of mux adaptor 2 (data to LVDS)
+param FABRIC_D2H_DATA_ID_3 : i16 = -1; // output of mux adaptor 3 (data to LVDS)
+param FABRIC_D2H_DATA_ID_4 : i16 = -1; // output of mux adaptor 4 (data to LVDS)
+param FABRIC_D2H_DATA_ID_5 : i16 = -1; // output of mux adaptor 5 (data to LVDS)
+param FABRIC_D2H_DATA_ID_6 : i16 = -1; // output of mux adaptor 6 (data to LVDS)
+param FABRIC_D2H_DATA_ID_7 : i16 = -1; // output of mux adaptor 7 (data to LVDS)
+param FABRIC_D2H_DATA_ID_8 : i16 = -1; // output of mux adaptor 8 (data to LVDS)
+param FABRIC_D2H_DATA_ID_9 : i16 = -1; // output of mux adaptor 9 (data to LVDS)
+param FABRIC_D2H_DATA_ID_10 : i16 = -1; // output of mux adaptor 10 (data to LVDS)
+param FABRIC_D2H_DATA_ID_11 : i16 = -1; // output of mux adaptor 11 (data to LVDS)
+param FABRIC_D2H_DATA_ID_12 : i16 = -1; // output of mux adaptor 12 (data to LVDS)
+param FABRIC_D2H_DATA_ID_13 : i16 = -1; // output of mux adaptor 13 (data to LVDS)
+param FABRIC_D2H_DATA_ID_14 : i16 = -1; // output of mux adaptor 14 (data to LVDS)
+param FABRIC_D2H_DATA_ID_15 : i16 = -1; // output of mux adaptor 15 (data to LVDS)
+param FABRIC_D2H_DATA_ID_16 : i16 = -1; // output of mux adaptor 16 (data to LVDS)
+param FABRIC_D2H_DATA_ID_17 : i16 = -1; // output of mux adaptor 17 (data to LVDS)
+param FABRIC_D2H_DATA_ID_18 : i16 = -1; // output of mux adaptor 18 (data to LVDS)
+param FABRIC_D2H_DATA_ID_19 : i16 = -1; // output of mux adaptor 19 (data to LVDS)
+param FABRIC_D2H_DATA_ID_20 : i16 = -1; // output of mux adaptor 20 (data to LVDS)
+param FABRIC_D2H_DATA_ID_21 : i16 = -1; // output of mux adaptor 21 (data to LVDS)
+param FABRIC_D2H_DATA_ID_22 : i16 = -1; // output of mux adaptor 22 (data to LVDS)
+param FABRIC_D2H_DATA_ID_23 : i16 = -1; // output of mux adaptor 23 (data to LVDS)
+param FABRIC_D2H_DATA_ID_24 : i16 = -1; // output of mux adaptor 24 (data to LVDS)
+param FABRIC_D2H_DATA_ID_25 : i16 = -1; // output of mux adaptor 25 (data to LVDS)
+param FABRIC_D2H_DATA_ID_26 : i16 = -1; // output of mux adaptor 26 (data to LVDS)
+param FABRIC_D2H_DATA_ID_27 : i16 = -1; // output of mux adaptor 27 (data to LVDS)
+param FABRIC_D2H_DATA_ID_28 : i16 = -1; // output of mux adaptor 28 (data to LVDS)
+param FABRIC_D2H_DATA_ID_29 : i16 = -1; // output of mux adaptor 29 (data to LVDS)
+param FABRIC_D2H_DATA_ID_30 : i16 = -1; // output of mux adaptor 30 (data to LVDS)
+param FABRIC_D2H_DATA_ID_31 : i16 = -1; // output of mux adaptor 31 (data to LVDS)
+param FABRIC_D2H_DATA_ID_32 : i16 = -1; // output of mux adaptor 32 (data to LVDS)
+param FABRIC_D2H_DATA_ID_33 : i16 = -1; // output of mux adaptor 33 (data to LVDS)
+param FABRIC_D2H_DATA_ID_34 : i16 = -1; // output of mux adaptor 34 (data to LVDS)
+param FABRIC_D2H_DATA_ID_35 : i16 = -1; // output of mux adaptor 35 (data to LVDS)
+param FABRIC_D2H_DATA_ID_36 : i16 = -1; // output of mux adaptor 36 (data to LVDS)
+param FABRIC_D2H_DATA_ID_37 : i16 = -1; // output of mux adaptor 37 (data to LVDS)
+param FABRIC_D2H_DATA_ID_38 : i16 = -1; // output of mux adaptor 38 (data to LVDS)
+param FABRIC_D2H_DATA_ID_39 : i16 = -1; // output of mux adaptor 39 (data to LVDS)
+param FABRIC_D2H_DATA_ID_40 : i16 = -1; // output of mux adaptor 40 (data to LVDS)
+param FABRIC_D2H_DATA_ID_41 : i16 = -1; // output of mux adaptor 41 (data to LVDS)
+param FABRIC_D2H_DATA_ID_42 : i16 = -1; // output of mux adaptor 42 (data to LVDS)
+param FABRIC_D2H_DATA_ID_43 : i16 = -1; // output of mux adaptor 43 (data to LVDS)
+param FABRIC_D2H_DATA_ID_44 : i16 = -1; // output of mux adaptor 44 (data to LVDS)
+param FABRIC_D2H_DATA_ID_45 : i16 = -1; // output of mux adaptor 45 (data to LVDS)
+param FABRIC_D2H_DATA_ID_46 : i16 = -1; // output of mux adaptor 46 (data to LVDS)
+param FABRIC_D2H_DATA_ID_47 : i16 = -1; // output of mux adaptor 47 (data to LVDS)
+param FABRIC_D2H_DATA_ID_48 : i16 = -1; // output of mux adaptor 48 (data to LVDS)
+param FABRIC_D2H_DATA_ID_49 : i16 = -1; // output of mux adaptor 49 (data to LVDS)
+param FABRIC_D2H_DATA_ID_50 : i16 = -1; // output of mux adaptor 50 (data to LVDS)
+param FABRIC_D2H_DATA_ID_51 : i16 = -1; // output of mux adaptor 51 (data to LVDS)
+param FABRIC_D2H_DATA_ID_52 : i16 = -1; // output of mux adaptor 52 (data to LVDS)
+param FABRIC_D2H_DATA_ID_53 : i16 = -1; // output of mux adaptor 53 (data to LVDS)
+param FABRIC_D2H_DATA_ID_54 : i16 = -1; // output of mux adaptor 54 (data to LVDS)
+param FABRIC_D2H_DATA_ID_55 : i16 = -1; // output of mux adaptor 55 (data to LVDS)
+param FABRIC_D2H_DATA_ID_56 : i16 = -1; // output of mux adaptor 56 (data to LVDS)
+param FABRIC_D2H_DATA_ID_57 : i16 = -1; // output of mux adaptor 57 (data to LVDS)
+param FABRIC_D2H_DATA_ID_58 : i16 = -1; // output of mux adaptor 58 (data to LVDS)
+param FABRIC_D2H_DATA_ID_59 : i16 = -1; // output of mux adaptor 59 (data to LVDS)
+//---
+
+
+param FABRIC_D2H_DATA_CMD_ID : i16; // input of mux adaptor (meta data command from LVDS)
+
+// internal routing
+param GC_TXACT_MUX_ID : i16 ;       // output of mux, input of mux adaptor
+param GC_RXACT_MUX_TD_ID : i16 ;    // input of mux td
+param GC_RXACT_CONFIG_MUX_ID : i16; // input of mux
+
+param GC_BUF_MUX_ID : i16 ;       // color swapping for buffer
+//---
+
+// num_config_wvlt = max{ ceil((Nj+2)/2): Nj is the height of mux j }
+param num_config_wvlt: i16;
+
+// num_mux decides how many mux modules are created
+param num_mux: i16;  // number of mux modules
+
+//--- AUTO-2: height_mux_<j>: j=0,1,2,...,15
+param height_mux_0: i16 = -1;  // h0
+param height_mux_1: i16 = -1;  // h1
+param height_mux_2: i16 = -1;  // h2
+param height_mux_3: i16 = -1;  // h3
+param height_mux_4: i16 = -1;  // h4
+param height_mux_5: i16 = -1;  // h5
+param height_mux_6: i16 = -1;  // h6
+param height_mux_7: i16 = -1;  // h7
+param height_mux_8: i16 = -1;  // h8
+param height_mux_9: i16 = -1;  // h9
+param height_mux_10: i16 = -1;  // h10
+param height_mux_11: i16 = -1;  // h11
+param height_mux_12: i16 = -1;  // h12
+param height_mux_13: i16 = -1;  // h13
+param height_mux_14: i16 = -1;  // h14
+param height_mux_15: i16 = -1;  // h15
+param height_mux_16: i16 = -1;  // h16
+param height_mux_17: i16 = -1;  // h17
+param height_mux_18: i16 = -1;  // h18
+param height_mux_19: i16 = -1;  // h19
+param height_mux_20: i16 = -1;  // h20
+param height_mux_21: i16 = -1;  // h21
+param height_mux_22: i16 = -1;  // h22
+param height_mux_23: i16 = -1;  // h23
+param height_mux_24: i16 = -1;  // h24
+param height_mux_25: i16 = -1;  // h25
+param height_mux_26: i16 = -1;  // h26
+param height_mux_27: i16 = -1;  // h27
+param height_mux_28: i16 = -1;  // h28
+param height_mux_29: i16 = -1;  // h29
+param height_mux_30: i16 = -1;  // h30
+param height_mux_31: i16 = -1;  // h31
+param height_mux_32: i16 = -1;  // h32
+param height_mux_33: i16 = -1;  // h33
+param height_mux_34: i16 = -1;  // h34
+param height_mux_35: i16 = -1;  // h35
+param height_mux_36: i16 = -1;  // h36
+param height_mux_37: i16 = -1;  // h37
+param height_mux_38: i16 = -1;  // h38
+param height_mux_39: i16 = -1;  // h39
+param height_mux_40: i16 = -1;  // h40
+param height_mux_41: i16 = -1;  // h41
+param height_mux_42: i16 = -1;  // h42
+param height_mux_43: i16 = -1;  // h43
+param height_mux_44: i16 = -1;  // h44
+param height_mux_45: i16 = -1;  // h45
+param height_mux_46: i16 = -1;  // h46
+param height_mux_47: i16 = -1;  // h47
+param height_mux_48: i16 = -1;  // h48
+param height_mux_49: i16 = -1;  // h49
+param height_mux_50: i16 = -1;  // h50
+param height_mux_51: i16 = -1;  // h51
+param height_mux_52: i16 = -1;  // h52
+param height_mux_53: i16 = -1;  // h53
+param height_mux_54: i16 = -1;  // h54
+param height_mux_55: i16 = -1;  // h55
+param height_mux_56: i16 = -1;  // h56
+param height_mux_57: i16 = -1;  // h57
+param height_mux_58: i16 = -1;  // h58
+param height_mux_59: i16 = -1;  // h59
+//---
+
+
+
+//--- system reserved
+const sys_params = @import_module( "<memcpy/sys_params>" );
+
+// MEMCPYD2H_DATA is an input of mux
+const MEMCPYD2H_DATA: color = sys_params.MEMCPYD2H_DATA;
+
+// WARNING: mux only supports chunk size 1
+const chunk : i16 = sys_params.chunk;
+//---
+
+
+//const FABRIC_D2H_DATA : color = @get_color(FABRIC_D2H_DATA_ID);
+const FABRIC_D2H_DATA_CMD : color = @get_color(FABRIC_D2H_DATA_CMD_ID);
+
+const GC_TXACT_MUX : color = @get_color(GC_TXACT_MUX_ID);
+const GC_RXACT_MUX_TD : color = @get_color(GC_RXACT_MUX_TD_ID);
+const GC_RXACT_CONFIG_MUX : color = @get_color(GC_RXACT_CONFIG_MUX_ID);
+
+const GC_BUF_MUX : color = @get_color(GC_BUF_MUX_ID);
+
+// ---- mux adaptor: entrypoints
+const MUX_ADAPTOR_PADDING_DONE: local_task_id = @get_local_task_id(24);
+const MUX_ADAPTOR_STARTUP: local_task_id      = @get_local_task_id(25);
+const MUX_ADAPTOR_CONFIG : local_task_id      = @get_local_task_id(26);
+const MUX_ADAPTOR_TXTD0_DONE : local_task_id  = @get_local_task_id(27);
+const MUX_ADAPTOR_TXTD1_DONE : local_task_id  = @get_local_task_id(28);
+const MUX_ADAPTOR_RXDONE : local_task_id      = @get_local_task_id(30);
+// ---- end mux adaptor
+
+// ---- mux: entrypoints
+const MUX_STARTUP: local_task_id           = @get_local_task_id(24);
+const MUX_CONFIG : local_task_id           = @get_local_task_id(25);
+const MUX_SEND_CTRL: local_task_id         = @get_local_task_id(26);
+const MUX_SEND_DATA: local_task_id         = @get_local_task_id(27);
+const MUX_TXACT_NEXT_TENSOR: local_task_id = @get_local_task_id(28);
+const MUX_TXACT_NEXT_CHUNK: local_task_id  = @get_local_task_id(30);
+// ---- end mux
+
+// ---- buffer: entrypoints
+const BUF_STARTUP: local_task_id           = @get_local_task_id(24);
+
+layout{
+
+    @comptime_assert( 60 >= num_mux );
+
+//--- AUTO-3: extend FABRIC_D2H_DATA_ID_list and height_mux_list
+    const FABRIC_D2H_DATA_ID_list = [60]i16 {
+               FABRIC_D2H_DATA_ID_0,
+               FABRIC_D2H_DATA_ID_1,
+               FABRIC_D2H_DATA_ID_2,
+               FABRIC_D2H_DATA_ID_3,
+               FABRIC_D2H_DATA_ID_4,
+               FABRIC_D2H_DATA_ID_5,
+               FABRIC_D2H_DATA_ID_6,
+               FABRIC_D2H_DATA_ID_7,
+               FABRIC_D2H_DATA_ID_8,
+               FABRIC_D2H_DATA_ID_9,
+               FABRIC_D2H_DATA_ID_10,
+               FABRIC_D2H_DATA_ID_11,
+               FABRIC_D2H_DATA_ID_12,
+               FABRIC_D2H_DATA_ID_13,
+               FABRIC_D2H_DATA_ID_14,
+               FABRIC_D2H_DATA_ID_15,
+               FABRIC_D2H_DATA_ID_16,
+               FABRIC_D2H_DATA_ID_17,
+               FABRIC_D2H_DATA_ID_18,
+               FABRIC_D2H_DATA_ID_19,
+               FABRIC_D2H_DATA_ID_20,
+               FABRIC_D2H_DATA_ID_21,
+               FABRIC_D2H_DATA_ID_22,
+               FABRIC_D2H_DATA_ID_23,
+               FABRIC_D2H_DATA_ID_24,
+               FABRIC_D2H_DATA_ID_25,
+               FABRIC_D2H_DATA_ID_26,
+               FABRIC_D2H_DATA_ID_27,
+               FABRIC_D2H_DATA_ID_28,
+               FABRIC_D2H_DATA_ID_29,
+               FABRIC_D2H_DATA_ID_30,
+               FABRIC_D2H_DATA_ID_31,
+               FABRIC_D2H_DATA_ID_32,
+               FABRIC_D2H_DATA_ID_33,
+               FABRIC_D2H_DATA_ID_34,
+               FABRIC_D2H_DATA_ID_35,
+               FABRIC_D2H_DATA_ID_36,
+               FABRIC_D2H_DATA_ID_37,
+               FABRIC_D2H_DATA_ID_38,
+               FABRIC_D2H_DATA_ID_39,
+               FABRIC_D2H_DATA_ID_40,
+               FABRIC_D2H_DATA_ID_41,
+               FABRIC_D2H_DATA_ID_42,
+               FABRIC_D2H_DATA_ID_43,
+               FABRIC_D2H_DATA_ID_44,
+               FABRIC_D2H_DATA_ID_45,
+               FABRIC_D2H_DATA_ID_46,
+               FABRIC_D2H_DATA_ID_47,
+               FABRIC_D2H_DATA_ID_48,
+               FABRIC_D2H_DATA_ID_49,
+               FABRIC_D2H_DATA_ID_50,
+               FABRIC_D2H_DATA_ID_51,
+               FABRIC_D2H_DATA_ID_52,
+               FABRIC_D2H_DATA_ID_53,
+               FABRIC_D2H_DATA_ID_54,
+               FABRIC_D2H_DATA_ID_55,
+               FABRIC_D2H_DATA_ID_56,
+               FABRIC_D2H_DATA_ID_57,
+               FABRIC_D2H_DATA_ID_58,
+               FABRIC_D2H_DATA_ID_59
+    };
+    const height_mux_list = [60]i16 {
+               height_mux_0,
+               height_mux_1,
+               height_mux_2,
+               height_mux_3,
+               height_mux_4,
+               height_mux_5,
+               height_mux_6,
+               height_mux_7,
+               height_mux_8,
+               height_mux_9,
+               height_mux_10,
+               height_mux_11,
+               height_mux_12,
+               height_mux_13,
+               height_mux_14,
+               height_mux_15,
+               height_mux_16,
+               height_mux_17,
+               height_mux_18,
+               height_mux_19,
+               height_mux_20,
+               height_mux_21,
+               height_mux_22,
+               height_mux_23,
+               height_mux_24,
+               height_mux_25,
+               height_mux_26,
+               height_mux_27,
+               height_mux_28,
+               height_mux_29,
+               height_mux_30,
+               height_mux_31,
+               height_mux_32,
+               height_mux_33,
+               height_mux_34,
+               height_mux_35,
+               height_mux_36,
+               height_mux_37,
+               height_mux_38,
+               height_mux_39,
+               height_mux_40,
+               height_mux_41,
+               height_mux_42,
+               height_mux_43,
+               height_mux_44,
+               height_mux_45,
+               height_mux_46,
+               height_mux_47,
+               height_mux_48,
+               height_mux_49,
+               height_mux_50,
+               height_mux_51,
+               height_mux_52,
+               height_mux_53,
+               height_mux_54,
+               height_mux_55,
+               height_mux_56,
+               height_mux_57,
+               height_mux_58,
+               height_mux_59
+    };
+//---
+
+
+    var start_pos_y_mux_list = @zeros([num_mux+1]i16);
+    var idx : i16 = 0;
+    while(idx < num_mux) : (idx +=1) {
+        start_pos_y_mux_list[idx+1] = start_pos_y_mux_list[idx] + height_mux_list[idx];
+    }
+    // 1st mux must starts from 0
+    @comptime_assert( 0 == start_pos_y_mux_list[0] );
+    // summation of heights of all mux modules must be height
+    @comptime_assert( height == start_pos_y_mux_list[num_mux] );
+//---
+
+    const start_pos_x_buf : i16 = 0;
+    const start_pos_y_buf : i16 = 0;
+    const width_buf : i16 = width_east_buf;
+
+    const start_pos_x_mux : i16 = start_pos_x_buf + width_buf;
+    const width_mux : i16 = 1;
+
+    const start_pos_x_mux_adaptor : i16 = start_pos_x_mux + width_mux;
+    const width_mux_adaptor : i16 = 1;
+
+    // mux td and mux adaptor, so we need 2 PEs in a column
+    @comptime_assert( 1 == chunk );
+
+    // step 1: configure the rectangle which does not include halo
+    // mux is at 1st column
+    // mux td and mux adaptor are at 2nd column
+    @set_rectangle( 2 + width_east_buf, height );
+
+    // step 2: compile csl code for a set of PEx.y and generate out_x_y.elf
+    //   format: @set_tile_code(x, y, code.csl, param_binding);
+
+    var px: i16 = 0;
+    while( px < width_buf) : (px +=1) {
+        // color swapping
+        var RXACT_BUF : color = MEMCPYD2H_DATA;
+        var TXACT_BUF : color = GC_BUF_MUX;
+        if (1 == px % 2){
+            RXACT_BUF = GC_BUF_MUX;
+            TXACT_BUF = MEMCPYD2H_DATA;
+        }
+        const comm_params = .{
+            .RXACT=RXACT_BUF,
+            .TXACT=TXACT_BUF,
+            .STARTUP=BUF_STARTUP
+        };
+        var py:i16 = 0;
+        while(py < height) : (py +=1) {
+            @set_tile_code(start_pos_x_buf + px, start_pos_y_buf + py, "buffer.csl", comm_params);
+        }
+    }
+
+    idx = 0;
+    while(idx < num_mux) : (idx +=1) {
+
+        // both are used in mux adaptor and mux
+        // height_mux = h0, h1, ...
+        const height_mux :i16 = height_mux_list[idx];
+
+        // start_pos_y_mux = 0, h0, h0+h1, ...
+        const start_pos_y_mux : i16 = start_pos_y_mux_list[idx];
+
+        // a mux must be non-empty
+        @comptime_assert( 1 <= height_mux );
+
+        // 0 <= start_pos_y_mux < height
+        @comptime_assert( 0 <= start_pos_y_mux );
+        @comptime_assert( height > start_pos_y_mux );
+
+        // mux adaptor has  TXACT=FABRIC_D2H_DATA
+        const FABRIC_D2H_DATA: color = @get_color( FABRIC_D2H_DATA_ID_list[idx]);
+
+        var RXACT_MUX: color = MEMCPYD2H_DATA;
+        if ( 1 == width_buf % 2 ){
+            RXACT_MUX = GC_BUF_MUX;
+        }
+
+        var py: i16 = 0;
+        if (1 == height_mux){
+            @set_tile_code(start_pos_x_mux, start_pos_y_mux + py, "mux_N1.csl", .{
+                .RXACT = RXACT_MUX,
+                .MEMCPYD2H_DATA = GC_TXACT_MUX,
+                .RXACT_CONFIG=GC_RXACT_CONFIG_MUX,
+
+                .STARTUP= MUX_STARTUP,
+                .CONFIG = MUX_CONFIG,
+                .TXACT_NEXT_TENSOR=MUX_TXACT_NEXT_TENSOR,
+                .TXACT_NEXT_CHUNK=MUX_TXACT_NEXT_CHUNK,
+                .chunk=chunk,
+                ._pe_id=py,
+                .height=height_mux } );
+        }else{
+            while(py < height_mux) : (py +=1) {
+                const first_pe: bool = (0 == py);
+                const last_pe: bool = ((height_mux-1) == py);
+                // retrieve runtime py in the kernel to reduce the ELFs
+                // only 3 ELFs are generated for any height_mux
+                @set_tile_code(start_pos_x_mux, start_pos_y_mux + py, "mux.csl", .{
+                    .RXACT = RXACT_MUX,
+                    .MEMCPYD2H_DATA = GC_TXACT_MUX,
+                    .RXACT_CONFIG=GC_RXACT_CONFIG_MUX,
+
+                    .STARTUP= MUX_STARTUP,
+                    .CONFIG = MUX_CONFIG,
+                    .TXACT_NEXT_TENSOR=MUX_TXACT_NEXT_TENSOR,
+                    .TXACT_NEXT_CHUNK=MUX_TXACT_NEXT_CHUNK,
+                    .SEND_CTRL=MUX_SEND_CTRL,
+                    .SEND_DATA=MUX_SEND_DATA,
+                    .chunk=chunk,
+                    .height=height_mux,
+                    .first_pe=first_pe,
+                    .last_pe=last_pe,
+                    .start_pos_y_mux = start_pos_y_mux } );
+            }
+        }
+
+        py = 0;
+        if (1 == height_mux){
+            @set_tile_code(start_pos_x_mux_adaptor, start_pos_y_mux + py, "mux_adaptor_N1.csl", .{
+                .RXACT = GC_TXACT_MUX,
+                .TXACT=FABRIC_D2H_DATA,
+                .RXACT_CMD=FABRIC_D2H_DATA_CMD,
+                .TXACT_CONFIG=GC_RXACT_CONFIG_MUX,
+
+                .STARTUP=MUX_ADAPTOR_STARTUP,
+                .CONFIG=MUX_ADAPTOR_CONFIG,
+                .TXTD1_DONE=MUX_ADAPTOR_TXTD1_DONE,
+                .TXTD0_DONE=MUX_ADAPTOR_TXTD0_DONE,
+                .RXDONE=MUX_ADAPTOR_RXDONE,
+                .PADDING_DONE=MUX_ADAPTOR_PADDING_DONE,
+                .N = height_mux,
+                .num_config_wvlt=num_config_wvlt,
+                .num_mux=num_mux,
+                ._pe_id = idx
+            } );
+
+        }else{
+            while(py < height_mux) : (py +=1) {
+                if ( py == (height_mux-1)){
+                    @set_tile_code(start_pos_x_mux_adaptor, start_pos_y_mux + py, "mux_adaptor.csl", .{
+                        .RXACT = GC_TXACT_MUX,
+                        .TXACT=FABRIC_D2H_DATA,
+                        .RXACT_CMD=FABRIC_D2H_DATA_CMD,
+                        .TXACT_TD = GC_RXACT_MUX_TD,
+                        .TXACT_CONFIG=GC_RXACT_CONFIG_MUX,
+
+                        .STARTUP=MUX_ADAPTOR_STARTUP,
+                        .CONFIG=MUX_ADAPTOR_CONFIG,
+                        .TXTD1_DONE=MUX_ADAPTOR_TXTD1_DONE,
+                        .TXTD0_DONE=MUX_ADAPTOR_TXTD0_DONE,
+                        .RXDONE=MUX_ADAPTOR_RXDONE,
+                        .PADDING_DONE=MUX_ADAPTOR_PADDING_DONE,
+                        .N = height_mux,
+                        .num_config_wvlt=num_config_wvlt,
+                        .num_mux=num_mux,
+                        ._pe_id = idx
+                    } );
+                }else if ( py == 0 ){
+                    @set_tile_code(start_pos_x_mux_adaptor, start_pos_y_mux + py, "mux_td.csl", .{
+                        .RXACT = GC_RXACT_MUX_TD,
+                        .TXACT = GC_TXACT_MUX });
+                }else{
+                    @set_tile_code(start_pos_x_mux_adaptor, start_pos_y_mux + py, "nop.csl" );
+                }
+            }
+        }
+
+        // step 3: global and internal routing
+        //  format: @set_color_config(x, y, color, route);
+
+        // routing of mux: see mux.csl
+
+        // routing of mux adaptor: see mux_adaptor.csl
+
+        // [SYSTEM] routing of GC_RXACT_MUX_TD from mux adaptor to mux td
+        //     +----------+
+        //     |  mux td  |
+        //     +----------+
+        //           ^  GC_RXACT_MUX_TD
+        //           |
+        //     +-------------+
+        //     | mux adaptor |
+        //     +-------------+
+        //
+        if (1 < height_mux ){
+            py = 0;
+            while(py < height_mux) : (py +=1) {
+                // py = 0: mux td
+                // py=h-1: mux adaptor
+                if ( (py > 0) and (py < (height_mux-1)) ){
+                    @set_color_config(start_pos_x_mux_adaptor, start_pos_y_mux + py,
+                        GC_RXACT_MUX_TD, .{ .routes = .{ .rx = .{SOUTH}, .tx = .{NORTH} } } );
+                }
+            }
+        }
+
+    }// for each mux
+
+// Add internal routing of FABRIC_D2H_DATA_CMD between two mux adaptors
+// (1) only add internal routing for pid=1,2,...,num_mux-1
+// (2) only add internal routing if height_mux > 1
+    idx = 1;
+    while(idx < num_mux) : (idx +=1) {
+        // height_mux = h0, h1, ...
+        const height_mux :i16 = height_mux_list[idx];
+
+        // start_pos_y_mux = 0, h0, h0+h1, ...
+        const start_pos_y_mux : i16 = start_pos_y_mux_list[idx];
+
+        // j-1 adaptor at (x = start_pos_x_mux_adaptor, y = start_pos_y_mux-1)
+        // j   adaptor at (x = start_pos_x_mux_adaptor, y = start_pos_y_mux + height_mux-1)
+        var py: i16 = 0;
+        while(py < height_mux) : (py +=1) {
+            // py=h-1: mux adaptor
+            // ignore if height_mux = 1
+            if (py < (height_mux-1) ){
+                @set_color_config(start_pos_x_mux_adaptor, start_pos_y_mux + py,
+                    FABRIC_D2H_DATA_CMD, .{ .routes = .{ .rx = .{SOUTH}, .tx = .{NORTH} } } );
+            }
+        }
+    }// for each mux
+
+} // end of layout

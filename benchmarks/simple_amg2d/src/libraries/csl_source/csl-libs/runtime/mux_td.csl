@@ -1,0 +1,125 @@
+
+// receive a signal from mux adaptor and then send teardown to the mux
+//
+//    +-----+  c12 +--------+
+//    | mux | <--- | mux td |
+//    +-----+      +--------+
+//       | c12         ^
+//       V             |
+//    +-----+          |
+//    | mux |          | c13
+//    +-----+          |
+//       | c12         |
+//       V             |
+//    +-----+      +-------------+
+//    | mux | ---> | mux adaptor | <--- c8
+//    |     | c12  |             | ---> c9
+//    +-----+      +-------------+
+//
+
+// local colors
+param RXACT: color; // receive a wavelet from adaptor to trigger the
+                    // sending of teardown
+param TXACT: color; // send teardown to mux
+
+const target_name = @import_module("<target_name>");
+const __target_details = @import_module(
+  @strcat("<runtime/target/", target_name.get_target_name(), ">")
+);
+
+// define WTT binding to RXACT
+const in_q: input_queue = @get_input_queue(0);
+const WTT_RXACT = __target_details.get_wtt_rxact(in_q, RXACT);
+
+const oq_txact = @get_output_queue(2);
+
+const tile_config = @import_module("<tile_config>");
+
+const switches = @import_module("memcpy_switches.csl");
+
+// teardown from casm
+// teardown_buf[0] = (1 << 31) | (0b111 << 22)
+//
+// teardown from csl
+// from cslang/test-e2e/dynamic_filters/sender.csl
+//  31=0x1f = no entrypoint
+//
+// teardown wvlet = 0x1df 0000
+//const teardown_buf = [1]u32{(31 << 16) | 0b111 << 22};
+const teardown_buf = [1]u32 { switches.ctrl(switches.teardown_cmd_1()) };
+
+const mem_buf_td_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> teardown_buf[i] });
+
+const fab_txtd0_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .fabric_color = TXACT,
+    .control = true,
+    .output_queue = oq_txact
+});
+
+
+task f_rxact( data :u32 ) void {
+    // WARNING: do not send TD to mux.csl because mux.csl cannot receive TD from mux_td.csl
+    // SDR only allow one direction in the rx field, for example
+    //  .rx=RAMP is valid but .rx={RAMP, EAST} is not valid.
+    //
+    // mux_td.csl just receives a signal from mux adaptor.
+    // This change can keep the layout and mux adaptor unchanged, i.e. layout_east_mux_multi.csl
+    // still has mux_td.csl and the routing from mux_adaptor.csl to mux_td.csl.
+    //
+    // In the future, we could remove mux_td.csl and its routing from mux_adaptor.csl, but
+    // we need to modify mux_adaptor.csl such that it does not send a signal to mux_td.csl
+    //
+    // disable "send teardown to the mux" because SDR does not allow an input from two
+    // different directions.
+    // "mux_td.csl" just skips the signal from mux adaptor.
+    // @mov32(fab_txtd0_wdsd, mem_buf_td_dsd, .{.async=true} );
+}
+
+
+// The sender also needs to handle teardown because teardown ctrl wavelet will pass through
+// sender's router, then stall wavelets for all 5 directions.
+// If we don't clear teardown-in-progress bit of this color, then no data can be sent out.
+// The task 29 simply does
+// - clear teardown pending register
+// - clear teardown-in-progress (bit-14 of color config reg)
+//   to allow the data go through the router
+//
+// WARNING: task 29 is called after the teardown ctrl wavelet is sent out
+// if any task runs before task 29 (for example, callback task of sending out teardown),
+// then it cannot send out the data via microthread, so microthread will sleep, then task 29
+// is picked up.
+//
+task f_teardown() void {
+
+    // (1) Read TIP register (TAMAP_TEARDOWN_PEND_ADDR_[LO|HI]) to clear
+    const pending = tile_config.teardown.get_pending();
+
+    // (2) Clear teardown-in-progress bit on transmit color
+    //    bit-14 = 1 (teardonw in progress), or 0x4000
+    tile_config.teardown.exit(TXACT);
+}
+
+
+comptime {
+
+    @unblock(WTT_RXACT);
+
+    @bind_data_task( f_rxact, WTT_RXACT);
+    @bind_local_task( f_teardown, tile_config.teardown.get_task_id());
+}
+
+comptime {
+    @set_local_color_config(RXACT, .{ .routes = .{ .rx = .{SOUTH}, .tx = .{RAMP} } } );
+    @set_local_color_config(TXACT, .{ .routes = .{ .rx = .{RAMP}, .tx = .{WEST} } });
+}
+
+comptime {
+    @initialize_queue(in_q, .{ .color = RXACT });
+}
+
+comptime {
+    if (@is_arch("wse3")){
+        @initialize_queue(oq_txact, .{.color = TXACT});
+    }
+}

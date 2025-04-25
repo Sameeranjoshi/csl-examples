@@ -1,0 +1,78 @@
+const types = @import_module("<math/type_helpers>");
+
+fn complex(comptime T: type) type {
+  @comptime_assert(types.is_float(T));
+  return struct {
+    real: T,
+    imag: T,
+  };
+}
+
+const complex_32 = complex(f16);
+const complex_64 = complex(f32);
+
+fn get_complex(r: anytype, i: @type_of(r)) complex(@type_of(r)) {
+  return complex(@type_of(r)) {
+    .real = r,
+    .imag = i,
+  };
+}
+
+fn add_complex(x: anytype, y: @type_of(x)) @type_of(x) {
+  const T = @type_of(x);
+  @comptime_assert(@is_same_type(T, complex_32) or @is_same_type(T, complex_64));
+  return T {
+    .real = x.real + y.real,
+    .imag = x.imag + y.imag,
+  };
+}
+
+fn subtract_complex(x: anytype, y: @type_of(x)) @type_of(x) {
+  const T = @type_of(x);
+  @comptime_assert(@is_same_type(T, complex_32) or @is_same_type(T, complex_64));
+  return T {
+    .real = x.real - y.real,
+    .imag = x.imag - y.imag,
+  };
+}
+
+fn multiply_complex(x: anytype, y: @type_of(x)) @type_of(x) {
+  const T = @type_of(x);
+  @comptime_assert(@is_same_type(T, complex_32) or @is_same_type(T, complex_64));
+  return T {
+    .real = x.real * y.real - x.imag * y.imag,
+    .imag = x.real * y.imag + x.imag * y.real,
+  };
+}
+
+fn get_complex_32(r : f16, i : f16) complex_32 {
+  return get_complex(r, i);
+}
+
+fn add_complex_32(x : complex_32, y : complex_32) complex_32 {
+  return add_complex(x, y);
+}
+
+fn subtract_complex_32(x : complex_32, y : complex_32) complex_32 {
+  return subtract_complex(x, y);
+}
+
+fn multiply_complex_32(x : complex_32, y : complex_32) complex_32 {
+  return multiply_complex(x, y);
+}
+
+fn get_complex_64(r : f32, i : f32) complex_64 {
+  return get_complex(r, i);
+}
+
+fn add_complex_64(x : complex_64, y : complex_64) complex_64 {
+  return add_complex(x, y);
+}
+
+fn subtract_complex_64(x : complex_64, y : complex_64) complex_64 {
+  return subtract_complex(x, y);
+}
+
+fn multiply_complex_64(x : complex_64, y : complex_64) complex_64 {
+  return multiply_complex(x, y);
+}

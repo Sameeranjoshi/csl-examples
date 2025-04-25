@@ -1,0 +1,179 @@
+inline fn convert(Tdst: type, Tsrc: type, dst: anytype, src: anytype,
+                  comptime config: anytype) bool {
+  if (@is_same_type(Tsrc, f16)) {
+    if (@is_same_type(Tdst, f32)) {
+      return @fh2s(dst, src, config);
+    }
+    if (@is_same_type(Tdst, i16)) {
+      return @fh2xp16(dst, src, config);
+    }
+    if (@is_same_type(Tdst, f16)) {
+      return @fmovh(dst, src, config);
+    }
+  }
+  if (@is_same_type(Tsrc, f32)) {
+    if (@is_same_type(Tdst, f16)) {
+      return @fs2h(dst, src, config);
+    }
+    if (@is_same_type(Tdst, i16)) {
+      return @fs2xp16(dst, src, config);
+    }
+    if (@is_same_type(Tdst, f32)) {
+      return @fmovs(dst, src, config);
+    }
+  }
+  if (@is_same_type(Tsrc, i16)) {
+    if (@is_same_type(Tdst, f16)) {
+      return @xp162fh(dst, src, config);
+    }
+    if (@is_same_type(Tdst, f32)) {
+      return @xp162fs(dst, src, config);
+    }
+    if (@is_same_type(Tdst, i16)) {
+      return @mov16(dst, src, config);
+    }
+  }
+
+  @comptime_assert(false, "illegal types for 'convert'");
+}
+
+inline fn abs(T: type, dst: anytype, src: anytype, comptime config: anytype) bool {
+  if (@is_same_type(T, f16)) {
+    return @fabsh(dst, src, config);
+  }
+  if (@is_same_type(T, f32)) {
+    return @fabss(dst, src, config);
+  }
+
+  @comptime_assert(false, "illegal type for 'abs'");
+}
+
+inline fn neg(T: type, dst: anytype, src: anytype, comptime config: anytype) bool {
+  if (@is_same_type(T, f16)) {
+    return @fnegh(dst, src, config);
+  }
+  if (@is_same_type(T, f32)) {
+    return @fnegs(dst, src, config);
+  }
+
+  @comptime_assert(false, "illegal type for 'neg'");
+}
+
+inline fn norm(T: type, dst: anytype, src: anytype, comptime config: anytype) bool {
+  if (@is_same_type(T, f16)) {
+    return @fnormh(dst, src, config);
+  }
+  if (@is_same_type(T, f32)) {
+    return @fnorms(dst, src, config);
+  }
+
+  @comptime_assert(false, "illegal type for 'norm'");
+}
+
+inline fn mov(T: type, dst: anytype, src: anytype, comptime config: anytype) bool {
+  if (@is_same_type(T, f16)) {
+    return @fmovh(dst, src, config);
+  }
+  if (@is_same_type(T, f32)) {
+    return @fmovs(dst, src, config);
+  }
+  if (@is_same_type(T, i16) or @is_same_type(T, u16)) {
+    return @mov16(dst, src, config);
+  }
+  if (@is_same_type(T, i32) or @is_same_type(T, u32)) {
+    return @mov32(dst, src, config);
+  }
+
+  @comptime_assert(false, "illegal type for 'mov'");
+}
+
+inline fn add(Tdst: type, Tsrc: type,
+              dst: anytype, src0: anytype, src1: anytype,
+              comptime config: anytype) bool {
+  if (@is_same_type(Tsrc, f16)) {
+    if (@is_same_type(Tdst, f16)) {
+      return @faddh(dst, src0, src1, config);
+    }
+    if (@is_same_type(Tdst, f32)) {
+      return @faddhs(dst, src0, src1, config);
+    }
+  }
+  if (@is_same_type(Tsrc, f32) and @is_same_type(Tdst, f32)) {
+    return @fadds(dst, src0, src1, config);
+  }
+  if (@is_same_type(Tsrc, Tdst)
+      and (@is_same_type(Tsrc, u16) or @is_same_type(Tsrc, i16))) {
+    return @add16(dst, src0, src1, config);
+  }
+
+  @comptime_assert(false, "illegal types for 'add'");
+}
+
+inline fn fmac(Tdst: type, Tsrc: type,
+               dst: anytype, src0: anytype, src1: anytype, x: anytype,
+               comptime config: anytype) bool {
+  if (@is_same_type(Tsrc, f16)) {
+    if (@is_same_type(Tdst, f16)) {
+      return @fmach(dst, src0, src1, x, config);
+    }
+    if (@is_same_type(Tdst, f32)) {
+      return @fmachs(dst, src0, src1, x, config);
+    }
+  }
+  if (@is_same_type(Tsrc, f32) and @is_same_type(Tdst, f32)) {
+    return @fmacs(dst, src0, src1, x, config);
+  }
+
+  @comptime_assert(false, "illegal types for 'fmac'");
+}
+
+inline fn max(T: type, dst: anytype, src0: anytype, src1: anytype,
+              comptime config: anytype) bool {
+  if (@is_same_type(T, f16)) {
+    return @fmaxh(dst, src0, src1, config);
+  }
+  if (@is_same_type(T, f32)) {
+    return @fmaxs(dst, src0, src1, config);
+  }
+
+  @comptime_assert(false, "illegal type for 'max'");
+}
+
+inline fn mul(T: type, dst: anytype, src0: anytype, src1: anytype,
+              comptime config: anytype) bool {
+  if (@is_same_type(T, f16)) {
+    return @fmulh(dst, src0, src1, config);
+  }
+  if (@is_same_type(T, f32)) {
+    return @fmuls(dst, src0, src1, config);
+  }
+
+  @comptime_assert(false, "illegal type for 'mul'");
+}
+
+inline fn scale(T: type, dst: anytype, src0: anytype, src1: anytype,
+                comptime config: anytype) bool {
+  if (@is_same_type(T, f16)) {
+    return @fscaleh(dst, src0, src1, config);
+  }
+  if (@is_same_type(T, f32)) {
+    return @fscales(dst, src0, src1, config);
+  }
+
+  @comptime_assert(false, "illegal type for 'scale'");
+}
+
+inline fn sub(T: type, dst: anytype, src0: anytype, src1: anytype,
+              comptime config: anytype) bool {
+  if (@is_same_type(T, f16)) {
+    return @fsubh(dst, src0, src1, config);
+  }
+  if (@is_same_type(T, f32)) {
+    return @fsubs(dst, src0, src1, config);
+  }
+  if (@is_same_type(T, u16) or @is_same_type(T, i16)) {
+    return @sub16(dst, src0, src1, config);
+  }
+
+  @comptime_assert(false, "illegal type for 'sub'");
+}

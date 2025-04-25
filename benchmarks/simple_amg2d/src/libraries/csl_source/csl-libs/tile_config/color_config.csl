@@ -1,0 +1,141 @@
+param target : imported_module;
+
+const addresses = target.addresses;
+const word_size = target.word_size;
+const reg_type = target.reg_type;
+const fabric_io = target.fabric_io;
+
+// Color configuration functions.
+/////////////////////////////////
+
+// Returns the word address of a color configuration that corresponds to
+// color `c`.
+fn get_color_config_addr(c: color) reg_type {
+  const base_addr_color_config = @get_int(addresses.COLOR_CONFIG) / word_size;
+  return base_addr_color_config + @get_int(c);
+}
+
+// Enables `dir` direction for a color `c` or a word address `c`
+// of a color configuration register.
+fn set_io_direction(c: anytype, comptime dir: fabric_io) void {
+  const c_ty = @type_of(c);
+  const addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 @get_color_config_addr(c);
+  var r_state = @get_config(addr);
+  r_state |= @get_int(dir);
+  @set_config(addr, r_state);
+}
+
+// For a given color `c` or a word address `c` of a color configuration
+// register, toggle the I/O direction `dir` as follows:
+// case 1: dir is ON --> new status is OFF
+// case 2: dir is OFF --> new status is ON
+fn toggle_io_direction(c: anytype, comptime dir: fabric_io) void {
+  const c_ty = @type_of(c);
+  const addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_color_config_addr(c);
+  var r_state = @get_config(addr);
+  if (@is_arch("wse3") and target.is_input_direction(dir)) {
+    const rx = r_state & @get_int(fabric_io.RX_MASK);
+    r_state &= ~@get_int(fabric_io.RX_MASK);
+    if (@get_int(dir) != rx) {
+      r_state |= @get_int(dir);
+    } else {
+      r_state |= @get_int(fabric_io.RX_DISABLE);
+    }
+  } else {
+    r_state ^= @get_int(dir);
+  }
+  @set_config(addr, r_state);
+}
+
+// For a given color `c` or a word address `c` of a color configuration
+// register, clear the setting for `dir`.
+fn clear_io_direction(c: anytype, comptime dir: fabric_io) void {
+  const c_ty = @type_of(c);
+  const addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_color_config_addr(c);
+  var r_state = @get_config(addr);
+  r_state &= ~@get_int(dir);
+  @set_config(addr, r_state);
+}
+
+fn encode_rx_routes(comptime dir: direction, r_state: reg_type) reg_type {
+  var config = r_state;
+  if (dir == RAMP) {
+    config |= @get_int(fabric_io.RX_RAMP);
+  } else if (dir == NORTH) {
+    config |= @get_int(fabric_io.RX_NORTH);
+  } else if (dir == SOUTH) {
+    config |= @get_int(fabric_io.RX_SOUTH);
+  } else if (dir == EAST) {
+    config |= @get_int(fabric_io.RX_EAST);
+  } else {
+    @comptime_assert(dir == WEST);
+    config |= @get_int(fabric_io.RX_WEST);
+  }
+  return config;
+}
+
+fn encode_tx_routes(comptime dir: direction, r_state: reg_type) reg_type {
+  var config = r_state;
+  if (dir == RAMP) {
+    config |= @get_int(fabric_io.TX_RAMP);
+  } else if (dir == NORTH) {
+    config |= @get_int(fabric_io.TX_NORTH);
+  } else if (dir == SOUTH) {
+    config |= @get_int(fabric_io.TX_SOUTH);
+  } else if (dir == EAST) {
+    config |= @get_int(fabric_io.TX_EAST);
+  } else {
+    @comptime_assert(dir == WEST);
+    config |= @get_int(fabric_io.TX_WEST);
+  }
+  return config;
+}
+
+// For a given color `c` or a word address `c` of a color configuration
+// register, clear all I/O routes and reset them according to `new_routes`.
+fn reset_routes(c: anytype, comptime new_routes: comptime_struct) void {
+  const c_ty = @type_of(c);
+  const addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_color_config_addr(c);
+  var r_state = @get_config(addr);
+  r_state = r_state & @get_int(fabric_io.CLEAR_MASK);
+  if (@has_field(new_routes, "rx")) {
+    const rx_ty = @type_of(new_routes.rx);
+    if (@is_same_type(rx_ty, direction)) {
+      r_state |= encode_rx_routes(new_routes.rx, r_state);
+    } else {
+      // TODO: remove this counter once we have a @length builtin for arrays
+      // and thus assert @length(rx) == 1 on 'wse3'.
+      comptime var count = 0;
+      inline for (new_routes.rx) |route| {
+        if (@is_arch("wse3") and count > 0) {
+          @comptime_assert(false, "wse3 supports only one input direction");
+        }
+        r_state |= encode_rx_routes(route, r_state);
+        count += 1;
+      }
+    }
+  }
+  if (@has_field(new_routes, "tx")) {
+    const tx_ty = @type_of(new_routes.tx);
+    if (@is_same_type(tx_ty, direction)) {
+      r_state |= encode_tx_routes(new_routes.tx, r_state);
+    } else {
+      inline for (new_routes.tx) |route| {
+        r_state |= encode_tx_routes(route, r_state);
+      }
+    }
+  }
+  @set_config(addr, r_state);
+}

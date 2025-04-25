@@ -1,0 +1,90 @@
+// Tile map for WSE1 (Einstein) architecture.
+const types = @import_module("<target/types>");
+
+const word_size = types.word_size;
+const reg_type = types.reg;
+const double_reg_type = types.double_reg;
+
+const addresses = enum(reg_type) {
+  TASK_PRIORITY        = 0x7e08 * word_size,
+  CONTROL_TRANSFORM    = 0x7e0a * word_size,
+  MISC_CFG             = 0x7e1f * word_size,
+  EXCEPTION_MASK_ADDR  = 0x7e12 * word_size,
+  TIMESTAMP_COUNTER    = 0x7f18 * word_size,
+  PERF_COUNTER_CONTROL = 0x7f1e * word_size,
+  COLOR_CONFIG         = 0x7f20 * word_size,
+  TEARDOWN_PENDING     = 0x7f3a * word_size,
+  SWITCH_CONFIG        = 0x7f40 * word_size,
+  PRNG_STATE           = 0x7f68 * word_size,
+  FILTER               = 0x7f70 * word_size
+};
+
+fn __fabric_coord_unsupported() void {
+  @comptime_print("reading runtime PE location is unsupported on wse1");
+  @comptime_assert(false);
+}
+
+const fabric_coord = __fabric_coord_unsupported();
+
+const filter_bank_1_size = 4;
+const num_filters = filter_bank_1_size;
+const filter_size = 4 * word_size;
+const field = enum(reg_type) {
+  ACTIVE_LIMIT = word_size,
+  MAX_COUNTER = 2 * word_size,
+  COUNTER = 3 * word_size
+};
+
+const prng_count = 4;
+const prng_size = 2 * word_size;
+
+const tsc_size_words = 3;
+
+const main_thread_priority_offset: reg_type = 5;
+const main_thread_priority_mask: reg_type = 0b11 << main_thread_priority_offset;
+const main_thread_priority_level = enum(reg_type) {
+  MEDIUM_LOW = 0b00,
+  MEDIUM = 0b01,
+  MEDIUM_HIGH = 0b10,
+  HIGH = 0b11
+};
+
+const teardown_in_progress_offset: reg_type = 14;
+
+// Routing
+
+const fabric_io = enum(reg_type) {
+  TX_WEST = 0x1,
+  TX_EAST = 0x2,
+  TX_SOUTH = 0x4,
+  TX_NORTH = 0x8,
+  TX_RAMP = 0x10,
+
+  RX_WEST = 0x20,
+  RX_EAST = 0x40,
+  RX_SOUTH = 0x80,
+  RX_NORTH = 0x100,
+  RX_RAMP = 0x200,
+
+  CLEAR_MASK = 0xfc00
+};
+
+// Switching
+
+const SWITCH_REGS_PER_COLOR = 1;
+
+const pop_mode = enum(reg_type) {
+  NO_POP = 0x0,
+  ALWAYS_POP = 0x1000,
+  POP_ON_ADVANCE = 0x2000,
+
+  CLEAR_MASK = 0xcfff
+};
+
+const switch_status = enum(reg_type) {
+  CLEAR_CURRENT_POS = 0x9fff
+};
+
+fn get_switch_setting_word_offset(setting_type: type) u16 {
+  return 0;
+}

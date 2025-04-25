@@ -1,0 +1,213 @@
+param target : imported_module;
+
+const addresses = target.addresses;
+const word_size = target.word_size;
+const reg_type = target.reg_type;
+const pop_mode = target.pop_mode;
+const ring_mode = target.ring_mode;
+const switch_status = target.switch_status;
+
+// Returns the word address of a given color `c` and switch setting type
+// `setting_ty`.
+fn get_switch_config_addr(c: color, comptime setting_ty: type) reg_type {
+  const base_addr_switch_config = @get_int(addresses.SWITCH_CONFIG) / word_size;
+  return base_addr_switch_config +
+         target.SWITCH_REGS_PER_COLOR * @get_int(c) +
+         target.get_switch_setting_word_offset(setting_ty);
+}
+
+// Returns the word address of a color configuration that corresponds to
+// color `c`.
+fn get_color_config_addr(c: color) reg_type {
+  const base_addr_color_config = @get_int(addresses.COLOR_CONFIG) / word_size;
+  return base_addr_color_config + @get_int(c);
+}
+
+// For a given color `c` or a word address `c` of a color configuration
+// register, clear its current switch position.
+fn clear_current_position(c: anytype) void {
+  const c_ty = @type_of(c);
+  const addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_switch_config_addr(c, switch_status);
+  var r_switch_state = @get_config(addr);
+  r_switch_state &= @get_int(switch_status.CLEAR_CURRENT_POS);
+  @set_config(addr, r_switch_state);
+}
+
+
+// For a given color `c` or a word address `c` of a color configuration
+// register, set the given ring mode to NO_RING_MODE or RING_MODE.
+fn set_ring_mode(c: anytype, comptime mode: ring_mode) void {
+  @comptime_assert(
+       @is_arch("wse3")
+    or @is_arch("wse2")
+  );
+
+  const c_ty = @type_of(c);
+  const base_addr = if (@is_same_type(c_ty, reg_type))
+                      c
+                    else if (@is_arch("wse3"))
+                      get_switch_config_addr(c, ring_mode)
+                    else
+                      get_color_config_addr(c);
+  var r_switch_state = @get_config(base_addr);
+  r_switch_state &= @get_int(ring_mode.CLEAR_MASK);
+  r_switch_state |= @get_int(mode);
+  @set_config(base_addr, r_switch_state);
+}
+
+// For a given color `c` or a word address `c` of a color configuration
+// register, set the given pop mode `mode` after clearing the previous one.
+fn set_pop_mode(c: anytype, comptime mode: pop_mode) void {
+  const c_ty = @type_of(c);
+  const base_addr = if (@is_same_type(c_ty, reg_type))
+                      c
+                    else if (@is_arch("wse3"))
+                      get_switch_config_addr(c, pop_mode)
+                    else
+                      get_color_config_addr(c);
+  var r_switch_state = @get_config(base_addr);
+  r_switch_state &= @get_int(pop_mode.CLEAR_MASK);
+  r_switch_state |= @get_int(mode);
+  @set_config(base_addr, r_switch_state);
+}
+
+fn set_invalid_for_all_switch_positions(c: anytype) void {
+  const c_ty = @type_of(c);
+  const addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_switch_config_addr(c, pop_mode);
+  target.set_invalid_for_all_switch_positions(addr);
+}
+
+fn set_rx_switch_pos1(c: anytype, comptime dir: direction) void {
+  const c_ty = @type_of(c);
+  const switch_addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_switch_config_addr(c, pop_mode);
+  const color_addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_color_config_addr(c);
+  target.set_rx_switch_pos1(switch_addr, color_addr, dir);
+}
+
+fn set_tx_switch_pos1(c: anytype, comptime dir: direction) void {
+  const c_ty = @type_of(c);
+  const switch_addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_switch_config_addr(c, pop_mode);
+  const color_addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_color_config_addr(c);
+  target.set_tx_switch_pos1(switch_addr, color_addr, dir);
+}
+
+fn set_rxtx_switch_pos1(c: anytype, comptime dir_rx: direction, comptime dir_tx: direction) void {
+  @comptime_assert(@is_arch("wse3"));
+  const c_ty = @type_of(c);
+  const switch_addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_switch_config_addr(c, pop_mode);
+  const color_addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_color_config_addr(c);
+  target.set_rxtx_switch_pos1(switch_addr, color_addr, dir_rx, dir_tx);
+}
+
+fn set_rx_switch_pos2(c: anytype, comptime dir: direction) void {
+  const c_ty = @type_of(c);
+  const switch_addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_switch_config_addr(c, pop_mode);
+  const color_addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_color_config_addr(c);
+  target.set_rx_switch_pos2(switch_addr, color_addr, dir);
+}
+
+fn set_tx_switch_pos2(c: anytype, comptime dir: direction) void {
+  const c_ty = @type_of(c);
+  const switch_addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_switch_config_addr(c, pop_mode);
+  const color_addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_color_config_addr(c);
+  target.set_tx_switch_pos2(switch_addr, color_addr, dir);
+}
+
+fn set_rxtx_switch_pos2(c: anytype, comptime dir_rx: direction, comptime dir_tx: direction) void {
+  @comptime_assert(@is_arch("wse3"));
+  const c_ty = @type_of(c);
+  const switch_addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_switch_config_addr(c, pop_mode);
+  const color_addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_color_config_addr(c);
+  target.set_rxtx_switch_pos2(switch_addr, color_addr, dir_rx, dir_tx);
+}
+
+fn set_rx_switch_pos3(c: anytype, comptime dir: direction) void {
+  const c_ty = @type_of(c);
+  const switch_addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_switch_config_addr(c, pop_mode);
+  const color_addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_color_config_addr(c);
+  target.set_rx_switch_pos3(switch_addr, color_addr, dir);
+}
+
+fn set_tx_switch_pos3(c: anytype, comptime dir: direction) void {
+  const c_ty = @type_of(c);
+  const switch_addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_switch_config_addr(c, pop_mode);
+  const color_addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_color_config_addr(c);
+  target.set_tx_switch_pos3(switch_addr, color_addr, dir);
+}
+
+fn set_rxtx_switch_pos3(c: anytype, comptime dir_rx: direction, comptime dir_tx: direction) void {
+  @comptime_assert(@is_arch("wse3"));
+  const c_ty = @type_of(c);
+  const switch_addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_switch_config_addr(c, pop_mode);
+  const color_addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_color_config_addr(c);
+  target.set_rxtx_switch_pos3(switch_addr, color_addr, dir_rx, dir_tx);
+}
+
+fn set_current_switch_position(c: anytype, init_pos: u16) void {
+  const c_ty = @type_of(c);
+  const addr = if (@is_same_type(c_ty, reg_type))
+                 c
+               else
+                 get_switch_config_addr(c, switch_status);
+  target.set_current_switch_position(addr, init_pos);
+}
