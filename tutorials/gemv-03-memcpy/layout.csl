@@ -12,11 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-const memcpy = @import_module("<memcpy/get_params>", .{ .width = 1, .height = 1 });
+const memcpy = @import_module("<memcpy/get_params>", .{ .width = 2, .height = 2 });
 
 layout {
-  @set_rectangle(1, 1);
-  @set_tile_code(0, 0, "pe_program.csl", .{ .memcpy_params = memcpy.get_params(0) });
+  @set_rectangle(2, 2);
+  for (@range(u16, 2)) |i| {
+    for (@range(u16, 2)) |j| {
+      @set_tile_code(i, j, "pe_program.csl", .{ .memcpy_params = memcpy.get_params(i) });
+    }
+  }
 
   // export symbol names
   @export_name("A", [*]f32, true);
@@ -24,4 +28,5 @@ layout {
   @export_name("b", [*]f32, true);
   @export_name("y", [*]f32, false);
   @export_name("init_and_compute", fn()void);
+  @export_name("print_init", fn()void);
 }

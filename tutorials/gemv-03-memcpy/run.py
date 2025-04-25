@@ -27,14 +27,17 @@ parser.add_argument('--cmaddr', help="IP:port for CS system")
 args = parser.parse_args()
 
 # Matrix dimensions
-M = 4
-N = 6
+M = 2
+N = 2
 
 # Construct A, x, b
 A = np.arange(M*N, dtype=np.float32)
 x = np.full(shape=N, fill_value=1.0, dtype=np.float32)
 b = np.full(shape=M, fill_value=2.0, dtype=np.float32)
 
+print("A: ", A)
+print("x: ", x)
+print("b: ", b)
 # Calculate expected y
 y_expected = A.reshape(M,N)@x + b
 
@@ -51,14 +54,22 @@ y_symbol = runner.get_id('y')
 runner.load()
 runner.run()
 
+print("A", A)
+print("x", x)
+print("b", b)
+
 # Copy A, x, b to device
-runner.memcpy_h2d(A_symbol, A, 0, 0, 1, 1, M*N, streaming=False,
+x_copy = x.copy()
+b_copy = b.copy()
+A_copy = A.copy()
+
+# Copy A, x, b to device
+runner.memcpy_h2d(A_symbol, A_copy, 0, 0, 1, 1, M*N, streaming=False,
   order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
 runner.memcpy_h2d(x_symbol, x, 0, 0, 1, 1, N, streaming=False,
   order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
 runner.memcpy_h2d(b_symbol, b, 0, 0, 1, 1, M, streaming=False,
   order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
-
 # Launch the init_and_compute function on device
 runner.launch('init_and_compute', nonblock=False)
 
@@ -67,6 +78,26 @@ y_result = np.zeros([M], dtype=np.float32)
 runner.memcpy_d2h(y_result, y_symbol, 0, 0, 1, 1, M, streaming=False,
   order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
 
+print("A_copy: ", A_copy)
+print("x_copy: ", x_copy)
+print("b_copy: ", b_copy)
+# Copy A, x, b to device
+runner.memcpy_h2d(A_symbol, A_copy, 1, 1, 1, 1, M*N, streaming=False,
+  order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
+runner.memcpy_h2d(x_symbol, x_copy, 1, 1, 1, 1, N, streaming=False,
+  order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
+runner.memcpy_h2d(b_symbol, b_copy, 1, 1, 1, 1, M, streaming=False,
+  order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
+# Launch the init_and_compute function on device
+runner.launch('init_and_compute', nonblock=False)
+
+# Copy y back from device
+y_result2 = np.zeros([M], dtype=np.float32)
+runner.memcpy_d2h(y_result2, y_symbol, 1, 1, 1, 1, M, streaming=False,
+  order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
+
+print("y_result: ", y_result)
+print("y_result2: ", y_result2)
 # Stop the program
 runner.stop()
 
