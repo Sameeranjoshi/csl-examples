@@ -1,32 +1,16 @@
-# others
+
 import warnings
+from matplotlib import pyplot as plt
 from tabulate import tabulate
-# numpy
 import numpy as np
-from numpy import linalg as LA
-from numpy.testing import TestCase, assert_equal, assert_almost_equal, \
-    assert_array_almost_equal
-# scipy
 from scipy import sparse as sp
 import scipy.sparse.linalg as spla
-import scipy.sparse.linalg as spla
-from scipy.sparse import csr_matrix, coo_matrix, SparseEfficiencyWarning, isspmatrix_csr
-# pyamg
 import pyamg    # Maybe we need this, try if it's modular?
 import pyamg.relaxation.relaxation as pyamg_smoother
-from pyamg.gallery import poisson, load_example
-from pyamg.strength import classical_strength_of_connection
-from pyamg.classical import split
 from pyamg.classical.classical import ruge_stuben_solver
 from pyamg.aggregation.aggregation import smoothed_aggregation_solver
-from pyamg.classical.interpolate import direct_interpolation, \
-    classical_interpolation
-
-#others
-from cg import conjugateGradient
 from pyamg import smoothed_aggregation_solver, ruge_stuben_solver
 from scipy.sparse import random
-import matplotlib.pyplot as plt
 import math
 import utilities as ut
 from time_utils import OperatorTiming
@@ -158,45 +142,7 @@ def AMG_test(ml, setup_config, x_level, b_level, solver, max_level=10, max_coars
 # only V cycle, iterative version
 def AMG_only_solve(A_csr, b0, x0, tol, max_ite, max_levels, max_coarse, solver):
     """HAND WRITTEN AMG ALGORITHM FROM SC AMGT PAPER, MATRIX COMPUTATIONS BOOK AND WIKIPEDIA"""
-    # 1. setup
-    # 2. V cycle
-    # 3. return x, rho
-    
-    # # do some checks
-    # if not isspmatrix_csr(A_csr):
-    #     raise TypeError("Matrix A must be in CSR format")
-    # if A_csr.shape[0] != A_csr.shape[1]:
-    #     raise ValueError("Matrix A must be square")
-    # if A_csr.shape[0] != b0.shape[0]:
-    #     raise ValueError("Matrix A and vector b must have the same number of rows")
-    
-    # # 1. setup
-    # # copy along with type
-    # x = np.copy(x0)
-    # b = np.copy(b0)
-    # levels = []
-    
-    # levels[0].A = A_csr
 
-    # i = 0
-    # while len(levels) < max_levels and levels[i].A.shape[0] > max_coarse:
-    #     # If we are at level 0, set up initial values for x and b
-    #     if i == 0:
-    #         levels[i].x = x
-    #         levels[i].b = b
-
-    #     # Compute the interpolation matrix (prolongation operator)
-    #     levels[i].R = restriction(i, levels[i].A, splitting, C_F_splitting)
-    #     levels[i].P = levels[i].R.T
-    #     levels[i + 1].A = levels[i].R @ levels[i].A @ levels[i].P
-
-    #     # Move to the next level
-    #     i = i + 1
-
-    # # print levels
-    # print_table_shapes(levels)
-    
-    
     # Start as of now with the solve phase use setup from pyamg.
     ml, setup_config = smooth_aggregate_setup_only(A_csr, x0, b0, solver, max_levels, max_coarse)
     # visualize(ml)

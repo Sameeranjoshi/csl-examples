@@ -1,5 +1,3 @@
-import os
-import argparse
 import time
 from typing import Optional
 from pathlib import Path
@@ -7,27 +5,14 @@ import shutil
 import subprocess
 import random
 import numpy as np
-from scipy.sparse.linalg import eigs
 from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyDataType, MemcpyOrder # pylint: disable=no-name-in-module
 from cmd_parser import parse_args
-from util import (
-    hwl_2_oned_colmajor,
-    oned_to_hwl_colmajor,
-    laplacian,
-    csr_7_pt_stencil,
-)
-from cg import conjugateGradient
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 import pyamg
-import matplotlib.pyplot as plt
 import utilities as ut
-from dataclasses import dataclass
-import json
-from sklearn.datasets import make_sparse_spd_matrix
 import amg as amg 
 import copy
-import warnings
 
 from mapper_layouts.different_layouts import *
 import time_utils as time_ut
@@ -331,7 +316,6 @@ def generate_dynamic_layout(run_args, ml, layer_coordinates_map:Optional[dict]=N
   
   print("Precompile disabled, compiling based on problem size.")
   layout_command, fabric_dimensions = generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_cols, tot_level_minus_one, generated_layout_file, run_args)
-  # ut.visualize_layout_with_empty(fabric_dimensions, layer_coordinates_map, layer_param_map, total_pe_cols, total_pe_rows, filename)
   # ut.visualize_layout_with_empty_plotly(fabric_dimensions, layer_coordinates_map, layer_param_map, total_pe_cols, total_pe_rows, filename)
   print("############################################################")
   print("Generating blueprint layout with :\n")
@@ -417,20 +401,6 @@ def checkinput(A0, b0, x0, relative_tol, max_iterations):
   print(f"Residual setup-custom=solve-base||Ax - b||: {residualcustom}")
   print(f"Residual setup-custom=solve-custom ||Ax - b||: {residual_otheramg}")
   print(f"Residual scipy.cg ||Ax - b||: {residual_cg}, Iterations: {cg_iter}")
-
-def generate_input1(M, N):
-    # A0 = np.arange(M*N, dtype=np.float32).reshape(M, N)  # 2D
-    A0 = np.random.rand(M, N).astype(np.float32)  # Use random values to ensure positive definiteness  
-    A0 = np.dot(A0.T, A0) + 1e-6 * np.eye(A0.shape[1])
-  # ill condition number
-    lambda_reg = 1000  # Adjust this value as needed
-    A0 = A0 + lambda_reg * np.eye(A0.shape[0], dtype=A0.dtype)  
-    A0 = A0.astype(np.float32)
-  
-    x0 = np.full(shape=N*1, fill_value=1.0, dtype=np.float32)  # 1D
-  # b0 = np.zeros(shape=M*1, dtype=np.float32)
-    b0 = np.full(shape=M*1, fill_value=3.0,dtype=np.float32)
-    return A0,x0,b0
 
 def generate_input2(M, N, type=np.float32):  
     A = pyamg.gallery.poisson((M, N), dtype=type, format='csr')  # 2D
