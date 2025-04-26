@@ -2,14 +2,15 @@
 param memcpy_params: comptime_struct;
 param c2d_params: comptime_struct;
 param layer_params: comptime_struct;
-param reduce_params: comptime_struct;
-param fast_bcast_colors: [3]color;
 param pe_id_x: i16;
 param pe_id_y: i16;
-param bridge_down_color: color; 
-param bridge_up_color: color;
 param total_pe_cols: i16;
 param total_levels_count: i16;
+
+// bridge colors
+const bridge_down_color  : color         = @get_color(19);
+// const bridge_up_color    : color         = @get_color(18);
+
 
 const M: i16 = layer_params.M; // Height of local matrix, or num rows per PE
 const N: i16 = layer_params.N; // Width of local matrix, or num cols per PE
@@ -50,7 +51,6 @@ const recv_left_bnext_id: data_task_id = @get_data_task_id(bridge_down_color);
 const send_right_bnext_id: local_task_id = @get_local_task_id(24);
 const exit_task_id: local_task_id = @get_local_task_id(26);
 
-
 // Queue IDs
 const send_color_oq = @get_output_queue(1);
 const send_color_iq = @get_input_queue(1);
@@ -58,12 +58,7 @@ const send_color_iq = @get_input_queue(1);
 
 const math_lib = @import_module("<math>");
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
-// The default values of queue IDs and DSR IDs of collectives_2d are applied implicitly.
-// See mpi_x and mpi_y of gemm-collectives_2d/pe.csl for default values of queue and DSR IDs.
-// const mpi_x = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.x });
-// const mpi_y = @import_module("<collectives_2d/pe>", .{ .dim_params = c2d_params.y });
 const mpi_x = @import_module("../csl_source/csl-libs/collectives_2d/pe.csl", .{
-// const mpi_x = @import_module("<collectives_2d/pe>", .{
     .dim_params = c2d_params.x,
     .queues = [2]u16{2,4},
     .dest_dsr_ids = [1]u16{1},
@@ -71,7 +66,6 @@ const mpi_x = @import_module("../csl_source/csl-libs/collectives_2d/pe.csl", .{
     .src1_dsr_ids = [1]u16{1}
     });
 const mpi_y = @import_module("../csl_source/csl-libs/collectives_2d/pe.csl", .{ // MOdified CC.
-// const mpi_y = @import_module("<collectives_2d/pe>", .{
     .dim_params = c2d_params.y,
     .queues = [2]u16{3,5},
     .dest_dsr_ids = [1]u16{2},
@@ -79,34 +73,7 @@ const mpi_y = @import_module("../csl_source/csl-libs/collectives_2d/pe.csl", .{ 
     .src1_dsr_ids = [1]u16{2}
     });
 const simprint = @import_module("<simprint>", .{ .enable = true });
-const timestamp = @import_module("<time>");
-const reduce_mod = @import_module( "../../../../csl-libs/allreduce/pe.csl", @concat_structs(reduce_params, .{
-     .f_callback = f_trigger_state_machine,
-     .queues = [1]u16{1},
-     .dest_dsr_ids = [1]u16{1},
-     .src0_dsr_ids = [1]u16{1},
-     .src1_dsr_ids = [1]u16{1}
-     }));
 
-// FastCC
-// const modified_bcast_down_up = @import_module("../spatial-collectives/modules/modified_broadcast.csl", .{
-//   .color_1 = fast_bcast_colors[1], .pe_id = pe_id_y, .root_id = pe_id_x,
-//   .POS_DIR = SOUTH, .NEG_DIR = NORTH, .NUM_PES = layer_kernel_rows, .timestamp = timestamp}); // size = rows, 2 colors, north to south and south to north, start PE?
-// const modified_bcast_right_left = @import_module("../spatial-collectives/modules/modified_broadcast.csl", .{
-//   .color_1 = fast_bcast_colors[3], .pe_id = pe_id_x, .root_id = pe_id_y,
-//   .POS_DIR = EAST, .NEG_DIR = WEST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp}); // size = cols, 2 colors, east to west and west to east, start PE?
-// const broadcast_right = @import_module("../spatial-collectives/modules/unidirectional_broadcast.csl", .{.color_1 = fast_bcast_colors[3], .pe_id = pe_id_x, .root_id = pe_id_y, .POS_DIR = EAST, .NEG_DIR = WEST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
-// const broadcast_left = @import_module("../spatial-collectives/modules/unidirectional_broadcast.csl", .{.color_1 = fast_bcast_colors[4], .pe_id = pe_id_x, .root_id = pe_id_y, .POS_DIR = WEST, .NEG_DIR = EAST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
-// const chain_reduce_left = @import_module("../spatial-collectives/modules/reduce.csl", .{.color_1 = fast_bcast_colors[2], .color_2 = fast_bcast_colors[3], .pe_id = pe_id_x, .root_id = pe_id_y, .POS_DIR = EAST, .NEG_DIR = WEST, .NUM_PES = layer_kernel_cols, .step = 1, .algo = 0, .timestamp = timestamp});
-// const upper_traingular_chain_reduce = @import_module("../spatial-collectives/modules/upper_tri_reduce.csl", .{
-//   .color_1 = fast_bcast_colors[2], .color_2 = fast_bcast_colors[3], .pe_id = pe_id_x, .root_id = pe_id_y, 
-//   .POS_DIR = EAST, .NEG_DIR = WEST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
-// const lower_traingular_chain_reduce = @import_module("../spatial-collectives/modules/lower_tri_reduce.csl", .{
-//   .color_1 = fast_bcast_colors[4], .color_2 = fast_bcast_colors[5], .pe_id = pe_id_x, .root_id = pe_id_y, 
-//   .POS_DIR = WEST, .NEG_DIR = EAST, .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
-// const star_modified_right = @import_module("../spatial-collectives/modules/modified_star.csl", .{
-//   .color_1 = fast_bcast_colors[6], .pe_id = pe_id_x, .root_id = pe_id_y, .POS_DIR = EAST, .NEG_DIR = WEST, 
-//   .NUM_PES = layer_kernel_cols, .timestamp = timestamp});
 
 
 //x, b, A, R will be partitioned using 2D Block decomposition.
@@ -139,19 +106,6 @@ var b_next = @zeros([R_M_local]f32);  // rightmost Column
 var dsd_b_next = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> b_next[i] });
 
 
-// Timing variables
-// time_buf_f32[0:2] = {tscStartBuffer, tscEndBuffer}
-var time_buf_f32 = @zeros([3]f32);
-var time_ref_f32 = @zeros([3]f32);
-var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
-var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
-
-// After other timing variables, add new ones for MPI communication
-var communication_time_buf = @zeros([6]f32);  // Store start/end times for MPI operations
-var communication_tsc_start = @zeros([timestamp.tsc_size_words]u16);
-var communication_tsc_end = @zeros([timestamp.tsc_size_words]u16);
-var ptr_communication_time: [*]f32 = &communication_time_buf;
-
 // DSDs
 var dsd_A_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*@as(i16, N_local)] }); // 1 col of A_tile
 var dsd_A_diag = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> A_tile[i*N_local + i] });
@@ -179,8 +133,7 @@ var ptr_x_coarse : [*]f32 = &x_coarse;
 var ptr_b_next : [*]f32 = &b_next;
 var ptr_omega: [*]f32 = &omega;
 var ptr_iter: [*]i32 = &iterations;
-var ptr_time_memcpy: [*]f32 = &time_buf_f32;
-var ptr_time_ref: [*]f32 = &time_ref_f32;
+
 
 // temp variables
 // Updated at runtime to store x and y IDs of PE reported by collectives library
@@ -190,82 +143,6 @@ var is_v_cycle_up: bool = false;
 var v_cycle_iteration: i32 = 0;
 var cur_state: i16 = 0;// State tracking variables
 var next_state: i16 = 0;
-
-// dummy
-const Nx = 2;
-var x = @constants([Nx]f32, @as(f32, 10.0));
-var x_ptr: [*]f32 = &x;
-
-// timing
-fn f_enable_timer() void {
-    timestamp.enable_tsc();
-    // the user must unblock cmd color for every PE
-    sys_mod.unblock_cmd_stream();
-}
-
-fn f_tic() void {
-    timestamp.get_timestamp(&tscStartBuffer);
-
-    // the user must unblock cmd color for every PE
-    sys_mod.unblock_cmd_stream();
-}
-
-fn f_toc() void {
-    timestamp.get_timestamp(&tscEndBuffer);
-
-    // the user must unblock cmd color for every PE
-    sys_mod.unblock_cmd_stream();
-}
-
-fn f_memcpy_timestamps() void {
-    // time_buf_f32[0] = {tscStartBuffer[1], tscStartBuffer[0]}
-    // time_buf_f32[1] = {tscEndBuffer[0], tscStartBuffer[2]}
-    // time_buf_f32[2] = {tscEndBuffer[2], tscEndBuffer[1]}
-    var lo_ : u16 = 0;
-    var hi_ : u16 = 0;
-    var word : u32 = 0;
-
-    lo_ = tscStartBuffer[0];
-    hi_ = tscStartBuffer[1];
-    time_buf_f32[0] = @bitcast(f32, (@as(u32,hi_) << @as(u16,16)) | @as(u32, lo_) );
-
-    lo_ = tscStartBuffer[2];
-    hi_ = tscEndBuffer[0];
-    time_buf_f32[1] = @bitcast(f32, (@as(u32,hi_) << @as(u16,16)) | @as(u32, lo_) );
-
-    lo_ = tscEndBuffer[1];
-    hi_ = tscEndBuffer[2];
-    time_buf_f32[2] = @bitcast(f32, (@as(u32,hi_) << @as(u16,16)) | @as(u32, lo_) );
-
-    // the user must unblock cmd color for every PE
-    sys_mod.unblock_cmd_stream();
-}
-
-
-fn f_sync() void {
-    cur_state = STATE_SYNC;
-    @activate(STATE_MACHINE);
-    sys_mod.unblock_cmd_stream();
-}
-
-fn f_reference_timestamps() void {
-    // time_ref_f32[0] = {tscRefBuffer[1], tscRefBuffer[0]}
-    // // time_ref_f32[1] = {0, tscRefBuffer[2]}
-    var lo_ : u16 = 0;
-    var hi_ : u16 = 0;
-
-    lo_ = reduce_mod.tscRefBuffer[0];
-    hi_ = reduce_mod.tscRefBuffer[1];
-    time_ref_f32[0] = @bitcast(f32, (@as(u32,hi_) << @as(u16,16)) | @as(u32, lo_) );
-
-    lo_ = reduce_mod.tscRefBuffer[2];
-    hi_ = 0;
-    time_ref_f32[1] = @bitcast(f32, (@as(u32,hi_) << @as(u16,16)) | @as(u32, lo_) );
-
-    // the user must unblock cmd color for every PE
-    sys_mod.unblock_cmd_stream();
-}
-
 
 fn matvec(N_tile: i16, dsd_mv_tile: mem1d_dsd, dsd_matrix_tile: mem1d_dsd, vector_tile_data: [*]const f32) void {
   @fmovs(dsd_mv_tile, 0.0); // Initialize result to 0
@@ -320,53 +197,45 @@ fn residual_local() void {
   matvec(N_local, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax = A_tile * x_tile
 }
 
-fn printdsd(val: f32) void {
-  simprint.fmt_with_coords("yourdsd_name[i] = {f}", .{ val });
-}
 
 fn inverse_callback(val: f32) f32 {
   return if (val != 0.0) math_lib.inv(val) else 0.0;
 }
 
 fn initialize() void {
-  simprint.fmt_with_coords("px and py {d}, {d}", .{ @as(u32, px), @as(u32, py) });
   if (px == py) {
     // now D_inv, is 1/A_tile for px==py and bcast to other PEs.
     @map(inverse_callback, dsd_A_diag, dsd_D_inv);
   }
-  // cur_state = next_state; // This is set by the f_state function.
+  cur_state = next_state; // This is set by the f_state function.
+  mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, STATE_MACHINE);
 
-  mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, exit_task_id);
-  // FastCC
-  // broadcast_right.transfer_data(&D_inv, M_local, &communication_tsc_start, &communication_tsc_end);
-  // broadcast_left.transfer_data(&D_inv, M_local, &communication_tsc_start, &communication_tsc_end);
-  // modified_bcast_right_left.transfer_data(&D_inv, M_local, &communication_tsc_start, &communication_tsc_end);
 }
 
 fn layout_print(runtime_layer_index: u32) void {
-  // if (runtime_layer_index == @as(u32, layer_index)) {
-  //   simprint.fmt_with_coords("layout_print layer index: {d}", .{@as(u32, layer_index)});
-  //   // print x_tile
-  //   for (x_tile) |val, i| {
-  //     simprint.fmt_with_coords("x_tile[{d}] = {f}", .{ i, val });
-  //   }
-  //   // A_tile
-  //   for (A_tile) |val, i| {
-  //     simprint.fmt_with_coords("A_tile[{d}] = {f}", .{ i, val });
-  //   }
-  //   // b_tile
-  //   for (b_tile) |val, i| {
-  //     simprint.fmt_with_coords("b_tile[{d}] = {f}", .{ i, val });
-  //   }
-  //   // R_tile 
-  //   for (R_tile) |val, i| {
-  //     simprint.fmt_with_coords("R_tile[{d}] = {f}", .{ i, val });
-  //   }
-  //   // b_next
-  //   for (b_next) |val, i| {
-  //     simprint.fmt_with_coords("b_next[{d}] = {f}", .{ i, val });
-  //   }
-  // }
+  if (runtime_layer_index == @as(u32, layer_index)) {
+    simprint.fmt_with_coords("layout_print layer index: {d}", .{@as(u32, layer_index)});
+    // print x_tile
+    for (x_tile) |val, i| {
+      simprint.fmt_with_coords("x_tile[{d}] = {f}", .{ i, val });
+    }
+    // A_tile
+    for (A_tile) |val, i| {
+      simprint.fmt_with_coords("A_tile[{d}] = {f}", .{ i, val });
+    }
+    // b_tile
+    for (b_tile) |val, i| {
+      simprint.fmt_with_coords("b_tile[{d}] = {f}", .{ i, val });
+    }
+    // R_tile 
+    for (R_tile) |val, i| {
+      simprint.fmt_with_coords("R_tile[{d}] = {f}", .{ i, val });
+    }
+    // b_next
+    for (b_next) |val, i| {
+      simprint.fmt_with_coords("b_next[{d}] = {f}", .{ i, val });
+    }
+  }
   sys_mod.unblock_cmd_stream();
 }
 
@@ -483,26 +352,33 @@ task recv_left_bnext(wavelet_data: f32) void {
   num_recv_bnext += 1;
   if (num_recv_bnext == R_M_local) {
     simprint.fmt_with_coords("recv_left_bnext layer_index={d} fully received", .{ @as(u32, layer_index) });
-    // We got all the data from previous layer.
-    // now bcast to all PEs and then compute.
-    @unblock(STATE_MACHINE);
-    @activate(STATE_MACHINE);
-    v_cycle_down(1);
-    // mpi_x.broadcast(px, @ptrcast([*]u32, &b_next), R_M_local, exit_task_id);
+
+    // init_params();
+    cur_state = STATE_INIT;
+    if (layer_index == 1) {
+      // print px and py
+      simprint.fmt_with_coords("recv_left_bnext layer_index={d} px={d} py={d}", .{ @as(u32, layer_index), @as(u32, px), @as(u32, py) });
+      @unblock(STATE_MACHINE);
+    }
+    // mpi_x.broadcast(px, @ptrcast([*]u32, &b_next), R_M_local, STATE_MACHINE);
+    // do next step.
+
     
   }
 }
 
 task send_done() void {
   simprint.fmt_with_coords("send done {d}", .{ @as(u32, layer_index) });
+  cur_state = STATE_EXIT;
+  // f_trigger_state_machine();
   // @unblock(exit_task_id);
-  sys_mod.unblock_cmd_stream(); 
+  // sys_mod.unblock_cmd_stream(); 
 }
 
 task recv_done() void {
   simprint.fmt_with_coords("recv done {d}", .{ @as(u32, layer_index) });
-  // @activate(exit_task_id);
-  sys_mod.unblock_cmd_stream();
+  cur_state = STATE_EXIT;
+  // f_trigger_state_machine();
 }
 
 
@@ -513,17 +389,12 @@ task done_task() void {
 // Exit task
 task exit_task() void {
   simprint.fmt_with_coords("exit_task {d}", .{ @as(u32, layer_index) });
-  sys_mod.unblock_cmd_stream();
+  // sys_mod.unblock_cmd_stream();
 }
 
 // State machine task
 task f_state() void {
-  if (STATE_SYNC == cur_state) {
-    simprint.print_string("STATE_SYNC\n");
-    next_state = STATE_EXIT;
-    reduce_mod.allreduce(1, &dot, reduce_mod.TYPE_BINARY_OP.ADD); // 1 = Row reduction
-    // sys_mod.unblock_cmd_stream();
-  } else if (STATE_INIT == cur_state) {
+ if (STATE_INIT == cur_state) {
     simprint.fmt_with_coords("STATE_INIT, layer_index={d}", .{ @as(u32, layer_index) });
     next_state = STATE_COMPUTE_JACOBI;
     initialize();
@@ -564,15 +435,15 @@ task f_state() void {
 
   } else if (STATE_COMPUTE_RESTRICTION == cur_state) {
     simprint.print_string("STATE_COMPUTE_RESTRICTION\n");
-    if (is_rectangle_last_column()) {
-      next_state = STATE_EXIT;
-    } else {
+    if (layer_send_column()) {
       next_state = STATE_SEND_DATA;
+    } else {
+      next_state = STATE_EXIT;
     }
     compute_restriction();
 
   } else if (STATE_SEND_DATA == cur_state) {
-    simprint.print_string("STATE_SEND_DATA\n");
+    simprint.fmt_with_coords("STATE_SEND_DATA, layer_index={d}, px={d}, py={d}", .{ @as(u32, layer_index), @as(u32, px), @as(u32, py) });
     // next_state = STATE_EXIT;
     @activate(send_right_bnext_id);
     // @activate(exit_task_id);
@@ -623,72 +494,16 @@ fn v_cycle_down_function() void {
   }
 }
 
-// // Entrypoint into kernel
-// fn v_cycle_down(runtime_layer_index: i16) void {
-//   init_params();
-
-//  //  ----------------------
-//     // upper_traingular_chain_reduce.transfer_data(&x, Nx, &communication_tsc_start); // Won't call STATE_MACHINE
-//     // lower_traingular_chain_reduce.transfer_data(&x, Nx, &communication_tsc_start);
-//     // if (Nx > 1) star_modified_right.transfer_data(&x, Nx, DONE, &communication_tsc_start) else star_modified_right.transfer_data_scalar(&x, Nx, DONE, &communication_tsc_start);
-//     // for (x) |val, i| {
-//     //   simprint.fmt_with_coords("x_after_star[] = {f}", .{ val });
-//     // }
-//   if (0 == layer_index) { // first layer.
-//     simprint.fmt_with_coords("v_cycle_down(Layer={d})", .{@as(u32, layer_index)});
-//     // The iterations will always be greater than 0, ensured in run_amg.py
-
-//     // start computation.
-//     // v_cycle_down_function();
-//     // if (is_rectangle_last_column()) {
-//     //   next_state = STATE_EXIT;
-//     //   @activate(STATE_MACHINE);
-//     // } else if (is_layer_last_column()) {
-//     //   @activate(send_right_bnext_id);
-//     // }
-
-//     cur_state = STATE_INIT; 
-//     @activate(STATE_MACHINE);
-
-//   }
-// }
-
 // Entrypoint into kernel
-fn v_cycle_down(runtime_layer_index: i16) void {
-  if (runtime_layer_index == @as(i16, layer_index)) {
-    init_params();
-    v_cycle_down_function();
-    // @activate(STATE_MACHINE);
-  }
-
-  // if (runtime_layer_index == @as(i16, layer_index)) {
-  //   init_params();
-  //   // The iterations will always be greater than 0, ensured in run_amg.py
-  //   cur_state = STATE_INIT;
-  //   @unblock(STATE_MACHINE);
-  // }
-  // sys_mod.unblock_cmd_stream();
-}
-
-// V-cycle up function
-fn v_cycle_up(runtime_layer_index: u32) void {
-  if (runtime_layer_index == @as(u32, layer_index)) {
-    simprint.fmt_with_coords("v_cycle_up with runtime_layer_index = {d}\n", .{runtime_layer_index});
-    // set a global boolean flag to true.
-    is_v_cycle_up = true;
-    iter_count = 0; // reset iter_count    
-    cur_state = STATE_PROLONGATION;
-    @activate(STATE_MACHINE);
-  // } else {
-  //   // cur_state = STATE_EXIT;
-  //   // @activate(STATE_MACHINE);
-  //   no_op();
+fn v_cycle_down() void {
+  init_params();
+  cur_state = STATE_INIT;
+  @activate(STATE_MACHINE);
+  @block(STATE_MACHINE);
+  if (layer_index == 0) {
+    @unblock(STATE_MACHINE);
   }
   // sys_mod.unblock_cmd_stream();
-  // else{
-  //   cur_state = STATE_EXIT;
-  //   @activate(STATE_MACHINE);
-  // }
 }
 
 
@@ -719,41 +534,10 @@ comptime {
   @export_symbol(ptr_omega, "omega");
   @export_symbol(ptr_iter, "iterations");
   @export_symbol(v_cycle_down);
-  @export_symbol(v_cycle_up);
   @export_symbol(layout_print); // prints layout of A
 
-  // timing
-  @export_symbol(ptr_time_memcpy, "time_memcpy");
-  @export_symbol(ptr_time_ref, "time_ref");
-  @export_symbol(ptr_communication_time, "communication_time");
-  @export_symbol(f_enable_timer);
-  @export_symbol(f_tic);
-  @export_symbol(f_toc);
-  @export_symbol(f_memcpy_timestamps);
-  @export_symbol(f_sync);
-  @export_symbol(f_reference_timestamps);
-
-  // spatial collectives
-  // modified_bcast_down_up.configure_network();  
-  // // modified_bcast_right_left.configure_network();
-  // // broadcast_right.configure_network();
-  // // broadcast_left.configure_network();
-  // star_modified_right.configure_network();
-  // upper_traingular_chain_reduce.configure_network();
-  // lower_traingular_chain_reduce.configure_network();
   configure_dataflow_bridge();
 
-}
-
-// Helper functions for MPI timing
-fn communication_tic() void {
-    timestamp.get_timestamp(&communication_tsc_start);
-    sys_mod.unblock_cmd_stream();
-}
-
-fn communication_toc() void {
-    timestamp.get_timestamp(&communication_tsc_end);
-    sys_mod.unblock_cmd_stream();
 }
 
 fn is_layer_last_column() bool {
@@ -772,22 +556,29 @@ fn is_rectangle_first_column() bool {
   return pe_id_x == 0;
 }
 
-fn is_last_column() bool {
-  return pe_id_x == (layer_end_x - 1) and pe_id_x != total_pe_cols - 1;
+fn layer_send_column() bool {
+  return is_layer_last_column() and !is_rectangle_last_column();
 }
 
-fn is_first_column() bool {
-  return pe_id_x == layer_start_x and pe_id_x != 0;
+fn layer_recv_column() bool {
+  return is_layer_first_column() and !is_rectangle_first_column();
+}
+
+fn layer_middle_column() bool {
+  return !is_layer_first_column() and !is_layer_last_column();
 }
 
 fn configure_dataflow_bridge() void {
   // For the end of the layer (right side)
-  if (is_layer_last_column() and (!is_rectangle_last_column())) {
+  if (layer_send_column()) {
       // Configure this PE to receive from RAMP and send EAST
       @set_local_color_config(bridge_down_color, .{.routes = .{ .rx = .{RAMP}, .tx = .{EAST}  }});  
       // @set_local_color_config(bridge_up_color, .{.routes = .{ .rx = .{EAST}, .tx = .{RAMP}  }});  
-  } else if (is_layer_first_column() and (!is_rectangle_first_column())) {
+  } else if (layer_recv_column()) {
       @set_local_color_config(bridge_down_color, .{.routes = .{ .rx = .{WEST}, .tx = .{RAMP}  }});  
       // @set_local_color_config(bridge_up_color, .{.routes = .{ .rx = .{RAMP}, .tx = .{WEST}  }});  
+  } else if (layer_middle_column()) {
+      @set_local_color_config(bridge_down_color, .{.routes = .{ .rx = .{WEST}, .tx = .{EAST, RAMP}  }});  
+      // @set_local_color_config(bridge_up_color, .{.routes = .{ .rx = .{EAST}, .tx = .{RAMP}  }});  
   }
 }

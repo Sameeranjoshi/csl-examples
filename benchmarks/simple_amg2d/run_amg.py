@@ -442,8 +442,8 @@ def host_calculations(v_cycle_data):
             b_coarse_layer, x_coarse_layer, operator_timing = amg.each_layer_solver_down(level, x_level, b_level, ml, setup_config, i, hostprofiling)
             b_level[i + 1] = b_coarse_layer
             x_level[i + 1] = x_coarse_layer
-            print("DOWN PHASE\n")
-            amg.debugprint(ml.levels, b_level, x_level)
+            # print("DOWN PHASE\n")
+            # amg.debugprint(ml.levels, b_level, x_level)
         
         # V coarse
         b_coarsest = b_level[-1]
@@ -460,8 +460,8 @@ def host_calculations(v_cycle_data):
             x_lower_level = x_level[i+1]
             x_current_updated, operator_timing = amg.each_layer_solver_up(level, x_level, b_level, ml, setup_config, i, x_lower_level, hostprofiling)
             x_level[i] = x_current_updated
-            print("UP PHASE\n")
-            amg.debugprint(ml.levels, b_level, x_level)
+            # print("UP PHASE\n")
+            # amg.debugprint(ml.levels, b_level, x_level)
 
         # Check convergence
         residual = b_level[0] - ml.levels[0].A @ x_level[0]
@@ -947,10 +947,7 @@ def device_calculations_dataflow(v_cycle_data):
         'b_next': simulator.get_id("b_next"),
         'x_coarse': simulator.get_id("x_coarse"),
         'omega': simulator.get_id("omega"),
-        'iterations': simulator.get_id("iterations"),
-        'time_memcpy': simulator.get_id("time_memcpy"),
-        'time_ref': simulator.get_id("time_ref"),
-        'communication_time': simulator.get_id("communication_time")
+        'iterations': simulator.get_id("iterations")
     }
     iteration = 0
     residual = float('inf')
@@ -964,7 +961,7 @@ def device_calculations_dataflow(v_cycle_data):
     ############################################################    
     # Initialize device profiler
     deviceprofiling = time_ut.DeviceProfiling()
-    hardwareTimer = HardwareTimerManager(simulator) # enable_timer, sync
+    # hardwareTimer = HardwareTimerManager(simulator) # enable_timer, sync
     
     while iteration < max_iterations and residual > tol:
         print(f"\n{'='*40}\n│ ITERATION {iteration}\n{'='*40}")
@@ -976,42 +973,28 @@ def device_calculations_dataflow(v_cycle_data):
             
             copy_layer_on_device(
                 simple_memcpy, simulator, symbols, level_index, ml.levels[level_index],
-                layer_coordinates_map[level_index], x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer
+                layer_coordinates_map[level_index], x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer=None
             )
             # check the data.
             # simulator.launch("layout_print", np.uint32(level_index), nonblock=False)
-        
-        # timer
-        print("Step 3: Timer Start")
-        hardwareTimer.start()
-        # Compute
         print("Step 4: Compute")
-        simulator.launch("v_cycle_down", np.int16(0), nonblock=False)
-        # timer
-        print("Step 5: Timer Stop")
-        hardwareTimer.stop()
+        # simulator.launch("layout_print", np.uint32(level_index), nonblock=False)
+        simulator.launch("v_cycle_down", nonblock=False)
                 
         amg.debugprint(ml.levels, b_level, x_level)
         
-        
-        # # Coarse solve
-        # x_level[-1] = perform_coarse_solve(ml.levels[-1], x_level, b_level, solver_callable_host)
-        
-        # # Upward passes
-        # for level_index in reversed(range(len(ml.levels) - 1)):
-        #     # Set context before operation
-        #     deviceprofiling.add_other_info(iteration, level_index, "up")
-            
-        #     x_new = perform_upward_pass(
-        #         simple_memcpy, simulator, symbols, level_index, ml.levels[level_index],
-        #         layer_coordinates_map[level_index], x_level, b_level, setup_config, iteration, deviceprofiling
-        #     )
-        #     x_level[level_index] = x_new
+        # D2H transfers
+        print("Step 6: D2H Transfers")
+        coarse_level = ml.levels[len(ml.levels)-1]
+        b_coarse_shape = coarse_level.A.shape[0]
+        b_coarse_device = np.zeros(total_pe_rows*b_coarse_shape, dtype=np.float32)
+        simple_memcpy.do_memcpy_d2h(b_coarse_device, symbols['b_next'], total_pe_cols-1, 0, 1, total_pe_rows, b_coarse_shape*1) # copy from symbol into result.
+        print(f"b_coarse_device: {b_coarse_device}")
         
         # Check convergence
-        residual = np.linalg.norm(ml.levels[0].A @ x_level[0] - b_level[0])
-        print(f"\n{'='*40}\n│ ITERATION {iteration} SUMMARY\n{'='*40}\nResidual: {residual:.6e}, tol: {tol:.6e}" + ("\nConvergence achieved!" if residual <= tol else "") + f"\n{'='*40}\n")
-        amg.debugprint(ml.levels, b_level, x_level)
+        # residual = np.linalg.norm(ml.levels[0].A @ x_level[0] - b_level[0])
+        # print(f"\n{'='*40}\n│ ITERATION {iteration} SUMMARY\n{'='*40}\nResidual: {residual:.6e}, tol: {tol:.6e}" + ("\nConvergence achieved!" if residual <= tol else "") + f"\n{'='*40}\n")
+        # amg.debugprint(ml.levels, b_level, x_level)
         iteration += 1
 
     # Print timing summary before cleanup

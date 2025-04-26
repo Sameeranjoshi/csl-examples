@@ -180,15 +180,6 @@ param total_levels: i16; // = {num_layers};     // number of levels in the AMG h
 
 # ─── STATIC IMPORTS & CONSTS ─────────────────────────────────────────────────
 STATIC_IMPORTS = textwrap.dedent("""\
-// SYNC MODULE
-const C0                  : color         = @get_color(0);
-const fast_bcast_c1       : color         = @get_color(1);
-const fast_bcast_c2       : color         = @get_color(2);
-const fast_bcast_c3       : color         = @get_color(3);
-//const fast_bcast_c4       : color         = @get_color(4);
-//const fast_bcast_c5       : color         = @get_color(18);
-//const fast_bcast_c6       : color         = @get_color(19);
-//const fast_bcast_c7       : color         = @get_color(20);
 
 // collective module colors
 const collective_x_color_right : color   = @get_color(5);
@@ -196,15 +187,6 @@ const collective_x_color_left  : color   = @get_color(6);
 const collective_y_color_down  : color   = @get_color(7);
 const collective_y_color_up    : color   = @get_color(8);
 
-// bridge colors
-const bridge_down_color  : color         = @get_color(19);
-const bridge_up_color    : color         = @get_color(18);
-
-// entrypoints of sync module
-const EN_REDUCE_1        : local_task_id = @get_local_task_id(9);
-const EN_REDUCE_2        : local_task_id = @get_local_task_id(10);
-const EN_REDUCE_3        : local_task_id = @get_local_task_id(11);
-const EN_REDUCE_4        : local_task_id = @get_local_task_id(12);
 
 // collective module entrypoints
 const C2D_X_ENTRYPOINT_0 : local_task_id = @get_local_task_id(13);
@@ -215,21 +197,11 @@ const C2D_Y_ENTRYPOINT_1 : local_task_id = @get_local_task_id(16);
 // layer task ID
 const STATE_MACHINE      : local_task_id = @get_local_task_id(17);
 
-// import modules
-const reduce_module = @import_module("../../csl-libs/allreduce/layout.csl", .{
-    .colors      = [1]color{C0},
-    .entrypoints = [4]local_task_id{EN_REDUCE_1, EN_REDUCE_2, EN_REDUCE_3, EN_REDUCE_4},
-    .width       = total_pe_cols,
-    .height      = total_pe_rows
-});
-
 const memcpy = @import_module("<memcpy/get_params>", .{
     .width  = total_pe_cols,
     .height = total_pe_rows
 });
-
 const c2d = @import_module("./libraries/csl_source/csl-libs/collectives_2d/params.csl");
-
 const c2d_struct = .{
     .x_colors       = .{collective_x_color_left, collective_x_color_right},
     .y_colors       = .{collective_y_color_down,  collective_y_color_up},
@@ -244,7 +216,6 @@ LAYOUT_TEMPLATE = textwrap.dedent("""\
 layout {{
     // step 1: configure the processing rectangle
     @set_rectangle(total_pe_cols, total_pe_rows);
-    var pe_has_code = @zeros([total_pe_rows * total_pe_cols]i16);
 
     var idx: i16 = 0;
     while (idx < total_levels) : (idx += 1) {{
@@ -297,43 +268,22 @@ layout {{
             var py: i16 = layer_start_y;
             const memcpy_params = memcpy.get_params(px);
             while (py < layer_end_y) : (py += 1) {{
-                const reduce_params = reduce_module.get_params(px, py);
                 const c2d_params    = c2d.get_params(px, py, c2d_struct, current_layer_params);
 
                 var params: comptime_struct = .{{ 
                     .memcpy_params     = memcpy_params,
                     .c2d_params        = c2d_params,
                     .layer_params      = current_layer_params,
-                    .reduce_params     = reduce_params,
-                    .fast_bcast_colors = [3]color{{fast_bcast_c1, fast_bcast_c2, fast_bcast_c3}},
                     .pe_id_x           = px,
                     .pe_id_y           = py,
-                    .bridge_down_color = bridge_down_color,
-                    .bridge_up_color   = bridge_up_color,
                     .total_pe_cols     = total_pe_cols,
                     .total_levels_count = total_levels,
                 }};
                 @set_tile_code(px, py, "./libraries/single_layer/single_layer_pe.csl", params);
-                // empty tiles indexing.
-                // var oned_index:i16 = py + px * total_pe_rows;
-                // pe_has_code[oned_index] = 1;
             }}
         }}
     }}
 
-    // fill leftover PEs with empty.csl
-    // var px: i16 = 0;
-    // while (px < total_pe_cols) : (px += 1) {{
-    //     var py: i16 = 0;
-    //     while (py < total_pe_rows) : (py += 1) {{
-    //        var idx1d: i16 = py + px * total_pe_rows;
-    //        if (pe_has_code[idx1d] == 0) {{
-    //            const memcpy_params = memcpy.get_params(px);
-    //            @set_tile_code(px, py, "empty.csl", .{{ .memcpy_params = memcpy_params }});
-    //        }}
-    //     }}
-    // }}
-  
     // export symbol names
     @export_name("A", [*]f32, true);
     @export_name("R", [*]f32, true);
@@ -341,23 +291,12 @@ layout {{
     @export_name("x", [*]f32, true);
     @export_name("x_coarse", [*]f32, true);
     @export_name("b", [*]f32, true);
-    @export_name("v_cycle_down", fn(i16)void);
-    @export_name("v_cycle_up", fn(u32)void);
+    @export_name("v_cycle_down", fn()void);
     @export_name("b_next", [*]f32, true);
     @export_name("omega", [*]f32, true);
     @export_name("iterations", [*]i32, true);
     @export_name("layout_print", fn(u32)void);
 
-    // timing
-    @export_name("time_memcpy", [*]f32, true);
-    @export_name("time_ref", [*]f32, true);
-    @export_name("communication_time", [*]f32, true);
-    @export_name("f_enable_timer", fn()void);
-    @export_name("f_tic", fn()void);
-    @export_name("f_toc", fn()void);
-    @export_name("f_memcpy_timestamps", fn()void);
-    @export_name("f_sync", fn()void);
-    @export_name("f_reference_timestamps", fn()void);    
 }}  // end layout
 """)
 
