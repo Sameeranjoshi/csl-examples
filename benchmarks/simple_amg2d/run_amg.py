@@ -658,7 +658,8 @@ def copy_layer_on_device(simple_memcpy, simulator,symbols, level_index, level, c
     simple_memcpy.do_memcpy_h2d_bcast(symbols['x'], x_transformed, px, py, w, h, per_pe_cols*1, is_rowbcast=False)
     # Only first layer has b0
     if (level_index == 0):
-        simple_memcpy.do_memcpy_h2d_bcast(symbols['b'], b_transformed, px, py, w, h, per_pe_rows*1, is_rowbcast=True)
+        # simple_memcpy.do_memcpy_h2d_bcast(symbols['b'], b_transformed, px, py, w, h, per_pe_rows*1, is_rowbcast=True)
+        simple_memcpy.do_memcpy_h2d(symbols['b'], b_transformed, px, py, 1, h, per_pe_rows*1)
     simple_memcpy.do_memcpy_h2d(symbols['omega'], omega, px, py, w, h, 1)
     simple_memcpy.do_memcpy_h2d(symbols['iterations'], iterations, px, py, w, h, 1)
     h2d_time = time.time() - start_time
@@ -1174,8 +1175,8 @@ def main():
   print("############################################################")
   print("# INPUT DATA")
   print("############################################################")
-  N = 7
-  M = 7
+  N = 4
+  M = 4
   eps = 1.e-5
   max_iterations = 1
     

@@ -43,16 +43,19 @@ const STATE_BCAST_PROLONGATION: i16 = 12;
 const STATE_SEND_DATA: i16 = 13;
 const STATE_RECV_DATA: i16 = 14;
 const STATE_CHANGE_LAYERS: i16 = 15;
-
+const STATE_PRINT: i16 = 16;
 const send_done_id: local_task_id = @get_local_task_id(4);
 const recv_done_id: local_task_id = @get_local_task_id(20);
 const recv_left_bnext_id: data_task_id = @get_data_task_id(bridge_send_color);
+const recv_b_tile_id: data_task_id = @get_data_task_id(bcast_color);
 const send_right_bnext_id: local_task_id = @get_local_task_id(24);
 const exit_task_id: local_task_id = @get_local_task_id(26);
 
 // Queue IDs
 const send_color_oq = @get_output_queue(1);
 const send_color_iq = @get_input_queue(1);
+const send_bcast_oq = @get_output_queue(0);
+const send_bcast_iq = @get_input_queue(0);
 
 
 const math_lib = @import_module("<math>");
@@ -202,19 +205,24 @@ fn inverse_callback(val: f32) f32 {
 }
 
 fn initialize() void {
+    // print D_inv before broadcast
+  if (py == 0 and px == 1) {
+    for (D_inv) |val, i| {
+      simprint.fmt_with_coords("D_inv_before_broadcast[{d}] = {f}", .{ i, @as(f32, val) });
+    }
+  }
+  cur_state = next_state; // This is set by the f_state function.
   if (px == py) {
-    simprint.fmt_with_coords("initialize layer_index={d} px={d} py={d}", .{ @as(u32, layer_index), @as(u32, px), @as(u32, py) });
     // now D_inv, is 1/A_tile for px==py and bcast to other PEs.
     @map(inverse_callback, dsd_A_diag, dsd_D_inv);
   }
-  cur_state = next_state; // This is set by the f_state function.
   mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, STATE_MACHINE);
-  // print D_inv
-  for (D_inv) |val, i| {
-    simprint.fmt_with_coords("D_inv[{d}] = {f}", .{ i, @as(f32, val) });
+  if (py == 0 and px == 1) {
+    // print D_inv
+    for (D_inv) |val, i| {
+      simprint.fmt_with_coords("D_inv_after_broadcast[{d}] = {f}", .{ i, @as(f32, val) });
+    }
   }
-
-
 }
 
 fn layout_print(runtime_layer_index: u32) void {
@@ -333,43 +341,40 @@ fn bcast_prolongation() void {
 task send_right_bnext() void {
   simprint.fmt_with_coords("send_right_bnext layer_index={d}", .{ @as(u32, layer_index) });
 
-  const out_dsd = @get_dsd(fabout_dsd, .{
+  const out_bridge_dsd = @get_dsd(fabout_dsd, .{
                     .fabric_color = bridge_send_color, 
                     .extent = R_M_local,
                     .output_queue = send_color_oq,
                   });
-  // cur_state = STATE_CHANGE_LAYERS;
-  // cur_state = next_state;
-  // After fmovs is done, activate exit_task to unblock cmd_stream
-  // print b_next
   for (b_next) |val, i| {
-    simprint.fmt_with_coords("send_b_next[{d}] = {f}", .{ i, val });
+    simprint.fmt_with_coords("sending b_next[{d}]... = {f}", .{ i, val });
   }
-  @fmovs(out_dsd, dsd_b_next, .{ .async = true, .activate = send_done });
+  @fmovs(out_bridge_dsd, dsd_b_next, .{ .async = true, .activate = send_done });
 }
 
 // WTT
 var num_recv_bnext: i16 = 0;
 task recv_left_bnext(wavelet_data: f32) void {
   b_tile[num_recv_bnext] = wavelet_data;
-  // simprint.fmt_with_coords("**b_next[{d}] = {f}", .{ @as(u32, num_recv_bnext), b_next[num_recv_bnext] });
-
   num_recv_bnext += 1;
   if (num_recv_bnext == R_M_local) {
     simprint.fmt_with_coords("recv_left_bnext layer_index={d} fully received", .{ @as(u32, layer_index) });
+    // start the dataflow.
+    bcast_b_tile();
+  }
+}
 
-    // init_params();
-    
-    if (layer_index == 1) {
-      // print px and py
-      simprint.fmt_with_coords("recv_left_bnext layer_index={d} px={d} py={d}", .{ @as(u32, layer_index), @as(u32, px), @as(u32, py) });
-      cur_state = STATE_INIT;
-      @activate(STATE_MACHINE);
-    }
-    // mpi_x.broadcast(px, @ptrcast([*]u32, &b_next), R_M_local, STATE_MACHINE);
-    // do next step.
+// Use to keep track of # of invocations of recv_x task
+// when num_recv_x == N_per_PE, we are done receiving x elements
+var num_recv_b_tile: i16 = 0;
 
-    
+task recv_b_tile(b_val: f32) void {
+  b_tile[num_recv_b_tile] = b_val;
+
+  num_recv_b_tile += 1;
+  if (num_recv_b_tile == M_local) {
+    cur_state = STATE_INIT;
+    @activate(STATE_MACHINE);
   }
 }
 
@@ -406,6 +411,12 @@ task f_state() void {
     initialize();
 
   } else if (STATE_COMPUTE_JACOBI == cur_state) {
+    // print the D_inv on tile 1,0
+    if (py == 0 and px == 1) {
+      for (D_inv) |val, i| {
+        simprint.fmt_with_coords("D_inv+after+bcast[{d}] = {f}", .{ i, @as(f32, val) });
+      }
+    }
     simprint.print_string("STATE_COMPUTE_JACOBI\n");
     iter_count += 1;
     next_state = STATE_BCAST_JACOBI;
@@ -450,10 +461,7 @@ task f_state() void {
 
   } else if (STATE_SEND_DATA == cur_state) {
     simprint.fmt_with_coords("STATE_SEND_DATA, layer_index={d}, px={d}, py={d}", .{ @as(u32, layer_index), @as(u32, px), @as(u32, py) });
-    // next_state = STATE_EXIT;
     @activate(send_right_bnext_id);
-    // @activate(exit_task_id);
-
   } else if (STATE_PROLONGATION == cur_state) {
     simprint.print_string("STATE_PROLONGATION\n");
     next_state = STATE_BCAST_PROLONGATION;
@@ -472,6 +480,13 @@ task f_state() void {
     }
     sys_mod.unblock_cmd_stream();
 
+  } else if (STATE_PRINT == cur_state) {
+    simprint.print_string("STATE_PRINT\n");
+    // print D_inv
+    for (D_inv) |val, i| {
+      simprint.fmt_with_coords("D_inv[{d}] = {f}", .{ i, @as(f32, val) });
+    }
+    sys_mod.unblock_cmd_stream();
   }
   else {
     @assert(false); // Error: unknown state
@@ -500,11 +515,22 @@ fn v_cycle_down_function() void {
   }
 }
 
+fn bcast_b_tile() void {
+    const out_dsd = @get_dsd(fabout_dsd, .{
+                      .fabric_color = bcast_color, 
+                      .extent = M_local,
+                      .output_queue = send_bcast_oq,
+                    });
+    @fmovs(out_dsd, dsd_b_tile, .{ .async = true });
+}
 // Entrypoint into kernel
 fn v_cycle_down() void {
   init_params();
-  
-  // send b_tile on the bridge_send_color
+  if (layer_index == 0 and is_rectangle_first_column()) {
+    // send b_tile on the bridge_send_color
+
+    bcast_b_tile();
+  }
 
   // @block(STATE_MACHINE);
   // if (layer_index == 0) {
@@ -531,6 +557,7 @@ comptime {
 
   // data task
   @bind_data_task(recv_left_bnext, recv_left_bnext_id);
+  @bind_data_task(recv_b_tile, recv_b_tile_id);
 
   @export_symbol(ptr_A, "A");
   @export_symbol(ptr_x, "x");
