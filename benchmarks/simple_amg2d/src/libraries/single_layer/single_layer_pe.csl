@@ -8,9 +8,8 @@ param total_pe_cols: i16;
 param total_levels_count: i16;
 
 // bridge colors
-const bridge_down_color  : color         = @get_color(19);
-// const bridge_up_color    : color         = @get_color(18);
-
+const bcast_color  : color         = @get_color(1);
+const bridge_send_color  : color         = @get_color(2);
 
 const M: i16 = layer_params.M; // Height of local matrix, or num rows per PE
 const N: i16 = layer_params.N; // Width of local matrix, or num cols per PE
@@ -47,7 +46,7 @@ const STATE_CHANGE_LAYERS: i16 = 15;
 
 const send_done_id: local_task_id = @get_local_task_id(4);
 const recv_done_id: local_task_id = @get_local_task_id(20);
-const recv_left_bnext_id: data_task_id = @get_data_task_id(bridge_down_color);
+const recv_left_bnext_id: data_task_id = @get_data_task_id(bridge_send_color);
 const send_right_bnext_id: local_task_id = @get_local_task_id(24);
 const exit_task_id: local_task_id = @get_local_task_id(26);
 
@@ -204,11 +203,17 @@ fn inverse_callback(val: f32) f32 {
 
 fn initialize() void {
   if (px == py) {
+    simprint.fmt_with_coords("initialize layer_index={d} px={d} py={d}", .{ @as(u32, layer_index), @as(u32, px), @as(u32, py) });
     // now D_inv, is 1/A_tile for px==py and bcast to other PEs.
     @map(inverse_callback, dsd_A_diag, dsd_D_inv);
   }
   cur_state = next_state; // This is set by the f_state function.
   mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, STATE_MACHINE);
+  // print D_inv
+  for (D_inv) |val, i| {
+    simprint.fmt_with_coords("D_inv[{d}] = {f}", .{ i, @as(f32, val) });
+  }
+
 
 }
 
@@ -329,7 +334,7 @@ task send_right_bnext() void {
   simprint.fmt_with_coords("send_right_bnext layer_index={d}", .{ @as(u32, layer_index) });
 
   const out_dsd = @get_dsd(fabout_dsd, .{
-                    .fabric_color = bridge_down_color, 
+                    .fabric_color = bridge_send_color, 
                     .extent = R_M_local,
                     .output_queue = send_color_oq,
                   });
@@ -346,7 +351,7 @@ task send_right_bnext() void {
 // WTT
 var num_recv_bnext: i16 = 0;
 task recv_left_bnext(wavelet_data: f32) void {
-  b_next[num_recv_bnext] = wavelet_data;
+  b_tile[num_recv_bnext] = wavelet_data;
   // simprint.fmt_with_coords("**b_next[{d}] = {f}", .{ @as(u32, num_recv_bnext), b_next[num_recv_bnext] });
 
   num_recv_bnext += 1;
@@ -354,11 +359,12 @@ task recv_left_bnext(wavelet_data: f32) void {
     simprint.fmt_with_coords("recv_left_bnext layer_index={d} fully received", .{ @as(u32, layer_index) });
 
     // init_params();
-    cur_state = STATE_INIT;
+    
     if (layer_index == 1) {
       // print px and py
       simprint.fmt_with_coords("recv_left_bnext layer_index={d} px={d} py={d}", .{ @as(u32, layer_index), @as(u32, px), @as(u32, py) });
-      @unblock(STATE_MACHINE);
+      cur_state = STATE_INIT;
+      @activate(STATE_MACHINE);
     }
     // mpi_x.broadcast(px, @ptrcast([*]u32, &b_next), R_M_local, STATE_MACHINE);
     // do next step.
@@ -497,12 +503,14 @@ fn v_cycle_down_function() void {
 // Entrypoint into kernel
 fn v_cycle_down() void {
   init_params();
-  cur_state = STATE_INIT;
-  @activate(STATE_MACHINE);
-  @block(STATE_MACHINE);
-  if (layer_index == 0) {
-    @unblock(STATE_MACHINE);
-  }
+  
+  // send b_tile on the bridge_send_color
+
+  // @block(STATE_MACHINE);
+  // if (layer_index == 0) {
+  //   cur_state = STATE_INIT;
+  //   @activate(STATE_MACHINE);
+  // }
   // sys_mod.unblock_cmd_stream();
 }
 
@@ -557,11 +565,11 @@ fn is_rectangle_first_column() bool {
 }
 
 fn layer_send_column() bool {
-  return is_layer_last_column() and !is_rectangle_last_column();
+  return is_layer_last_column();
 }
 
 fn layer_recv_column() bool {
-  return is_layer_first_column() and !is_rectangle_first_column();
+  return is_layer_first_column();
 }
 
 fn layer_middle_column() bool {
@@ -569,16 +577,18 @@ fn layer_middle_column() bool {
 }
 
 fn configure_dataflow_bridge() void {
-  // For the end of the layer (right side)
-  if (layer_send_column()) {
-      // Configure this PE to receive from RAMP and send EAST
-      @set_local_color_config(bridge_down_color, .{.routes = .{ .rx = .{RAMP}, .tx = .{EAST}  }});  
-      // @set_local_color_config(bridge_up_color, .{.routes = .{ .rx = .{EAST}, .tx = .{RAMP}  }});  
-  } else if (layer_recv_column()) {
-      @set_local_color_config(bridge_down_color, .{.routes = .{ .rx = .{WEST}, .tx = .{RAMP}  }});  
-      // @set_local_color_config(bridge_up_color, .{.routes = .{ .rx = .{RAMP}, .tx = .{WEST}  }});  
-  } else if (layer_middle_column()) {
-      @set_local_color_config(bridge_down_color, .{.routes = .{ .rx = .{WEST}, .tx = .{EAST, RAMP}  }});  
-      // @set_local_color_config(bridge_up_color, .{.routes = .{ .rx = .{EAST}, .tx = .{RAMP}  }});  
-  }
+    if (is_layer_first_column()) {
+      @set_local_color_config(bcast_color, .{.routes = .{ .rx = .{RAMP}, .tx = .{EAST, RAMP}  }});
+    } else if (is_layer_last_column()) {
+      @set_local_color_config(bcast_color, .{.routes = .{ .rx = .{WEST}, .tx = .{RAMP}  }});
+    } else {
+      @set_local_color_config(bcast_color, .{.routes = .{ .rx = .{WEST}, .tx = .{EAST, RAMP}  }});
+    }
+
+    // interlayer
+    if (layer_send_column()) {
+      @set_local_color_config(bridge_send_color, .{.routes = .{ .rx = .{RAMP}, .tx = .{EAST}  }});
+    } else if (layer_recv_column()) {
+      @set_local_color_config(bridge_send_color, .{.routes = .{ .rx = .{WEST}, .tx = .{RAMP}  }});
+    }
 }
