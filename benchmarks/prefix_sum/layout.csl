@@ -1,0 +1,48 @@
+
+const Pw: u16 = 9;
+const Ph: u16 = 1;
+const memcpy_params = @import_module("<memcpy/get_params>", .{
+  .width = Pw,
+  .height = Ph,
+});
+
+
+// Colors
+const c2d_x_color_0: color = @get_color(0);
+const c2d_x_color_1: color = @get_color(1);
+
+// Task IDs
+const c2d_x_entrypt_0: local_task_id = @get_local_task_id(10);
+const c2d_x_entrypt_1: local_task_id = @get_local_task_id(11);
+const c2d = @import_module("<collectives_2d/params>");
+
+// 0,1,2,3,4,5,6,7,8
+// now mod of each by 3 
+// 0,1,2,0,1,2,0,1,2
+const layer_start_x: u16 = 0;
+const layer_end_x: u16 = 2;
+const size_of_layer: u16 = 3;
+
+layout {
+  @set_rectangle(Pw, Ph);
+
+  for (@range(u16, Pw)) |Px| {
+    for (@range(u16, Ph)) |Py| {
+      const params = c2d.get_params(Px, Py, .{
+        .x_colors      = .{ c2d_x_color_0,   c2d_x_color_1 },
+        .x_entrypoints = .{ c2d_x_entrypt_0, c2d_x_entrypt_1 }
+      });      
+      const memcpy_params = memcpy_params.get_params(Px);
+      @set_tile_code(Px, Py, "code.csl", .{ 
+        .pe_id = Px, 
+        .root_id = Py, 
+        .Pw = Pw, 
+        .memcpy_params = memcpy_params,
+        .c2d_params = params,
+        .size_of_layer = size_of_layer
+        });
+    }
+  }
+
+  @export_name("init_data", fn()void);
+}
