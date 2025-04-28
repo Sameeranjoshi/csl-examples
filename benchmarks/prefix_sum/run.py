@@ -13,5 +13,7 @@ runner = SdkRuntime(args.name, cmaddr=args.cmaddr)
 
 runner.load()
 runner.run()
+# runner.launch("print_x", nonblock=False)
 runner.launch("init_data", nonblock=False)
+runner.launch("print_x", nonblock=False)
 runner.stop()

@@ -118,10 +118,10 @@ task send_right() void {
                     .extent = Nx,
                     .output_queue = send_color_oq
                   });
-        // simprint.fmt_with_coords("send_right: x = {f}", .{x[0]});
-        @fmovs(out_dsd, x_dsd, .{ .async = true, .activate = exit_task_id });
-    } else {
-         @activate(exit_task_id);
+        simprint.fmt_with_coords("send_right: x = {f}", .{x[0]});
+        @fmovs(out_dsd, x_dsd, .{ .async = true });
+    } else if (is_last_layer()) { // EXIT
+        @activate(exit_task_id);
     }
 }
 
@@ -184,6 +184,11 @@ fn init_data() void {
     }
 }
 
+fn print_x() void {
+  simprint.fmt_with_coords("x = {f}", .{x[0]});
+  sys_mod.unblock_cmd_stream();
+}
+
 task exit_task() void {
     simprint.fmt_with_coords("x = {f}", .{x[0]});
     sys_mod.unblock_cmd_stream();
@@ -200,6 +205,7 @@ comptime {
     broadcast_right2.configure_network();
     broadcast_right3.configure_network();
     @export_symbol(init_data);
+    @export_symbol(print_x);
 
    configure_dataflow_bridge();
 }
@@ -217,6 +223,6 @@ fn configure_dataflow_bridge() void {
     } else if (is_pe_last_in_layer()) {
       @set_local_color_config(activation_color, .{.routes = .{ .rx = .{WEST}, .tx = .{RAMP}  }});
     } else {
-      @set_local_color_config(activation_color, .{.routes = .{ .rx = .{WEST}, .tx = .{EAST}  }});
+      @set_local_color_config(activation_color, .{.routes = .{ .rx = .{WEST}, .tx = .{EAST, RAMP}  }});
     }
 }
