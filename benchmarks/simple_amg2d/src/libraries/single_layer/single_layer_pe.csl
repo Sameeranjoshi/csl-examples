@@ -10,7 +10,7 @@ param total_levels_count: i16;
 // bridge colors
 const bcast_color  : color         = @get_color(1);
 const bridge_send_color  : color         = @get_color(2);
-const diagonal_broadcast_x_color  : color         = @get_color(3);
+// const diagonal_broadcast_x_color  : color         = @get_color(3);
 
 const M: i16 = layer_params.M; // Height of local matrix, or num rows per PE
 const N: i16 = layer_params.N; // Width of local matrix, or num cols per PE
@@ -51,24 +51,26 @@ const recv_left_bnext_id: data_task_id = @get_data_task_id(bridge_send_color);
 const recv_b_tile_id: data_task_id = @get_data_task_id(bcast_color);
 const send_right_bnext_id: local_task_id = @get_local_task_id(24);
 const exit_task_id: local_task_id = @get_local_task_id(26);
+const done_task_id: local_task_id = @get_local_task_id(18);
 
 // Queue IDs
 const send_color_oq = @get_output_queue(1);
-const send_color_iq = @get_input_queue(1);
-const send_bcast_oq = @get_output_queue(0);
-const send_bcast_iq = @get_input_queue(0);
+const send_color_iq = @get_input_queue(2);
+const send_bcast_oq = @get_output_queue(3);
+const send_bcast_iq = @get_input_queue(4);
 
 
 const math_lib = @import_module("<math>");
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
-const diagonal_broadcast_x = @import_module("../custom-cc/broadcast.csl", .{
-  .color_1 = diagonal_broadcast_x_color, 
-  .pe_id = pe_id_x, 
-  .root_id = pe_id_y, 
-  .start_index = layer_start_x, 
-  .end_index = layer_end_x, 
-  .POS_DIR = EAST, 
-  .NEG_DIR = WEST});
+// const diagonal_broadcast_x = @import_module("../custom-cc/broadcast.csl", .{
+//     .color_1 = diagonal_broadcast_x_color,
+//     .pe_id = pe_id_x,
+//     .root_id = pe_id_y,
+//     .POS_DIR = EAST,
+//     .NEG_DIR = WEST,
+//     .start_index = layer_start_x,
+//     .end_index = layer_end_x
+// });
 const mpi_x = @import_module("../csl_source/csl-libs/collectives_2d/pe.csl", .{
     .dim_params = c2d_params.x,
     .queues = [2]u16{2,4},
@@ -84,6 +86,10 @@ const mpi_y = @import_module("../csl_source/csl-libs/collectives_2d/pe.csl", .{ 
     .src1_dsr_ids = [1]u16{2}
     });
 const simprint = @import_module("<simprint>", .{ .enable = true });
+// Data buffer for broadcast
+const Nx = 1;
+var x = @zeros([Nx]f32);
+var x_ptr: [*]f32 = &x;
 
 
 
@@ -215,19 +221,18 @@ fn inverse_callback(val: f32) f32 {
 
 fn initialize() void {
     // print D_inv before broadcast
-  if (py == 0 and px == 1) {
-    for (D_inv) |val, i| {
-      simprint.fmt_with_coords("D_inv_before_broadcast[{d}] = {f}", .{ i, @as(f32, val) });
-    }
-  }
+  // if (py == 0 and px == 1) {
+  //   for (D_inv) |val, i| {
+  //     simprint.fmt_with_coords("D_inv_before_broadcast[{d}] = {f}", .{ i, @as(f32, val) });
+  //   }
+  // }
   cur_state = next_state; // This is set by the f_state function.
   if (px == py) {
     // now D_inv, is 1/A_tile for px==py and bcast to other PEs.
     @map(inverse_callback, dsd_A_diag, dsd_D_inv);
   }
-  // mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, STATE_MACHINE);
-  cur_state = STATE_PRINT;
-  diagonal_broadcast_x.transfer_data(&D_inv, M_local, STATE_MACHINE);
+  mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, STATE_MACHINE);
+  
 }
 
 fn layout_print(runtime_layer_index: u32) void {
@@ -288,8 +293,6 @@ fn compute_jacobi() void {
 fn bcast_jacobi() void {
   cur_state = next_state;
   mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local, STATE_MACHINE);
-  // modified_bcast_down_up.transfer_data(&x_tile, N_local, &communication_tsc_start, &communication_tsc_end);
-  // f_trigger_state_machine();  // calls next state.  
 }
 
 // Compute residual
@@ -307,8 +310,6 @@ fn bcast_residual() void {
   }
   cur_state = next_state;
   mpi_y.broadcast(px, @ptrcast([*]u32, &residual_tile), M_local, STATE_MACHINE);
-  // modified_bcast_down_up.transfer_data(&residual_tile, M_local, &communication_tsc_start, &communication_tsc_end);
-  // f_trigger_state_machine();  // calls next state.
 }
 
 // Compute restriction
@@ -319,7 +320,6 @@ fn compute_restriction() void {
   cur_state = next_state;
   mpi_x.reduce_fadds(layer_kernel_cols-1, @ptrcast([*]f32, &Rx), @ptrcast([*]f32, &b_next),
                      R_M_local, STATE_MACHINE); // reduce across rows towards left
-  // lower_traingular_chain_reduce.transfer_data(&Rx, R_M_local, STATE_MACHINE, &communication_tsc_start); // Won't call STATE_MACHINE
 }
 
 // Compute prolongation
@@ -338,8 +338,6 @@ fn bcast_prolongation() void {
   }
   cur_state = next_state;
   mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local, STATE_MACHINE);
-  // modified_bcast_down_up.transfer_data(&x_tile, N_local, &communication_tsc_start, &communication_tsc_end);
-  // f_trigger_state_machine();  // calls next state.
 }
 
 
@@ -365,7 +363,9 @@ task recv_left_bnext(wavelet_data: f32) void {
   if (num_recv_bnext == R_M_local) {
     simprint.fmt_with_coords("recv_left_bnext layer_index={d} fully received", .{ @as(u32, layer_index) });
     // start the dataflow.
-    bcast_b_tile();
+    next_state = STATE_INIT;
+    @unblock(STATE_MACHINE);
+    // bcast_b_tile();
   }
 }
 
@@ -379,33 +379,53 @@ task recv_b_tile(b_val: f32) void {
   num_recv_b_tile += 1;
   if (num_recv_b_tile == M_local) {
     cur_state = STATE_INIT;
-    @activate(STATE_MACHINE);
+    // @activate(STATE_MACHINE);
+    @unblock(STATE_MACHINE);
   }
+}
+
+fn bcast_b_tile() void {
+    // 
+    const out_dsd = @get_dsd(fabout_dsd, .{
+                      .fabric_color = bcast_color, 
+                      .extent = M_local,
+                      .output_queue = send_bcast_oq,
+                    });
+    @fmovs(out_dsd, dsd_b_tile, .{ .async = true });
+}
+
+fn bcasting_x() void {
+    x[0] = @as(f32, pe_id_x); // {0,1,2,3,4,5,6,7}
+    simprint.fmt_with_coords("x_initial = {f}", .{x[0]});
+    // diagonal_broadcast_x.transfer_data(x_ptr, Nx, exit_task_id);
+    var send_buf = @ptrcast([*]u32, &x);
+    mpi_x.broadcast(pe_id_y, send_buf, Nx, exit_task_id);
 }
 
 task send_done() void {
   simprint.fmt_with_coords("send done {d}", .{ @as(u32, layer_index) });
-  cur_state = STATE_EXIT;
-  // f_trigger_state_machine();
+  next_state = STATE_EXIT;
+  f_trigger_state_machine();
   // @unblock(exit_task_id);
   // sys_mod.unblock_cmd_stream(); 
 }
 
 task recv_done() void {
   simprint.fmt_with_coords("recv done {d}", .{ @as(u32, layer_index) });
-  cur_state = STATE_EXIT;
-  // f_trigger_state_machine();
+  next_state = STATE_EXIT;
+  f_trigger_state_machine();
 }
-
 
 task done_task() void {
   simprint.fmt_with_coords("done_task {d}", .{ @as(u32, layer_index) });
-
+  @unblock(STATE_MACHINE);
+  @activate(STATE_MACHINE);
 }
 // Exit task
 task exit_task() void {
-  simprint.fmt_with_coords("exit_task {d}", .{ @as(u32, layer_index) });
-  // sys_mod.unblock_cmd_stream();
+  // simprint.fmt_with_coords("exit_task {d}", .{ @as(u32, layer_index) });
+  simprint.fmt_with_coords("x = {f}", .{x[0]});
+  sys_mod.unblock_cmd_stream();
 }
 
 
@@ -458,16 +478,20 @@ task f_state() void {
 
   } else if (STATE_COMPUTE_RESTRICTION == cur_state) {
     simprint.print_string("STATE_COMPUTE_RESTRICTION\n");
-    if (layer_send_column()) {
-      next_state = STATE_SEND_DATA;
-    } else {
-      next_state = STATE_EXIT;
-    }
+    next_state = STATE_SEND_DATA;
     compute_restriction();
 
   } else if (STATE_SEND_DATA == cur_state) {
     simprint.fmt_with_coords("STATE_SEND_DATA, layer_index={d}, px={d}, py={d}", .{ @as(u32, layer_index), @as(u32, px), @as(u32, py) });
-    @activate(send_right_bnext_id);
+    if (layer_send_column()) {
+      // next_state = STATE_SEND_DATA;
+      @activate(send_right_bnext_id);
+    } else {
+      simprint.fmt_with_coords("STATE_EXIT, layer_index={d}, px={d}, py={d}", .{ @as(u32, layer_index), @as(u32, px), @as(u32, py) });
+      next_state = STATE_EXIT;
+    }
+    f_trigger_state_machine();
+
   } else if (STATE_PROLONGATION == cur_state) {
     simprint.print_string("STATE_PROLONGATION\n");
     next_state = STATE_BCAST_PROLONGATION;
@@ -489,11 +513,11 @@ task f_state() void {
   } else if (STATE_PRINT == cur_state) {
     simprint.print_string("STATE_PRINT\n");
     // print D_inv
-    if (py == 0) {
+    // if (py == 0) {
       for (D_inv) |val, i| {
         simprint.fmt_with_coords("D_inv[{d}] = {f}", .{ i, @as(f32, val) });
       }
-    }
+    // }
     sys_mod.unblock_cmd_stream();
   }
   else {
@@ -506,63 +530,30 @@ task f_state() void {
   }  
 }
 
-
-fn v_cycle_down_function() void {
-  initialize();
-  mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, exit_task_id);
-  // diagonal_broadcast_x.transfer_data(&dummy, 4096, finish_sync_id);
-  // loop until iter_count < iterations[0]
-  while (iter_count < iterations[0]) {
-    compute_jacobi();
-    bcast_jacobi();
-    iter_count += 1;
-  }
-  if (!is_v_cycle_up) {
-    compute_residual();
-    bcast_residual();
-    compute_restriction();
-  }
-}
-
-fn bcast_b_tile() void {
-    const out_dsd = @get_dsd(fabout_dsd, .{
-                      .fabric_color = bcast_color, 
-                      .extent = M_local,
-                      .output_queue = send_bcast_oq,
-                    });
-    @fmovs(out_dsd, dsd_b_tile, .{ .async = true });
-}
 // Entrypoint into kernel
 fn v_cycle_down() void {
   init_params();
+  @activate(STATE_MACHINE);
+  // bcasting_x();
   if (layer_index == 0 and is_rectangle_first_column()) {
     // send b_tile on the bridge_send_color
-
     bcast_b_tile();
   }
-
-  // @block(STATE_MACHINE);
-  // if (layer_index == 0) {
-  //   cur_state = STATE_INIT;
-  //   @activate(STATE_MACHINE);
-  // }
-  // sys_mod.unblock_cmd_stream();
 }
-
 
 fn no_op() void {
   // simprint.print_string("no_op\n");
-  // no_op();
 }
 
 comptime {
-  // @block(STATE_MACHINE);
+  @block(STATE_MACHINE);
   // local task
   @bind_local_task(f_state, STATE_MACHINE);
   @bind_local_task(send_done, send_done_id);
   @bind_local_task(recv_done, recv_done_id); 
   @bind_local_task(send_right_bnext, send_right_bnext_id);
   @bind_local_task(exit_task, exit_task_id);
+  @bind_local_task(done_task, done_task_id);
 
   // data task
   @bind_data_task(recv_left_bnext, recv_left_bnext_id);
@@ -581,7 +572,7 @@ comptime {
   @export_symbol(layout_print); // prints layout of A
 
   configure_dataflow_bridge();
-  diagonal_broadcast_x.configure_network();
+  // diagonal_broadcast_x.configure_network();
 
 }
 
