@@ -98,34 +98,37 @@ const exit_task_id: local_task_id = @get_local_task_id(5);
 const compute_inside_layer_id: local_task_id = @get_local_task_id(6);
 const send_right_task_id: local_task_id = @get_local_task_id(7);
 const send_done_task_id: local_task_id = @get_local_task_id(8);
+const recv_left_task_id: data_task_id = @get_data_task_id(send_color);
 const send_color_oq = @get_output_queue(2);
-// const send_color_iq = @get_input_queue(2);
+const send_color_iq = @get_input_queue(2);
 
 
 
 task send_right() void {
-    if (is_pe_send_column()) {
+    if (is_pe_send_column() and !is_last_layer()) {
         const out_dsd = @get_dsd(fabout_dsd, .{
                     .fabric_color = send_color, 
                     .extent = Nx,
                     .output_queue = send_color_oq
                   });
         // After fmovs is done, activate exit_task to unblock cmd_stream
-        @fmovs(out_dsd, x_dsd, .{ .async = true, .activate = send_done_task_id });
+        @fmovs(out_dsd, x_dsd, .{ .async = true, .activate = exit_task_id });
+        // sent data print.
+        simprint.fmt_with_coords("send_right: x = {f}", .{x[0]});
     } else {
-        @activate(exit_task_id);
+         @activate(exit_task_id);
     }
 }
 
-
-fn recv_left() void {
-  const in_dsd = @get_dsd(fabin_dsd, .{
-                   .fabric_color = send_color, 
-                   .extent = Nx,
-                   .input_queue = send_color_iq
-                 });
-  // After fadds is done, activate exit_task to unblock cmd stream
-  @fmovs(x_dsd, in_dsd, .{ .async = true, .activate = exit_task_id });
+// WTT
+var num_recv_count: i16 = 0;
+task recv_left(recv_data: f32) void {
+    x[num_recv_count] = recv_data;
+    num_recv_count += 1;
+    if (num_recv_count == Nx) {
+      simprint.fmt_with_coords("recv_left layer_index={d} fully received", .{ @as(u32, layer_index) });
+      @activate(exit_task_id);
+    }
 }
 
 
@@ -174,6 +177,7 @@ comptime {
     @bind_local_task(compute_inside_layer, compute_inside_layer_id);
     @bind_local_task(send_right, send_right_task_id);
     @bind_local_task(send_done_task, send_done_task_id);
+    @bind_data_task(recv_left, recv_left_task_id);
     // @bind_local_task(done_task, done_task_id);
     broadcast_right1.configure_network();
     broadcast_right2.configure_network();
