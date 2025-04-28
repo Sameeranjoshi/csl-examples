@@ -89,7 +89,7 @@ const simprint = @import_module("<simprint>", .{ .enable = true });
 // Data buffer for broadcast
 const Nx = 1;
 var x = @zeros([Nx]f32);
-var x_dsd = @get_dsd(x_dsd, .{ .tensor_access = |i|{1} -> x[i] });
+var x_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> x[i] });
 var x_ptr: [*]f32 = &x;
 
 param send_color: color = @get_color(3);
@@ -115,19 +115,18 @@ task send_right() void {
     } else {
         @activate(exit_task_id);
     }
-
 }
 
 
-// fn recv_left() void {
-//   const in_dsd = @get_dsd(fabin_dsd, .{
-//                    .fabric_color = send_color, 
-//                    .extent = Nx,
-//                    .input_queue = send_color_iq
-//                  });
-//   // After fadds is done, activate exit_task to unblock cmd stream
-//   @fmovs(x_dsd, in_dsd, .{ .async = true, .activate = exit_task_id });
-// }
+fn recv_left() void {
+  const in_dsd = @get_dsd(fabin_dsd, .{
+                   .fabric_color = send_color, 
+                   .extent = Nx,
+                   .input_queue = send_color_iq
+                 });
+  // After fadds is done, activate exit_task to unblock cmd stream
+  @fmovs(x_dsd, in_dsd, .{ .async = true, .activate = exit_task_id });
+}
 
 
 fn initialize() void {
@@ -160,7 +159,7 @@ fn init_data() void {
 }
 
 task send_done_task() void {
-    simprint.print_string("send_done_task");
+    simprint.print_string("send_done_task\n");
     simprint.fmt_with_coords("x = {f}", .{x[0]});
     sys_mod.unblock_cmd_stream();
 }
