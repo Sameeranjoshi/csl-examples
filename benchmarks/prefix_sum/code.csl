@@ -95,19 +95,19 @@ var invalid_f32 = @zeros([1]f32);
 var invalid_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> invalid_f32[i] });
 
 
+// Colors
 param send_color: color = @get_color(3);
 const activation_color: color = @get_color(4);
-// const done_task_id: local_task_id = @get_local_task_id(4);
+// Tasks
 const exit_task_id: local_task_id = @get_local_task_id(5);
 const compute_inside_layer_id: local_task_id = @get_local_task_id(6);
 const send_right_task_id: local_task_id = @get_local_task_id(7);
 const recv_left_task_id: data_task_id = @get_data_task_id(send_color);
 const unblock_current_layer_id: local_task_id = @get_local_task_id(8);
 const recv_activation_signal_id: data_task_id = @get_data_task_id(activation_color);
+// Queues
 const send_color_oq = @get_output_queue(2);
-const send_color_iq = @get_input_queue(2);
 const activation_oq = @get_output_queue(3);
-const activation_iq = @get_input_queue(3);
 
 
 
@@ -195,19 +195,26 @@ task exit_task() void {
 }
 comptime {
     @block(compute_inside_layer_id);
+
+    // Tasks
     @bind_local_task(exit_task, exit_task_id);
     @bind_local_task(compute_inside_layer, compute_inside_layer_id);
     @bind_local_task(send_right, send_right_task_id);
     @bind_data_task(recv_left, recv_left_task_id);
     @bind_local_task(unblock_current_layer, unblock_current_layer_id);
     @bind_data_task(recv_activation_signal, recv_activation_signal_id);
+
+    // Modules
     broadcast_right1.configure_network();
     broadcast_right2.configure_network();
     broadcast_right3.configure_network();
+
+    // Symbols
     @export_symbol(init_data);
     @export_symbol(print_x);
 
-   configure_dataflow_bridge();
+    // Dataflow
+    configure_dataflow_bridge();
 }
 
 fn configure_dataflow_bridge() void {
