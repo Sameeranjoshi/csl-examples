@@ -6,19 +6,24 @@ param NEG_DIR: direction;
 param start_index: u32; // *
 param end_index: u32; // *
 
+const layer_size: u32 = end_index - start_index + 1;
+
 const simprint = @import_module("<simprint>", .{ .enable = true });
+const math = @import_module("<math>");
 
 const distance_from_root: i32 = @as(i32, pe_id) - @as(i32, root_id);
+const abs_distance_from_root:u32 = math.abs(distance_from_root);
+
 fn is_PE_diagonal() bool {
   return pe_id == root_id;
 }
 
 fn is_PE_right_of_root() bool {
-  return distance_from_root > 0;
+  return distance_from_root > 0 and abs_distance_from_root < layer_size;
 }
 
 fn is_PE_left_of_root() bool {
-  return distance_from_root < 0;
+  return distance_from_root < 0 and abs_distance_from_root > start_index;
 }
 
 fn is_PE_start_of_layer() bool {
@@ -35,6 +40,7 @@ var fabin_neg = @get_dsd(fabin_dsd, .{ .extent = 1, .fabric_color = color_1, .in
 var mem = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> invalid_f32[i] });
 
 fn configure_network() void {
+
   if (!is_PE_diagonal()) {
     @block(color_1);
   }

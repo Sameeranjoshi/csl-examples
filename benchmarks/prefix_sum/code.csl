@@ -1,8 +1,21 @@
+// The goal of this code is to 
+// There are 3 layers, each layer has 3 PEs.
+// 36, 0, 0, 0, 0, 0, 0, 0, 0
+// bcast now in layer 0.
+// 36, 36, 36, 0, 0, 0, 0, 0, 0
+// Dataflow across layer 0 and layer 1.
+// 36, 36, 36, 36, 0, 0, 0, 0, 0
+// bcast now in layer 1.
+// 36, 36, 36, 36, 36, 36, 0, 0, 0
+// Dataflow across layer 1 and layer 2.
+// 36, 36, 36, 36, 36, 36, 36, 0, 0 
+// bcast now in layer 2.
+// 36, 36, 36, 36, 36, 36, 36, 36, 36
+
 param pe_id: u16;
 param Pw: u16;
 param root_id: u16;
 param memcpy_params: comptime_struct;
-param c2d_params: comptime_struct;
 param size_of_layer: u16;
 
 // value from {0,1,2}
@@ -21,6 +34,7 @@ fn is_first_layer() bool {
 fn is_last_layer() bool {
   return layer_index == size_of_layer - 1;
 }
+
 fn is_pe_first_in_layer() bool {
   return inside_layer_pe_id == 0;
 }
@@ -37,15 +51,36 @@ fn is_pe_recv_column() bool {
   return is_pe_first_in_layer();
 }
 
+ 
 // const root_id: u16 = 5;
-const broadcast_right = @import_module("broadcast.csl", .{
-    .color_1 = @get_color(4),
+const broadcast_right1 = @import_module("broadcast.csl", .{
+    .color_1 = @get_color(0),
     .pe_id = pe_id,
-    .root_id = root_id,
+    .root_id = 0,
     .POS_DIR = EAST,
     .NEG_DIR = WEST,
-    .start_index = 0,
-    .end_index = Pw - 1
+    .start_index = 0, // should be 0, 3, 6
+    .end_index = 2
+});
+
+const broadcast_right2 = @import_module("broadcast.csl", .{
+    .color_1 = @get_color(1),
+    .pe_id = pe_id,
+    .root_id = 3,
+    .POS_DIR = EAST,
+    .NEG_DIR = WEST,
+    .start_index = 3, // should be 3,4,5
+    .end_index = 5
+});
+
+const broadcast_right3 = @import_module("broadcast.csl", .{
+    .color_1 = @get_color(2),
+    .pe_id = pe_id,
+    .root_id = 6, 
+    .POS_DIR = EAST,
+    .NEG_DIR = WEST,
+    .start_index = 6, // should be 6,7,8
+    .end_index = 8
 });
 
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
@@ -54,19 +89,60 @@ const simprint = @import_module("<simprint>", .{ .enable = true });
 // Data buffer for broadcast
 const Nx = 1;
 var x = @zeros([Nx]f32);
+var x_sum = @zeros([Nx]f32);
+var x_dsd = @get_dsd(x_dsd, .{ .tensor_access = |i|{Nx} -> x[i] });
 var x_ptr: [*]f32 = &x;
 
-const exit_task_id: local_task_id = @get_local_task_id(3);
+param send_color: color = @get_color(3);
+// const done_task_id: local_task_id = @get_local_task_id(4);
+const exit_task_id: local_task_id = @get_local_task_id(5);
+// const send_color_oq = @get_output_queue(2);
+// const send_color_iq = @get_input_queue(2);
+
+
+
+// fn send_right() void {
+//   const out_dsd = @get_dsd(fabout_dsd, .{
+//                     .fabric_color = send_color, 
+//                     .extent = Nx,
+//                     .output_queue = send_color_oq
+//                   });
+//   // After fmovs is done, activate exit_task to unblock cmd_stream
+//   @fmovs(out_dsd, x_dsd, .{ .async = true, .activate = exit_task_id });
+// }
+
+// fn recv_left() void {
+//   const in_dsd = @get_dsd(fabin_dsd, .{
+//                    .fabric_color = send_color, 
+//                    .extent = Nx,
+//                    .input_queue = send_color_iq
+//                  });
+//   // After fadds is done, activate exit_task to unblock cmd stream
+//   @fmovs(x_dsd, in_dsd, .{ .async = true, .activate = exit_task_id });
+// }
 
 fn initialize() void {
-    x[0] = @as(f32, pe_id); // {0,1,2,3,4,5,6,7,8 = Sum(0,1,2,3,4,5,6,7,8) = 36 }
+    x[0] = @as(f32, 0.0); // {0,1,2,3,4,5,6,7,8 = Sum(0,1,2,3,4,5,6,7,8) = 36 }
+    if (pe_id == 0) {
+        x[0] = @as(f32, 36.0);  // propogate this to the end.
+    }
     simprint.fmt_with_coords("x_initial = {f}", .{x[0]});
 }
 
 // Initialize data
 fn init_data() void {
     initialize();
-    broadcast_right.transfer_data(x_ptr, Nx, exit_task_id);
+    broadcast_right1.transfer_data(x_ptr, Nx, exit_task_id);
+    // if (is_first_layer()) {
+    //     broadcast_right1.transfer_data(x_ptr, Nx, done_task_id);
+    // } else {
+    //     @activate(done_task_id);
+    // }
+}
+
+task done_task() void {
+   simprint.print_string("done_task");
+   sys_mod.unblock_cmd_stream();
 }
 
 task exit_task() void {
@@ -75,6 +151,20 @@ task exit_task() void {
 }
 comptime {
     @bind_local_task(exit_task, exit_task_id);
-    broadcast_right.configure_network();
+    // @bind_local_task(done_task, done_task_id);
+    broadcast_right1.configure_network();
+    broadcast_right2.configure_network();
+    broadcast_right3.configure_network();
     @export_symbol(init_data);
+
+   configure_dataflow_bridge();
+}
+
+fn configure_dataflow_bridge() void {
+    // interlayer dataflow.
+    if (is_pe_send_column()) {
+      @set_local_color_config(send_color, .{.routes = .{ .rx = .{RAMP}, .tx = .{EAST}  }});
+    } else if (is_pe_recv_column()) {
+      @set_local_color_config(send_color, .{.routes = .{ .rx = .{WEST}, .tx = .{RAMP}  }});
+    }
 }
