@@ -91,16 +91,23 @@ const Nx = 1;
 var x = @zeros([Nx]f32);
 var x_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> x[i] });
 var x_ptr: [*]f32 = &x;
+var invalid_f32 = @zeros([1]f32);
+var invalid_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> invalid_f32[i] });
+
 
 param send_color: color = @get_color(3);
+const activation_color: color = @get_color(4);
 // const done_task_id: local_task_id = @get_local_task_id(4);
 const exit_task_id: local_task_id = @get_local_task_id(5);
 const compute_inside_layer_id: local_task_id = @get_local_task_id(6);
 const send_right_task_id: local_task_id = @get_local_task_id(7);
-const send_done_task_id: local_task_id = @get_local_task_id(8);
 const recv_left_task_id: data_task_id = @get_data_task_id(send_color);
+const unblock_current_layer_id: local_task_id = @get_local_task_id(8);
+const recv_activation_signal_id: data_task_id = @get_data_task_id(activation_color);
 const send_color_oq = @get_output_queue(2);
 const send_color_iq = @get_input_queue(2);
+const activation_oq = @get_output_queue(3);
+const activation_iq = @get_input_queue(3);
 
 
 
@@ -111,10 +118,8 @@ task send_right() void {
                     .extent = Nx,
                     .output_queue = send_color_oq
                   });
-        // After fmovs is done, activate exit_task to unblock cmd_stream
+        // simprint.fmt_with_coords("send_right: x = {f}", .{x[0]});
         @fmovs(out_dsd, x_dsd, .{ .async = true, .activate = exit_task_id });
-        // sent data print.
-        simprint.fmt_with_coords("send_right: x = {f}", .{x[0]});
     } else {
          @activate(exit_task_id);
     }
@@ -124,16 +129,34 @@ task send_right() void {
 var num_recv_count: i16 = 0;
 task recv_left(recv_data: f32) void {
     x[num_recv_count] = recv_data;
+    // add 1 to the received data.
+    x[num_recv_count] += 1.0;
+
     num_recv_count += 1;
     if (num_recv_count == Nx) {
       simprint.fmt_with_coords("recv_left layer_index={d} fully received", .{ @as(u32, layer_index) });
-      @activate(exit_task_id);
+      @activate(unblock_current_layer_id);
     }
 }
 
+// This is just sending a signal and not real data.
+task unblock_current_layer() void {
+  const out_dsd = @get_dsd(fabout_dsd, .{
+                    .fabric_color = activation_color, 
+                    .extent = 1,  // no data only signal.
+                    .output_queue = activation_oq
+                  });
+        simprint.fmt_with_coords("unblock_current_layer: layer_index={d}", .{ @as(u32, layer_index) });
+        @fmovs(out_dsd, invalid_dsd, .{ .async = true }); 
+}
+
+// WTT
+task recv_activation_signal(invalid_data: f32) void {
+  @unblock(compute_inside_layer_id);
+}
 
 fn initialize() void {
-    x[0] = @as(f32, 0.0); // {0,1,2,3,4,5,6,7,8 = Sum(0,1,2,3,4,5,6,7,8) = 36 }
+    x[0] = @as(f32, 0.0);
     if (pe_id == 0) {
         x[0] = @as(f32, 1.0);  // propogate this to the end.
     }
@@ -161,12 +184,6 @@ fn init_data() void {
     }
 }
 
-task send_done_task() void {
-    simprint.print_string("send_done_task\n");
-    simprint.fmt_with_coords("x = {f}", .{x[0]});
-    sys_mod.unblock_cmd_stream();
-}
-
 task exit_task() void {
     simprint.fmt_with_coords("x = {f}", .{x[0]});
     sys_mod.unblock_cmd_stream();
@@ -176,9 +193,9 @@ comptime {
     @bind_local_task(exit_task, exit_task_id);
     @bind_local_task(compute_inside_layer, compute_inside_layer_id);
     @bind_local_task(send_right, send_right_task_id);
-    @bind_local_task(send_done_task, send_done_task_id);
     @bind_data_task(recv_left, recv_left_task_id);
-    // @bind_local_task(done_task, done_task_id);
+    @bind_local_task(unblock_current_layer, unblock_current_layer_id);
+    @bind_data_task(recv_activation_signal, recv_activation_signal_id);
     broadcast_right1.configure_network();
     broadcast_right2.configure_network();
     broadcast_right3.configure_network();
@@ -193,5 +210,13 @@ fn configure_dataflow_bridge() void {
       @set_local_color_config(send_color, .{.routes = .{ .rx = .{RAMP}, .tx = .{EAST}  }});
     } else if (is_pe_recv_column()) {
       @set_local_color_config(send_color, .{.routes = .{ .rx = .{WEST}, .tx = .{RAMP}  }});
+    }
+    // activation color starts from first column of layer to last column of layer.
+    if (is_pe_first_in_layer()) {
+      @set_local_color_config(activation_color, .{.routes = .{ .rx = .{RAMP}, .tx = .{EAST, RAMP}  }});
+    } else if (is_pe_last_in_layer()) {
+      @set_local_color_config(activation_color, .{.routes = .{ .rx = .{WEST}, .tx = .{RAMP}  }});
+    } else {
+      @set_local_color_config(activation_color, .{.routes = .{ .rx = .{WEST}, .tx = .{EAST}  }});
     }
 }
