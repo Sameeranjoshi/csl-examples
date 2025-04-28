@@ -10,6 +10,7 @@ param total_levels_count: i16;
 // bridge colors
 const bcast_color  : color         = @get_color(1);
 const bridge_send_color  : color         = @get_color(2);
+const diagonal_broadcast_x_color  : color         = @get_color(3);
 
 const M: i16 = layer_params.M; // Height of local matrix, or num rows per PE
 const N: i16 = layer_params.N; // Width of local matrix, or num cols per PE
@@ -60,6 +61,14 @@ const send_bcast_iq = @get_input_queue(0);
 
 const math_lib = @import_module("<math>");
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+const diagonal_broadcast_x = @import_module("../custom-cc/broadcast.csl", .{
+  .color_1 = diagonal_broadcast_x_color, 
+  .pe_id = pe_id_x, 
+  .root_id = pe_id_y, 
+  .start_index = layer_start_x, 
+  .end_index = layer_end_x, 
+  .POS_DIR = EAST, 
+  .NEG_DIR = WEST});
 const mpi_x = @import_module("../csl_source/csl-libs/collectives_2d/pe.csl", .{
     .dim_params = c2d_params.x,
     .queues = [2]u16{2,4},
@@ -216,13 +225,9 @@ fn initialize() void {
     // now D_inv, is 1/A_tile for px==py and bcast to other PEs.
     @map(inverse_callback, dsd_A_diag, dsd_D_inv);
   }
-  mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, STATE_MACHINE);
-  if (py == 0 and px == 1) {
-    // print D_inv
-    for (D_inv) |val, i| {
-      simprint.fmt_with_coords("D_inv_after_broadcast[{d}] = {f}", .{ i, @as(f32, val) });
-    }
-  }
+  // mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, STATE_MACHINE);
+  cur_state = STATE_PRINT;
+  diagonal_broadcast_x.transfer_data(&D_inv, M_local, STATE_MACHINE);
 }
 
 fn layout_print(runtime_layer_index: u32) void {
@@ -403,6 +408,7 @@ task exit_task() void {
   // sys_mod.unblock_cmd_stream();
 }
 
+
 // State machine task
 task f_state() void {
  if (STATE_INIT == cur_state) {
@@ -483,8 +489,10 @@ task f_state() void {
   } else if (STATE_PRINT == cur_state) {
     simprint.print_string("STATE_PRINT\n");
     // print D_inv
-    for (D_inv) |val, i| {
-      simprint.fmt_with_coords("D_inv[{d}] = {f}", .{ i, @as(f32, val) });
+    if (py == 0) {
+      for (D_inv) |val, i| {
+        simprint.fmt_with_coords("D_inv[{d}] = {f}", .{ i, @as(f32, val) });
+      }
     }
     sys_mod.unblock_cmd_stream();
   }
@@ -502,6 +510,7 @@ task f_state() void {
 fn v_cycle_down_function() void {
   initialize();
   mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, exit_task_id);
+  // diagonal_broadcast_x.transfer_data(&dummy, 4096, finish_sync_id);
   // loop until iter_count < iterations[0]
   while (iter_count < iterations[0]) {
     compute_jacobi();
@@ -572,6 +581,7 @@ comptime {
   @export_symbol(layout_print); // prints layout of A
 
   configure_dataflow_bridge();
+  diagonal_broadcast_x.configure_network();
 
 }
 

@@ -1,0 +1,56 @@
+param pe_id: u16;
+param Pw: u16;
+param root_id: u16;
+param memcpy_params: comptime_struct;
+param c2d_params: comptime_struct;
+
+// const root_id: u16 = 5;
+const broadcast_right = @import_module("broadcast.csl", .{
+    .color_1 = @get_color(4),
+    .pe_id = pe_id,
+    .root_id = root_id,
+    .POS_DIR = EAST,
+    .NEG_DIR = WEST,
+    .start_index = 0,
+    .end_index = Pw - 1
+});
+
+const mpi_x = @import_module("<collectives_2d/pe>", .{
+    .dim_params = c2d_params.x,
+    .queues = [2]u16{2,4},
+    .dest_dsr_ids = [1]u16{1},
+    .src0_dsr_ids = [1]u16{1},
+    .src1_dsr_ids = [1]u16{1}
+    });
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+const simprint = @import_module("<simprint>", .{ .enable = true });
+
+// Data buffer for broadcast
+const Nx = 1;
+var x = @zeros([Nx]f32);
+var x_ptr: [*]f32 = &x;
+
+const exit_task_id: local_task_id = @get_local_task_id(3);
+
+// Initialize data
+fn init_data() void {
+    mpi_x.init();
+
+    x[0] = @as(f32, pe_id); // {0,1,2,3,4,5,6,7}
+    x[0] += 0.5;
+    simprint.fmt_with_coords("x_initial = {f}", .{x[0]});
+    // broadcast_right.transfer_data(x_ptr, Nx, exit_task_id);
+    var send_buf = @ptrcast([*]u32, &x);
+    mpi_x.broadcast(root_id, send_buf, Nx, exit_task_id);
+}
+
+task exit_task() void {
+    simprint.fmt_with_coords("x = {f}", .{x[0]});
+    sys_mod.unblock_cmd_stream();
+}
+comptime {
+    @bind_local_task(exit_task, exit_task_id);
+    broadcast_right.configure_network();
+    @export_symbol(init_data);
+}

@@ -1,0 +1,73 @@
+param color_1: color;
+param pe_id: u32;
+param root_id: u32; // *
+param POS_DIR: direction;
+param NEG_DIR: direction;
+param start_index: u32; // *
+param end_index: u32; // *
+
+const simprint = @import_module("<simprint>", .{ .enable = true });
+
+const distance_from_root: i32 = @as(i32, pe_id) - @as(i32, root_id);
+fn is_PE_diagonal() bool {
+  return pe_id == root_id;
+}
+
+fn is_PE_right_of_root() bool {
+  return distance_from_root > 0;
+}
+
+fn is_PE_left_of_root() bool {
+  return distance_from_root < 0;
+}
+
+fn is_PE_start_of_layer() bool {
+  return pe_id == start_index;
+}
+
+fn is_PE_end_of_layer() bool {
+  return pe_id == end_index;
+}
+
+var invalid_f32 = @zeros([1]f32);
+var fabout_pos = @get_dsd(fabout_dsd, .{ .extent = 1, .fabric_color = color_1, .output_queue=@get_output_queue(3)});
+var fabin_neg = @get_dsd(fabin_dsd, .{ .extent = 1, .fabric_color = color_1, .input_queue=@get_input_queue(3)});
+var mem = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> invalid_f32[i] });
+
+fn configure_network() void {
+  if (!is_PE_diagonal()) {
+    @block(color_1);
+  }
+  if (is_PE_diagonal()) {
+    @set_local_color_config(color_1, .{.routes = .{.rx = .{RAMP}, .tx = .{POS_DIR, NEG_DIR}}});
+  } else if (is_PE_right_of_root()) {
+    if (is_PE_end_of_layer()) { // this is last PE in layer
+      @set_local_color_config(color_1, .{.routes = .{.rx = .{NEG_DIR}, .tx = .{RAMP}}});
+    } else { // middle PEs
+      @set_local_color_config(color_1, .{.routes = .{.rx = .{NEG_DIR}, .tx = .{RAMP, POS_DIR}}});
+    }
+  } else if (is_PE_left_of_root()) {
+    if (is_PE_start_of_layer()) {
+      @set_local_color_config(color_1, .{.routes = .{.rx = .{POS_DIR}, .tx = .{RAMP}}});
+    } else {
+      @set_local_color_config(color_1, .{.routes = .{.rx = .{POS_DIR}, .tx = .{RAMP, NEG_DIR}}});
+    }
+  }
+}
+
+fn transfer_data(buf: [*]f32, count: u16, activate: local_task_id) void {
+  fabin_neg = @set_dsd_length(fabin_neg, count);
+  fabout_pos = @set_dsd_length(fabout_pos, count);
+  mem = @set_dsd_length(mem, count);
+  mem = @set_dsd_base_addr(mem, buf);
+
+  // This is microthread-safe as there is only 1 operation on a PE at a time.
+  if(is_PE_diagonal()) {
+    @fmovs(fabout_pos, mem, .{ .async = true });  // send data to all PEs
+  } else { 
+    @fmovs(mem, fabin_neg, .{ .async = true });  // receive data from root PE
+  }
+
+  simprint.fmt_with_coords("Activating {d}", .{ @as(u32, pe_id) });
+  @activate(activate);
+}
