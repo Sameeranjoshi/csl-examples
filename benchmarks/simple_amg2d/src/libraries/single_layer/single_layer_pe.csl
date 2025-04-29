@@ -54,6 +54,7 @@ const bcast_b_tile_id: local_task_id = @get_local_task_id(3);
 // Queue IDs
 const bridge_send_color_oq = @get_output_queue(0);
 const send_bcast_oq = @get_output_queue(1);
+const send_bcast_iq = @get_input_queue(0);
 
 
 const math_lib = @import_module("<math>");
@@ -187,18 +188,41 @@ task recv_left_bnext(wavelet_data: f32) void {
       simprint.fmt_with_coords("Received b_tile[{d}] = {f}", .{ i, val });
     }
     @activate(bcast_b_tile_id);
+    // bcast_b_tile_fabric();
   }
 }
 
+// fn bcast_b_tile_fabric() void {
+//     simprint.fmt_with_coords("bcast_b_tile_fabric layer_index={d}", .{ @as(u32, layer_index) });
+//     const out_dsd = @get_dsd(fabout_dsd, .{
+//                       .fabric_color = bcast_color, 
+//                       .extent = M_local,
+//                       .output_queue = send_bcast_oq,
+//                       });
+//     const in_dsd = @get_dsd(fabin_dsd, .{
+//                       .fabric_color = bcast_color, 
+//                       .extent = M_local,
+//                       .input_queue = send_bcast_iq,
+//                       });
+//   cur_state = STATE_INIT;
+//   if (is_layer_first_column()) {                      
+//     @fmovs(out_dsd, dsd_b_tile, .{ .async = true, .activate = exit_task_id });
+//   } else {
+//     @fmovs(dsd_b_tile, in_dsd, .{ .async = true, .activate = STATE_MACHINE });
+//   }
+//   // print b_tile
+//   for (b_tile) |val, i| {
+//     simprint.fmt_with_coords("b_tile[{d}] = {f}", .{ i, val });
+//   }
+// } 
+
 task bcast_b_tile() void {
-  if(is_layer_first_column()){
     const out_dsd = @get_dsd(fabout_dsd, .{
                       .fabric_color = bcast_color, 
                       .extent = M_local,
                       .output_queue = send_bcast_oq,
                     });
     @fmovs(out_dsd, dsd_b_tile, .{ .async = true, .activate = exit_task_id });
-  }
 }
 
 // Use to keep track of # of invocations of recv_x task
@@ -214,8 +238,7 @@ task recv_b_tile(b_val: f32) void {
   if (num_recv_b_tile == M_local) {
     simprint.fmt_with_coords("unblocked layer_index={d}", .{ @as(u32, layer_index) });
     // cur_state = STATE_INIT;
-    @unblock(STATE_MACHINE);
-    // @activate(STATE_MACHINE);
+      @unblock(STATE_MACHINE);
   }
 }
 
@@ -304,7 +327,9 @@ fn v_cycle_down() void {
   cur_state = STATE_INIT;
   @activate(STATE_MACHINE);
   if (is_first_layer() and is_rectangle_first_column()) {
+  // if (is_first_layer()) {
     bcast_b_tile();
+    // bcast_b_tile_fabric();
   }
 }
 
@@ -458,7 +483,6 @@ fn initialize() void {
     @map(inverse_callback, dsd_A_diag, dsd_D_inv);
   }
   mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, STATE_MACHINE);
-  
 }
 
 fn init_params() void {
