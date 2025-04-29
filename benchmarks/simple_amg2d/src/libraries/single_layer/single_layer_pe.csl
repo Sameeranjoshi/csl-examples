@@ -50,7 +50,7 @@ const recv_b_tile_id: data_task_id = @get_data_task_id(bcast_color); //This shou
 const send_right_bnext_id: local_task_id = @get_local_task_id(24);
 const exit_task_id: local_task_id = @get_local_task_id(26);
 const bcast_b_tile_id: local_task_id = @get_local_task_id(3);
-
+const done_task_id: local_task_id = @get_local_task_id(8);
 // Queue IDs
 const bridge_send_color_oq = @get_output_queue(0);
 const send_bcast_oq = @get_output_queue(1);
@@ -192,30 +192,6 @@ task recv_left_bnext(wavelet_data: f32) void {
   }
 }
 
-// fn bcast_b_tile_fabric() void {
-//     simprint.fmt_with_coords("bcast_b_tile_fabric layer_index={d}", .{ @as(u32, layer_index) });
-//     const out_dsd = @get_dsd(fabout_dsd, .{
-//                       .fabric_color = bcast_color, 
-//                       .extent = M_local,
-//                       .output_queue = send_bcast_oq,
-//                       });
-//     const in_dsd = @get_dsd(fabin_dsd, .{
-//                       .fabric_color = bcast_color, 
-//                       .extent = M_local,
-//                       .input_queue = send_bcast_iq,
-//                       });
-//   cur_state = STATE_INIT;
-//   if (is_layer_first_column()) {                      
-//     @fmovs(out_dsd, dsd_b_tile, .{ .async = true, .activate = exit_task_id });
-//   } else {
-//     @fmovs(dsd_b_tile, in_dsd, .{ .async = true, .activate = STATE_MACHINE });
-//   }
-//   // print b_tile
-//   for (b_tile) |val, i| {
-//     simprint.fmt_with_coords("b_tile[{d}] = {f}", .{ i, val });
-//   }
-// } 
-
 task bcast_b_tile() void {
     const out_dsd = @get_dsd(fabout_dsd, .{
                       .fabric_color = bcast_color, 
@@ -246,6 +222,18 @@ task recv_b_tile(b_val: f32) void {
 task exit_task() void {
   simprint.fmt_with_coords("exit_task {d}", .{ @as(u32, layer_index) });
   sys_mod.unblock_cmd_stream();
+}
+
+task done_task() void {
+  simprint.fmt_with_coords("done_task {d}", .{ @as(u32, layer_index) });
+    // print D_inv after broadcast
+  for (D_inv) |val, i| {
+    simprint.fmt_with_coords("D_inv_after_broadcast[{d}] = {f}", .{ i, @as(f32, val) });
+  }
+  // sys_mod.unblock_cmd_stream();
+  // Instead of unblocking cmd stream, trigger next state
+  cur_state = STATE_INIT;
+  @unblock(STATE_MACHINE);
 }
 
 // State machine task
@@ -344,6 +332,7 @@ comptime {
   @bind_local_task(send_right_bnext, send_right_bnext_id);
   @bind_local_task(exit_task, exit_task_id);
   @bind_local_task(bcast_b_tile, bcast_b_tile_id);
+  @bind_local_task(done_task, done_task_id);
   // data task
   @bind_data_task(recv_left_bnext, recv_left_bnext_id);
   @bind_data_task(recv_b_tile, recv_b_tile_id);
@@ -471,18 +460,13 @@ fn inverse_callback(val: f32) f32 {
 }
 
 fn initialize() void {
-    // print D_inv before broadcast
-  // if (py == 0 and px == 1) {
-  //   for (D_inv) |val, i| {
-  //     simprint.fmt_with_coords("D_inv_before_broadcast[{d}] = {f}", .{ i, @as(f32, val) });
-  //   }
-  // }
-  cur_state = next_state; // This is set by the f_state function.
-  if (px == py) {
-    // now D_inv, is 1/A_tile for px==py and bcast to other PEs.
-    @map(inverse_callback, dsd_A_diag, dsd_D_inv);
-  }
-  mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, STATE_MACHINE);
+    if (px == py) {
+        @map(inverse_callback, dsd_A_diag, dsd_D_inv);
+    }
+    // Broadcast D_inv and wait for completion before proceeding
+    mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, done_task_id);
+    
+    // Don't update cur_state here - let the broadcast completion trigger the state machine
 }
 
 fn init_params() void {
