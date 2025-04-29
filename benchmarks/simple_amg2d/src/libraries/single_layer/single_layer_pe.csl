@@ -39,27 +39,6 @@ const STATE_BCAST_PROLONGATION: i16 = 12;
 const STATE_SEND_DATA: i16 = 13;
 const STATE_RECV_DATA: i16 = 14;
 const STATE_CHANGE_LAYERS: i16 = 15;
-const STATE_PRINT: i16 = 16;
-
-
-
-
-// // collective module colors
-// const collective_x_color_right : color   = @get_color(5);
-// const collective_x_color_left  : color   = @get_color(6);
-// const collective_y_color_down  : color   = @get_color(7);
-// const collective_y_color_up    : color   = @get_color(8);
-
-
-// // collective module entrypoints
-// const C2D_X_ENTRYPOINT_0 : local_task_id = @get_local_task_id(13);
-// const C2D_X_ENTRYPOINT_1 : local_task_id = @get_local_task_id(14);
-// const C2D_Y_ENTRYPOINT_0 : local_task_id = @get_local_task_id(15);
-// const C2D_Y_ENTRYPOINT_1 : local_task_id = @get_local_task_id(16);
-
-// // layer task ID
-// const STATE_MACHINE      : local_task_id = @get_local_task_id(17);
-
 
 // bridge colors
 const bcast_color  : color         = @get_color(1); // This is also activating color.
@@ -73,8 +52,8 @@ const exit_task_id: local_task_id = @get_local_task_id(26);
 const bcast_b_tile_id: local_task_id = @get_local_task_id(3);
 
 // Queue IDs
-const bridge_send_color_oq = @get_output_queue(1);
-const send_bcast_oq = @get_output_queue(3);
+const bridge_send_color_oq = @get_output_queue(0);
+const send_bcast_oq = @get_output_queue(1);
 
 
 const math_lib = @import_module("<math>");
@@ -173,7 +152,7 @@ var next_state: i16 = 0;
 
 task send_right_bnext() void {
   if (layer_send_column() and !is_last_layer()) {
-    simprint.fmt_with_coords("send_right_bnext layer_index={d}", .{ @as(u32, layer_index) });
+    simprint.fmt_with_coords("send_right_bnext layer_index={d} ", .{ @as(u32, layer_index) });
     const out_bridge_dsd = @get_dsd(fabout_dsd, .{
                       .fabric_color = bridge_send_color, 
                       .extent = R_M_local,
@@ -182,10 +161,11 @@ task send_right_bnext() void {
     for (b_next) |val, i| {
       simprint.fmt_with_coords("sending b_next[{d}]... = {f}", .{ i, val });
     }
-    @fmovs(out_bridge_dsd, dsd_b_next, .{ .async = true });
+    @fmovs(out_bridge_dsd, dsd_b_next, .{ .async = true, .activate = exit_task_id });
   } else if (is_last_layer()) {
-    next_state = STATE_EXIT;
-    f_trigger_state_machine();
+    // next_state = STATE_EXIT;
+    // f_trigger_state_machine();
+    @activate(exit_task_id);
   }
 }
 
@@ -194,21 +174,31 @@ var num_recv_bnext: i16 = 0;
 task recv_left_bnext(wavelet_data: f32) void {
   b_tile[num_recv_bnext] = wavelet_data;
   num_recv_bnext += 1;
-  if (num_recv_bnext == R_M_local) {
-    simprint.fmt_with_coords("recv_left_bnext layer_index={d} fully received", .{ @as(u32, layer_index) });
+  // Reason to take R_N_local is that both subgrids have different R_M_local values, so sender sends
+  // R_M_local whereas receiver expects R_M_local from layer 0, but instead uses local R_M_local from layer 1.
+  // This causes the receiver to receive data in wavelet/color but the receiver assumes the data is received.
+  // without being fully received, example sender sends 2 elements receiver should expect 2 but receiver has R_M_local=1, thinks
+  // it received full data and proceeds to next step, which is wrong.
+  // Fix: Use R_N_local instead of R_M_local as R_N_local = Fine grid size.
+  // Send R_M_local receive R_N_local.
+  if (num_recv_bnext == R_N_local) {  
+    // print b_tile
+    for (b_tile) |val, i| {
+      simprint.fmt_with_coords("Received b_tile[{d}] = {f}", .{ i, val });
+    }
     @activate(bcast_b_tile_id);
   }
 }
 
 task bcast_b_tile() void {
-    // 
+  if(is_layer_first_column()){
     const out_dsd = @get_dsd(fabout_dsd, .{
                       .fabric_color = bcast_color, 
                       .extent = M_local,
                       .output_queue = send_bcast_oq,
                     });
-    simprint.fmt_with_coords("unblock layer_index={d}", .{ @as(u32, layer_index) });
-    @fmovs(out_dsd, dsd_b_tile, .{ .async = true });
+    @fmovs(out_dsd, dsd_b_tile, .{ .async = true, .activate = exit_task_id });
+  }
 }
 
 // Use to keep track of # of invocations of recv_x task
@@ -216,20 +206,22 @@ task bcast_b_tile() void {
 var num_recv_b_tile: i16 = 0;
 
 task recv_b_tile(b_val: f32) void {
+  // wavelet print
+  simprint.fmt_with_coords("Received b_val = {f}", .{ b_val });
   b_tile[num_recv_b_tile] = b_val;
 
   num_recv_b_tile += 1;
   if (num_recv_b_tile == M_local) {
-    cur_state = STATE_INIT;
+    simprint.fmt_with_coords("unblocked layer_index={d}", .{ @as(u32, layer_index) });
+    // cur_state = STATE_INIT;
     @unblock(STATE_MACHINE);
+    // @activate(STATE_MACHINE);
   }
 }
 
-
 // Exit task
 task exit_task() void {
-  // simprint.fmt_with_coords("exit_task {d}", .{ @as(u32, layer_index) });
-  simprint.fmt_with_coords("x = {f}", .{x[0]});
+  simprint.fmt_with_coords("exit_task {d}", .{ @as(u32, layer_index) });
   sys_mod.unblock_cmd_stream();
 }
 
@@ -241,24 +233,16 @@ task f_state() void {
     initialize();
 
   } else if (STATE_COMPUTE_JACOBI == cur_state) {
-    // print the D_inv on tile 1,0
-    if (py == 0 and px == 1) {
-      for (D_inv) |val, i| {
-        simprint.fmt_with_coords("D_inv+after+bcast[{d}] = {f}", .{ i, @as(f32, val) });
-      }
-    }
     simprint.print_string("STATE_COMPUTE_JACOBI\n");
     iter_count += 1;
     next_state = STATE_BCAST_JACOBI;
     compute_jacobi();
 
   } else if (STATE_BCAST_JACOBI == cur_state) {
-    // simprint.print_string("STATE_BCAST_JACOBI\n");
     next_state = STATE_CHECK_JACOBI_ITERATION;
     bcast_jacobi();
 
   } else if (STATE_CHECK_JACOBI_ITERATION == cur_state) {
-    // simprint.print_string("STATE_CHECK_JACOBI_ITERATION\n");
     if (iter_count < iterations[0]) {
       next_state = STATE_COMPUTE_JACOBI;
     } else{
@@ -276,7 +260,6 @@ task f_state() void {
     compute_residual();
 
   } else if (STATE_BCAST_RESIDUAL == cur_state) {
-    // simprint.print_string("STATE_BCAST_RESIDUAL\n");
     next_state = STATE_COMPUTE_RESTRICTION;
     bcast_residual();
 
@@ -286,7 +269,6 @@ task f_state() void {
     compute_restriction();
 
   } else if (STATE_SEND_DATA == cur_state) {
-    simprint.fmt_with_coords("STATE_SEND_DATA, layer_index={d}, px={d}, py={d}", .{ @as(u32, layer_index), @as(u32, px), @as(u32, py) });
     @activate(send_right_bnext_id);
 
   } else if (STATE_PROLONGATION == cur_state) {
@@ -298,26 +280,15 @@ task f_state() void {
     simprint.print_string("STATE_BCAST_PROLONGATION\n");
     next_state = STATE_CHECK_JACOBI_ITERATION;
     bcast_prolongation();
-  } 
-  else if (STATE_EXIT == cur_state) {
+
+  } else if (STATE_EXIT == cur_state) {
     simprint.print_string("STATE_EXIT\n");
-    // print b_tile before exit
     for (b_next) |val, i| {
       simprint.fmt_with_coords("b_next[{d}] = {f}", .{ i, val });
     }
     sys_mod.unblock_cmd_stream();
 
-  } else if (STATE_PRINT == cur_state) {
-    simprint.print_string("STATE_PRINT\n");
-    // print D_inv
-    // if (py == 0) {
-      for (D_inv) |val, i| {
-        simprint.fmt_with_coords("D_inv[{d}] = {f}", .{ i, @as(f32, val) });
-      }
-    // }
-    sys_mod.unblock_cmd_stream();
-  }
-  else {
+  } else {
     @assert(false); // Error: unknown state
     // assert() is ignored by HW, it could hang here
     // To avoid a stall, trigger callback (the caveat is the wrong result)
@@ -330,9 +301,9 @@ task f_state() void {
 // Entrypoint into kernel
 fn v_cycle_down() void {
   init_params();
+  cur_state = STATE_INIT;
   @activate(STATE_MACHINE);
   if (is_first_layer() and is_rectangle_first_column()) {
-    // send b_tile on the bridge_send_color
     bcast_b_tile();
   }
 }
