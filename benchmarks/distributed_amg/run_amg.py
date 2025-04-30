@@ -451,17 +451,17 @@ def host_calculations(v_cycle_data):
         A_coarsest = ml.levels[-1].A
         x_coarsest[:] = solver_callable_host(A_coarsest, b_coarsest)
         
-        # V up
-        for i in reversed(range(len(ml.levels) - 1)):
-            # Set context BEFORE the operation
-            hostprofiling.add_other_info(iteration, i, "up")
+        # # V up
+        # for i in reversed(range(len(ml.levels) - 1)):
+        #     # Set context BEFORE the operation
+        #     hostprofiling.add_other_info(iteration, i, "up")
             
-            level = ml.levels[i]
-            x_lower_level = x_level[i+1]
-            x_current_updated, operator_timing = amg.each_layer_solver_up(level, x_level, b_level, ml, setup_config, i, x_lower_level, hostprofiling)
-            x_level[i] = x_current_updated
-            # print("UP PHASE\n")
-            # amg.debugprint(ml.levels, b_level, x_level)
+        #     level = ml.levels[i]
+        #     x_lower_level = x_level[i+1]
+        #     x_current_updated, operator_timing = amg.each_layer_solver_up(level, x_level, b_level, ml, setup_config, i, x_lower_level, hostprofiling)
+        #     x_level[i] = x_current_updated
+        #     # print("UP PHASE\n")
+        #     # amg.debugprint(ml.levels, b_level, x_level)
 
         # Check convergence
         residual = b_level[0] - ml.levels[0].A @ x_level[0]
@@ -475,8 +475,8 @@ def host_calculations(v_cycle_data):
     amg.debugprint(ml.levels, b_level, x_level)
     hostprofiling.print_timing_summary()
     # Checks
-    b_solution, x_solution = b_level[0], x_level[0]
-    residual_host= np.linalg.norm(ml.levels[0].A @ x_solution - b_level[0])  
+    b_solution, x_solution = b_level[-1], x_level[-1]
+    residual_host= np.linalg.norm(ml.levels[-1].A @ x_solution - b_solution)  
     return b_solution, x_solution, residual_host
 
 class HardwareTimerManager:
@@ -576,6 +576,16 @@ def perform_coarse_solve(level, x_level, b_level, solver_callable_host):
     ############################################################
     
     return x_coarsest
+  
+def copy_all_layers_on_device(simple_memcpy, simulator,symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer):
+    """Copy data from all layers on device"""
+    for level_index in range(len(ml.levels) - 1):
+        deviceprofiling.add_other_info(iteration, level_index, "down")
+        
+        copy_layer_on_device(simple_memcpy, simulator,symbols, level_index, ml.levels[level_index],
+                layer_coordinates_map[level_index], x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer)
+
+
 
 def copy_layer_on_device(simple_memcpy, simulator,symbols, level_index, level, coords, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer):
     """Handle downward pass operations for a single level"""
@@ -663,39 +673,6 @@ def copy_layer_on_device(simple_memcpy, simulator,symbols, level_index, level, c
     simple_memcpy.do_memcpy_h2d(symbols['omega'], omega, px, py, w, h, 1)
     simple_memcpy.do_memcpy_h2d(symbols['iterations'], iterations, px, py, w, h, 1)
     h2d_time = time.time() - start_time
-    
-    # # timer
-    # print("Step 3: Timer Start")
-    # hardwareTimer.start()
-    # # Compute
-    # print("Step 4: Compute")
-    # # simulator.launch("layout_print", np.uint32(level_index), nonblock=False)
-    # simulator.launch("v_cycle_down", np.uint32(level_index), nonblock=False)
-    # # timer
-    # print("Step 5: Timer Stop")
-    # hardwareTimer.stop()
-    
-    
-    # # D2H transfers and update data
-    # print("Step 6: D2H Transfers")
-    # b_coarse_device = np.zeros(R_M, dtype=np.float32)
-    # x_coarse_device = np.zeros_like(b_coarse_device)
-    # x_smooth = np.zeros(N, dtype=np.float32)
-    # d2h_start_time = time.time()
-    # print(f"D2H ROI: {px + (w-1) }, {py}, {1}, {h}")
-    # simple_memcpy.do_memcpy_d2h(b_coarse_device, symbols['b_next'], px + (w-1), py + 0, 1, h, per_pe_restrict_rows*1) # copy from symbol into result.
-    # simple_memcpy.do_memcpy_d2h(x_smooth, symbols['x'], px, py, w, 1, per_pe_cols*1)
-    # d2h_time = time.time() - d2h_start_time
-    # # time retrival
-    # print("Step 7: Time Retrival")
-    # hardware_timing = hardwareTimer.get_timing_data(simple_memcpy, symbols, px, py, w, h)
-            
-    # # logging time
-    # print("Step 8: Logging Time")
-    # df = time_logs_new(h, w, hardware_timing, h2d_time, d2h_time, is_downward=True, 
-    #               level_index=level_index, iteration=iteration, filename="./v_cycle_up_down.csv", deviceprofiling=deviceprofiling)
-
-    # return x_smooth, b_coarse_device, x_coarse_device
 
     
 def perform_downward_pass(simple_memcpy, simulator,symbols, level_index, level, coords, x_level, b_level, setup_config, iteration, deviceprofiling):
@@ -896,7 +873,8 @@ def perform_upward_pass(simple_memcpy, simulator, symbols, level_index, level, c
                   level_index=level_index, iteration=iteration, filename="./v_cycle_up_down.csv", deviceprofiling=deviceprofiling)
     
     return x_level_device
-def device_calculations_dataflow(v_cycle_data):
+  
+def device_calculations_distributed(v_cycle_data):
     run_args, logs_dir = parse_args()
     
     ############################################################
@@ -967,21 +945,9 @@ def device_calculations_dataflow(v_cycle_data):
     while iteration < max_iterations and residual > tol:
         print(f"\n{'='*40}\n│ ITERATION {iteration}\n{'='*40}")
         
-        # Downward passes
-        for level_index in range(len(ml.levels) - 1):
-            # Set context before operation
-            deviceprofiling.add_other_info(iteration, level_index, "down")
-            
-            copy_layer_on_device(
-                simple_memcpy, simulator, symbols, level_index, ml.levels[level_index],
-                layer_coordinates_map[level_index], x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer=None
-            )
-            # check the data.
-            # simulator.launch("layout_print", np.uint32(level_index), nonblock=False)
+        copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer=None)
         print("Step 4: Compute")
-        # simulator.launch("layout_print", np.uint32(level_index), nonblock=False)
-        simulator.launch("v_cycle_down", nonblock=False)
-                
+        simulator.launch("v_cycle_down", nonblock=False)        
         amg.debugprint(ml.levels, b_level, x_level)
         
         # D2H transfers
@@ -991,6 +957,9 @@ def device_calculations_dataflow(v_cycle_data):
         b_coarse_device = np.zeros(total_pe_rows*b_coarse_shape, dtype=np.float32)
         simple_memcpy.do_memcpy_d2h(b_coarse_device, symbols['b_next'], total_pe_cols-1, 0, 1, total_pe_rows, b_coarse_shape*1) # copy from symbol into result.
         print(f"b_coarse_device: {b_coarse_device}")
+        
+        # Coarse solve
+        # x_level[-1] = perform_coarse_solve(ml.levels[-1], x_level, b_level, solver_callable_host)
         
         # Check convergence
         # residual = np.linalg.norm(ml.levels[0].A @ x_level[0] - b_level[0])
@@ -1175,8 +1144,8 @@ def main():
   print("############################################################")
   print("# INPUT DATA")
   print("############################################################")
-  N = 7
-  M = 7
+  N = 4
+  M = 4
   eps = 1.e-5
   max_iterations = 1
     

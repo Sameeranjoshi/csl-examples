@@ -23,26 +23,19 @@ const layer_index: i16 = layer_params.layer_index;
 
 // Task IDs
 const STATE_MACHINE: local_task_id = layer_params.layer_task_id[0];
-const STATE_SYNC: i16 = 0;
 const STATE_INIT: i16 = 1;
-const STATE_DOWN_CYCLE: i16 = 2;
-const STATE_UP_CYCLE: i16 = 3;
-const STATE_EXIT: i16 = 4;
-const STATE_COMPUTE_JACOBI: i16 = 5;
-const STATE_BCAST_JACOBI: i16 = 6;
-const STATE_CHECK_JACOBI_ITERATION: i16 = 7;
-const STATE_COMPUTE_RESIDUAL: i16 = 8;
-const STATE_BCAST_RESIDUAL: i16 = 9;
-const STATE_COMPUTE_RESTRICTION: i16 = 10;
-const STATE_PROLONGATION: i16 = 11;
-const STATE_BCAST_PROLONGATION: i16 = 12;
-const STATE_SEND_DATA: i16 = 13;
-const STATE_RECV_DATA: i16 = 14;
-const STATE_CHANGE_LAYERS: i16 = 15;
+const STATE_EXIT: i16 = 2;
+const STATE_COMPUTE_JACOBI: i16 = 3;
+const STATE_BCAST_JACOBI: i16 = 4;
+const STATE_CHECK_JACOBI_ITERATION: i16 = 5;
+const STATE_COMPUTE_RESIDUAL: i16 = 6;
+const STATE_BCAST_RESIDUAL: i16 = 7;
+const STATE_COMPUTE_RESTRICTION: i16 = 8;
+const STATE_PROLONGATION: i16 = 9;
+const STATE_BCAST_PROLONGATION: i16 = 10;
 
 // bridge colors
 const bcast_color  : color         = @get_color(4); // This is also activating color.
-const bridge_send_color  : color         = @get_color(5);
 
 // state_machine tasks(8,9,10,11,12)
 // const state_init_id: local_task_id = @get_local_task_id(13);
@@ -57,14 +50,11 @@ const bridge_send_color  : color         = @get_color(5);
 const state_exit_id: local_task_id = @get_local_task_id(13);
 
 // tasks
-const recv_left_bnext_id: data_task_id = @get_data_task_id(bridge_send_color);
 const recv_b_tile_id: data_task_id = @get_data_task_id(bcast_color); //This should unblock
-const send_right_bnext_id: local_task_id = @get_local_task_id(14);
-const exit_task_id: local_task_id = @get_local_task_id(15);
-const bcast_b_tile_id: local_task_id = @get_local_task_id(16);
+const exit_task_id: local_task_id = @get_local_task_id(14);
+const bcast_b_tile_id: local_task_id = @get_local_task_id(15);
 const done_task_id: local_task_id = @get_local_task_id(17);
 // Queue IDs
-const bridge_send_color_oq = @get_output_queue(0);
 const send_bcast_oq = @get_output_queue(1);
 const send_bcast_iq = @get_input_queue(0);
 
@@ -72,14 +62,14 @@ const send_bcast_iq = @get_input_queue(0);
 const math_lib = @import_module("<math>");
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
-const mpi_x = @import_module("../csl_source/csl-libs/collectives_2d/pe.csl", .{
+const mpi_x = @import_module("<collectives_2d/pe>", .{
     .dim_params = c2d_params.x,
     .queues = [2]u16{2,4},
     .dest_dsr_ids = [1]u16{1},
     .src0_dsr_ids = [1]u16{1},
     .src1_dsr_ids = [1]u16{1}
     });
-const mpi_y = @import_module("../csl_source/csl-libs/collectives_2d/pe.csl", .{ // MOdified CC.
+const mpi_y = @import_module("<collectives_2d/pe>", .{
     .dim_params = c2d_params.y,
     .queues = [2]u16{3,5},
     .dest_dsr_ids = [1]u16{2},
@@ -87,11 +77,6 @@ const mpi_y = @import_module("../csl_source/csl-libs/collectives_2d/pe.csl", .{ 
     .src1_dsr_ids = [1]u16{2}
     });
 const simprint = @import_module("<simprint>", .{ .enable = true });
-// Data buffer for broadcast
-const Nx = 1;
-var x = @zeros([Nx]f32);
-var x_ptr: [*]f32 = &x;
-
 
 
 //x, b, A, R will be partitioned using 2D Block decomposition.
@@ -163,54 +148,14 @@ var cur_state: i16 = 0;// State tracking variables
 var next_state: i16 = 0;
 
 
-task send_right_bnext() void {
-  if (layer_send_column() and !is_last_layer()) {
-    simprint.fmt_with_coords("send_right_bnext layer_index={d} ", .{ @as(u32, layer_index) });
-    const out_bridge_dsd = @get_dsd(fabout_dsd, .{
-                      .fabric_color = bridge_send_color, 
-                      .extent = R_M_local,
-                      .output_queue = bridge_send_color_oq,
-                    });
-    for (b_next) |val, i| {
-      simprint.fmt_with_coords("sending b_next[{d}]... = {f}", .{ i, val });
-    }
-    @fmovs(out_bridge_dsd, dsd_b_next, .{ .async = true, .activate = exit_task_id });
-  } else if (is_last_layer()) {
-    // next_state = STATE_EXIT;
-    // f_trigger_state_machine();
-    @activate(exit_task_id);
-  }
-}
-
-// WTT
-var num_recv_bnext: i16 = 0;
-task recv_left_bnext(wavelet_data: f32) void {
-  b_tile[num_recv_bnext] = wavelet_data;
-  num_recv_bnext += 1;
-  // Reason to take R_N_local is that both subgrids have different R_M_local values, so sender sends
-  // R_M_local whereas receiver expects R_M_local from layer 0, but instead uses local R_M_local from layer 1.
-  // This causes the receiver to receive data in wavelet/color but the receiver assumes the data is received.
-  // without being fully received, example sender sends 2 elements receiver should expect 2 but receiver has R_M_local=1, thinks
-  // it received full data and proceeds to next step, which is wrong.
-  // Fix: Use R_N_local instead of R_M_local as R_N_local = Fine grid size.
-  // Send R_M_local receive R_N_local.
-  if (num_recv_bnext == R_N_local) {  
-    // print b_tile
-    for (b_tile) |val, i| {
-      simprint.fmt_with_coords("Received b_tile[{d}] = {f}", .{ i, val });
-    }
-    @activate(bcast_b_tile_id);
-    // bcast_b_tile_fabric();
-  }
-}
-
 task bcast_b_tile() void {
-    const out_dsd = @get_dsd(fabout_dsd, .{
-                      .fabric_color = bcast_color, 
-                      .extent = M_local,
-                      .output_queue = send_bcast_oq,
-                    });
-    @fmovs(out_dsd, dsd_b_tile, .{ .async = true, .activate = exit_task_id });
+  const out_dsd = @get_dsd(fabout_dsd, .{
+                    .fabric_color = bcast_color, 
+                    .extent = M_local,
+                    .output_queue = send_bcast_oq,
+                  });
+  cur_state = STATE_EXIT;
+  @fmovs(out_dsd, dsd_b_tile, .{ .async = true, .activate = STATE_MACHINE });
 }
 
 // Use to keep track of # of invocations of recv_x task
@@ -239,125 +184,44 @@ task exit_task() void {
 }
 
 task done_task() void {
-    simprint.fmt_with_coords("done_task {d}", .{ @as(u32, layer_index) });
-    // print D_inv after broadcast
-    for (D_inv) |val, i| {
-        simprint.fmt_with_coords("D_inv_after_broadcast[{d}] = {f}", .{ i, @as(f32, val) });
-    }
-    // Update state and unblock state machine
-    cur_state = next_state;
-    @unblock(STATE_MACHINE);
-    @activate(STATE_MACHINE);
-}
-
-// State machine tasks
-fn state_init() void {
-    simprint.fmt_with_coords("STATE_INIT, layer_index={d}", .{ @as(u32, layer_index) });
-    next_state = STATE_COMPUTE_JACOBI;
-    initialize();
-    simprint.fmt_with_coords("Came here layer_index={d}", .{ @as(u32, layer_index) });
-    // Wait for initialize to complete before proceeding
-    // @block(STATE_MACHINE);
-}
-
-fn state_compute_jacobi() void {
-    simprint.print_string("STATE_COMPUTE_JACOBI\n");
-    iter_count += 1;
-    next_state = STATE_BCAST_JACOBI;
-    compute_jacobi();
-    // Wait for compute_jacobi to complete
-    // @block(STATE_MACHINE);
-}
-
-fn state_bcast_jacobi() void {
-    next_state = STATE_CHECK_JACOBI_ITERATION;
-    bcast_jacobi();
-    // Wait for broadcast to complete
-    // @block(STATE_MACHINE);
-}
-
-fn state_check_jacobi() void {
-    if (iter_count < iterations[0]) {
-        next_state = STATE_COMPUTE_JACOBI;
-    } else {
-        if (is_v_cycle_up) {
-            next_state = STATE_EXIT;
-        } else {
-            next_state = STATE_COMPUTE_RESIDUAL;
-        }
-    }
-    f_trigger_state_machine();
-}
-
-fn state_compute_residual() void {
-    simprint.print_string("STATE_COMPUTE_RESIDUAL\n");
-    next_state = STATE_BCAST_RESIDUAL;
-    compute_residual();
-    // @block(STATE_MACHINE);
-}
-
-fn state_bcast_residual() void {
-    next_state = STATE_COMPUTE_RESTRICTION;
-    bcast_residual();
-    // @block(STATE_MACHINE);
-}
-
-fn state_compute_restriction() void {
-    simprint.print_string("STATE_COMPUTE_RESTRICTION\n");
-    next_state = STATE_SEND_DATA;
-    compute_restriction();
-
-}
-
-fn send_data() void {
-    simprint.print_string("STATE_SEND_DATA\n");
-    @activate(send_right_bnext_id);
-    // @block(STATE_MACHINE);
-}
-
-task state_prolongation() void {
-    simprint.print_string("STATE_PROLONGATION\n");
-    next_state = STATE_BCAST_PROLONGATION;
-    compute_prolongation();
-    @block(STATE_MACHINE);
-}
-
-task state_bcast_prolongation() void {
-    simprint.print_string("STATE_BCAST_PROLONGATION\n");
-    next_state = STATE_CHECK_JACOBI_ITERATION;
-    bcast_prolongation();
-    @block(STATE_MACHINE);
+  simprint.fmt_with_coords("done_task {d}", .{ @as(u32, layer_index) });
+  // print D_inv after broadcast
+  for (D_inv) |val, i| {
+      simprint.fmt_with_coords("D_inv_after_broadcast[{d}] = {f}", .{ i, @as(f32, val) });
+  }
+  // Update state and unblock state machine
+  cur_state = next_state;
+  @unblock(STATE_MACHINE);
+  @activate(STATE_MACHINE);
 }
 
 task state_exit() void {
-    simprint.print_string("STATE_EXIT\n");
-    for (b_next) |val, i| {
-        simprint.fmt_with_coords("b_next[{d}] = {f}", .{ i, val });
-    }
-    // sys_mod.unblock_cmd_stream();
+  simprint.print_string("STATE_EXIT\n");
+  for (b_next) |val, i| {
+      simprint.fmt_with_coords("b_next[{d}] = {f}", .{ i, val });
+  }
+  sys_mod.unblock_cmd_stream();
 }
 
 // Main state machine task
 task f_state() void {
-    switch (cur_state) {
-        STATE_INIT => state_init(),
-        STATE_COMPUTE_JACOBI => state_compute_jacobi(),
-        STATE_BCAST_JACOBI => state_bcast_jacobi(),
-        STATE_CHECK_JACOBI_ITERATION => state_check_jacobi(),
-        STATE_COMPUTE_RESIDUAL => state_compute_residual(),
-        STATE_BCAST_RESIDUAL => state_bcast_residual(),
-        STATE_COMPUTE_RESTRICTION => state_compute_restriction(),
-        STATE_SEND_DATA => send_data(),
-        // STATE_PROLONGATION => @activate(state_prolongation_id),
-        // STATE_BCAST_PROLONGATION => @activate(state_bcast_prolongation_id),
-        STATE_EXIT => @activate(state_exit_id),
-        else => {
-            simprint.print_string("Error: unknown state\n");
-            @assert(false);
-            simprint.print_string("Error: unknown state\n");
-            sys_mod.unblock_cmd_stream();
-        }
-    }
+  switch (cur_state) {
+      STATE_INIT => state_init(),
+      STATE_COMPUTE_JACOBI => state_compute_jacobi(),
+      STATE_BCAST_JACOBI => state_bcast_jacobi(),
+      STATE_CHECK_JACOBI_ITERATION => state_check_jacobi(),
+      STATE_COMPUTE_RESIDUAL => state_compute_residual(),
+      STATE_BCAST_RESIDUAL => state_bcast_residual(),
+      STATE_COMPUTE_RESTRICTION => state_compute_restriction(),
+      STATE_PROLONGATION => state_prolongation(),
+      STATE_BCAST_PROLONGATION => state_bcast_prolongation(),
+      STATE_EXIT => @activate(state_exit_id),
+      else => {
+          simprint.print_string("Error: unknown state\n");
+          @assert(false);
+          sys_mod.unblock_cmd_stream();
+      }
+  }
 }
 
 // Entrypoint into kernel
@@ -366,7 +230,6 @@ fn v_cycle_down() void {
   cur_state = STATE_INIT;
   @activate(STATE_MACHINE);
   if (is_first_layer() and is_rectangle_first_column()) {
-  // if (is_first_layer()) {
     bcast_b_tile();
     // bcast_b_tile_fabric();
   }
@@ -390,14 +253,10 @@ comptime {
   // @bind_local_task(state_prolongation, state_prolongation_id);
   // @bind_local_task(state_bcast_prolongation, state_bcast_prolongation_id);
   @bind_local_task(state_exit, state_exit_id);
-
-
-  @bind_local_task(send_right_bnext, send_right_bnext_id);
   @bind_local_task(exit_task, exit_task_id);
   @bind_local_task(bcast_b_tile, bcast_b_tile_id);
   @bind_local_task(done_task, done_task_id);
   // data task
-  @bind_data_task(recv_left_bnext, recv_left_bnext_id);
   @bind_data_task(recv_b_tile, recv_b_tile_id);
 
   @export_symbol(ptr_A, "A");
@@ -417,25 +276,100 @@ comptime {
 }
 
 fn configure_dataflow_bridge() void {
-    if (is_layer_first_column()) {
-      @set_local_color_config(bcast_color, .{.routes = .{ .rx = .{RAMP}, .tx = .{EAST, RAMP}  }});
-    } else if (is_layer_last_column()) {
-      @set_local_color_config(bcast_color, .{.routes = .{ .rx = .{WEST}, .tx = .{RAMP}  }});
-    } else {
-      @set_local_color_config(bcast_color, .{.routes = .{ .rx = .{WEST}, .tx = .{EAST, RAMP}  }});
-    }
-
-    // interlayer
-    if (layer_send_column()) {
-      @set_local_color_config(bridge_send_color, .{.routes = .{ .rx = .{RAMP}, .tx = .{EAST}  }});
-    } else if (layer_recv_column()) {
-      @set_local_color_config(bridge_send_color, .{.routes = .{ .rx = .{WEST}, .tx = .{RAMP}  }});
-    }
+  if (is_layer_first_column()) {
+    @set_local_color_config(bcast_color, .{.routes = .{ .rx = .{RAMP}, .tx = .{EAST, RAMP}  }});
+  } else if (is_layer_last_column()) {
+    @set_local_color_config(bcast_color, .{.routes = .{ .rx = .{WEST}, .tx = .{RAMP}  }});
+  } else {
+    @set_local_color_config(bcast_color, .{.routes = .{ .rx = .{WEST}, .tx = .{EAST, RAMP}  }});
+  }
 }
 
 //########################################################################################
 // Can be a library instead.
 //########################################################################################
+
+fn initialize() void {
+  init_params();
+  if (px == py) {
+      @map(inverse_callback, dsd_A_diag, dsd_D_inv);
+  }
+  cur_state = next_state;
+  mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, STATE_MACHINE);
+}
+
+fn init_params() void {
+  mpi_x.init();
+  mpi_y.init();
+  px = mpi_x.pe_id - @as(u16, layer_start_x);
+  py = mpi_y.pe_id - @as(u16, layer_start_y);
+
+  v_cycle_iteration += 1;
+  is_v_cycle_up = false;
+  iter_count = 0;  
+}
+
+// State machine tasks
+fn state_init() void {
+  simprint.fmt_with_coords("STATE_INIT, layer_index={d}", .{ @as(u32, layer_index) });
+  next_state = STATE_COMPUTE_JACOBI;
+  initialize();
+}
+
+fn state_compute_jacobi() void {
+  simprint.print_string("STATE_COMPUTE_JACOBI\n");
+  iter_count += 1;
+  next_state = STATE_BCAST_JACOBI;
+  compute_jacobi();
+}
+
+fn state_bcast_jacobi() void {
+  next_state = STATE_CHECK_JACOBI_ITERATION;
+  bcast_jacobi();
+}
+
+fn state_check_jacobi() void {
+  if (iter_count < iterations[0]) {
+      next_state = STATE_COMPUTE_JACOBI;
+  } else {
+      if (is_v_cycle_up) {
+          next_state = STATE_EXIT;
+      } else {
+          next_state = STATE_COMPUTE_RESIDUAL;
+      }
+  }
+  f_trigger_state_machine();
+}
+
+fn state_compute_residual() void {
+  simprint.print_string("STATE_COMPUTE_RESIDUAL\n");
+  next_state = STATE_BCAST_RESIDUAL;
+  compute_residual();
+}
+
+fn state_bcast_residual() void {
+  next_state = STATE_COMPUTE_RESTRICTION;
+  bcast_residual();
+}
+
+fn state_compute_restriction() void {
+  simprint.print_string("STATE_COMPUTE_RESTRICTION\n");
+  next_state = STATE_EXIT;
+  compute_restriction();
+
+}
+
+fn state_prolongation() void {
+  simprint.print_string("STATE_PROLONGATION\n");
+  next_state = STATE_BCAST_PROLONGATION;
+  compute_prolongation();
+}
+
+fn state_bcast_prolongation() void {
+  simprint.print_string("STATE_BCAST_PROLONGATION\n");
+  next_state = STATE_CHECK_JACOBI_ITERATION;
+  bcast_prolongation();
+}
 
 fn layout_print(runtime_layer_index: u32) void {
   if (runtime_layer_index == @as(u32, layer_index)) {
@@ -490,24 +424,24 @@ fn compute_mv_per_tile(N_tile: i16, dsd_mv_tile: anytype, dsd_matrix_tile: anyty
 // The diagonal PEs add the term_1 so that we don't have to gather on diag PE.
 
 fn jacobi_local() void {
-    dsd_A_tile = @set_dsd_base_addr(dsd_A_tile, &A_tile); // make sure you do this before
-    // compute_mv_per_tile(N_local, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax(vector) = Ax(matrix * vector)
-    matvec(N_local, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax(vector) = Ax(matrix * vector)
-    @fmuls(dsd_w_dinv_a_x, dsd_D_inv, dsd_Ax); // tmp = D_inv * Ax (vector * vector)
-    @fmuls(dsd_w_dinv_a_x, omega[0], dsd_w_dinv_a_x); // tmp = w * D_inv * Ax (scalar * vector)
+  dsd_A_tile = @set_dsd_base_addr(dsd_A_tile, &A_tile); // make sure you do this before
+  // compute_mv_per_tile(N_local, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax(vector) = Ax(matrix * vector)
+  matvec(N_local, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax(vector) = Ax(matrix * vector)
+  @fmuls(dsd_w_dinv_a_x, dsd_D_inv, dsd_Ax); // tmp = D_inv * Ax (vector * vector)
+  @fmuls(dsd_w_dinv_a_x, omega[0], dsd_w_dinv_a_x); // tmp = w * D_inv * Ax (scalar * vector)
 
-    if (px == py) { // good speedup.
-      @fmovs(dsd_i_into_x, dsd_x_tile); // I*x = x
-      // save some operatioons can be effective if PE grid large enough.
-    } // otherwise, 0.0
+  if (px == py) { // good speedup.
+    @fmovs(dsd_i_into_x, dsd_x_tile); // I*x = x
+    // save some operatioons can be effective if PE grid large enough.
+  } // otherwise, 0.0
 
-    @fsubs(dsd_term_2, dsd_i_into_x, dsd_w_dinv_a_x); // tmp = I*x - omega * D_inv * Ax
+  @fsubs(dsd_term_2, dsd_i_into_x, dsd_w_dinv_a_x); // tmp = I*x - omega * D_inv * Ax
 
-    if (px == py) { // omega * D_inv * b
-      @fmuls(dsd_w_dinv_a_x, dsd_D_inv, dsd_b_tile); // tmp = D_inv * b (vector * vector)
-      @fmuls(dsd_w_dinv_a_x, omega[0], dsd_w_dinv_a_x); // tmp = omega * D_inv * b (scalar * vector)
-      @fadds(dsd_term_2, dsd_w_dinv_a_x, dsd_term_2); // term_2 = omega * D_inv * b + term_2
-    }
+  if (px == py) { // omega * D_inv * b
+    @fmuls(dsd_w_dinv_a_x, dsd_D_inv, dsd_b_tile); // tmp = D_inv * b (vector * vector)
+    @fmuls(dsd_w_dinv_a_x, omega[0], dsd_w_dinv_a_x); // tmp = omega * D_inv * b (scalar * vector)
+    @fadds(dsd_term_2, dsd_w_dinv_a_x, dsd_term_2); // term_2 = omega * D_inv * b + term_2
+  }
 }
 
 // Ax = A_local * x_local
@@ -522,38 +456,11 @@ fn inverse_callback(val: f32) f32 {
   return if (val != 0.0) math_lib.inv(val) else 0.0;
 }
 
-fn initialize() void {
-    init_params();
-    if (px == py) {
-        @map(inverse_callback, dsd_A_diag, dsd_D_inv);
-    }
-    // Don't update state here - wait for broadcast completion
-  if (px == py) {
-    // mpi_x.broadcast(root, send_buf, len, x_task_id);
-    mpi_x.broadcast(py, @ptrcast([*]u32, &D_inv), M_local, done_task_id);
-  } else {
-    var recv_buf = @zeros([M_local]u32);
-    mpi_x.broadcast(py, @ptrcast([*]u32, &recv_buf), M_local, done_task_id);
-  }    
-    
-    // Block state machine until broadcast completes
-}
-
-fn init_params() void {
-  mpi_x.init();
-  mpi_y.init();
-  px = mpi_x.pe_id - @as(u16, layer_start_x);
-  py = mpi_y.pe_id - @as(u16, layer_start_y);
-
-  v_cycle_iteration += 1;
-  is_v_cycle_up = false;
-  iter_count = 0;  
-}
 
 // State machine trigger function
 fn f_trigger_state_machine() void {
-    cur_state = next_state; // go to next state
-    @activate(STATE_MACHINE);   
+  cur_state = next_state; // go to next state
+  @activate(STATE_MACHINE);   
 }
 
 // Compute Jacobi iteration
@@ -630,7 +537,7 @@ fn is_last_layer() bool {
 }
 
 fn is_layer_last_column() bool {
-   return pe_id_x == layer_end_x - 1;
+  return pe_id_x == layer_end_x - 1;
 }
 
 fn is_layer_first_column() bool {

@@ -133,7 +133,7 @@ amg_paper_layout = {
 
 amg_2_layers = {
     0: {"layer_start_x": 0, "layer_start_y": 0, "layer_pe_cols": 2, "layer_pe_rows":2},  # Part 1 - Green
-    1: {"layer_start_x": 2, "layer_start_y": 0, "layer_pe_cols": 2, "layer_pe_rows": 2},  # Part 2 - Red
+    # 1: {"layer_start_x": 2, "layer_start_y": 0, "layer_pe_cols": 2, "layer_pe_rows": 2},  # Part 2 - Red
     # 2: {"layer_start_x": 8, "layer_start_y": 0, "layer_pe_cols": 4, "layer_pe_rows": 4},  # Part 3 - Blue
     # 3: {"layer_start_x": 12, "layer_start_y": 0, "layer_pe_cols": 4, "layer_pe_rows": 4},  # Part 4 - Orange
     # 4: {"layer_start_x": 16, "layer_start_y": 0, "layer_pe_cols": 4, "layer_pe_rows": 4},  # Part 5 - Orange
@@ -201,7 +201,7 @@ const memcpy = @import_module("<memcpy/get_params>", .{
     .width  = total_pe_cols,
     .height = total_pe_rows
 });
-const c2d = @import_module("./libraries/csl_source/csl-libs/collectives_2d/params.csl");
+const c2d = @import_module("<collectives_2d/params>");
 const c2d_struct = .{
     .x_colors       = .{collective_x_color_left, collective_x_color_right},
     .y_colors       = .{collective_y_color_down,  collective_y_color_up},
@@ -268,7 +268,7 @@ layout {{
             var py: i16 = layer_start_y;
             const memcpy_params = memcpy.get_params(px);
             while (py < layer_end_y) : (py += 1) {{
-                const c2d_params    = c2d.get_params(px, py, c2d_struct, current_layer_params);
+                const c2d_params    = c2d.get_params(px, py, c2d_struct);
 
                 var params: comptime_struct = .{{ 
                     .memcpy_params     = memcpy_params,
