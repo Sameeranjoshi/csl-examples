@@ -182,20 +182,20 @@ param total_levels: i16; // = {num_layers};     // number of levels in the AMG h
 STATIC_IMPORTS = textwrap.dedent("""\
 
 // collective module colors
-const collective_x_color_right : color   = @get_color(5);
-const collective_x_color_left  : color   = @get_color(6);
-const collective_y_color_down  : color   = @get_color(7);
-const collective_y_color_up    : color   = @get_color(8);
+const collective_x_color_right : color   = @get_color(0);
+const collective_x_color_left  : color   = @get_color(1);
+const collective_y_color_down  : color   = @get_color(2);
+const collective_y_color_up    : color   = @get_color(3);
 
 
 // collective module entrypoints
-const C2D_X_ENTRYPOINT_0 : local_task_id = @get_local_task_id(13);
-const C2D_X_ENTRYPOINT_1 : local_task_id = @get_local_task_id(14);
-const C2D_Y_ENTRYPOINT_0 : local_task_id = @get_local_task_id(15);
-const C2D_Y_ENTRYPOINT_1 : local_task_id = @get_local_task_id(16);
+const C2D_X_ENTRYPOINT_0 : local_task_id = @get_local_task_id(8);
+const C2D_X_ENTRYPOINT_1 : local_task_id = @get_local_task_id(9);
+const C2D_Y_ENTRYPOINT_0 : local_task_id = @get_local_task_id(10);
+const C2D_Y_ENTRYPOINT_1 : local_task_id = @get_local_task_id(11);
 
 // layer task ID
-const STATE_MACHINE      : local_task_id = @get_local_task_id(17);
+const STATE_MACHINE      : local_task_id = @get_local_task_id(12);
 
 const memcpy = @import_module("<memcpy/get_params>", .{
     .width  = total_pe_cols,
