@@ -1208,8 +1208,13 @@ def main():
   print("############################################################")
   print("\tPerforming AMG Setup")
   solver_callable_host = amg.scipy_direct_solver
-  ml, setup_config = amg.smooth_aggregate_setup_only(input_data["A0"], x=input_data["x0"], b=input_data["b0"], 
-                                                     solver=solver_callable_host, max_level=10, max_coarse=2)
+  # ml, setup_config = amg.smooth_aggregate_setup_only(input_data["A0"], x=input_data["x0"], b=input_data["b0"], 
+                                                    #  solver=solver_callable_host, max_level=10, max_coarse=2)
+  import cloudpickle as pickle
+  with open("amg_hierarchy.pkl", "rb") as f:
+      ml, setup_config = pickle.load(f)
+
+
   # print(ml)
   print(amg.print_table_shapes(ml.levels))
   
