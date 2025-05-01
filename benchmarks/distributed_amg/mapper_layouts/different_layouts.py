@@ -132,11 +132,7 @@ amg_paper_layout = {
 }
 
 amg_2_layers = {
-    0: {"layer_start_x": 0, "layer_start_y": 0, "layer_pe_cols": 2, "layer_pe_rows":2},  # Part 1 - Green
-    # 1: {"layer_start_x": 2, "layer_start_y": 0, "layer_pe_cols": 2, "layer_pe_rows": 2},  # Part 2 - Red
-    # 2: {"layer_start_x": 8, "layer_start_y": 0, "layer_pe_cols": 4, "layer_pe_rows": 4},  # Part 3 - Blue
-    # 3: {"layer_start_x": 12, "layer_start_y": 0, "layer_pe_cols": 4, "layer_pe_rows": 4},  # Part 4 - Orange
-    # 4: {"layer_start_x": 16, "layer_start_y": 0, "layer_pe_cols": 4, "layer_pe_rows": 4},  # Part 5 - Orange
+    0: {"layer_start_x": 0, "layer_start_y": 0, "layer_pe_cols": 4, "layer_pe_rows":4}
 }
 
 
@@ -175,6 +171,10 @@ STATIC_HEADER = textwrap.dedent("""\
 param total_pe_cols: i16; // = {total_pe_cols}; // width of the core rectangle
 param total_pe_rows: i16; //  = {total_pe_rows}; // height of the core rectangle
 param total_levels: i16; // = {num_layers};     // number of levels in the AMG hierarchy
+param layer_start_x: i16; // = {start_x};
+param layer_start_y: i16; // = {start_y};
+param layer_end_x: i16; // = {end_x};
+param layer_end_y: i16; // = {end_y};
 
 """)
 
@@ -217,70 +217,37 @@ layout {{
     // step 1: configure the processing rectangle
     @set_rectangle(total_pe_cols, total_pe_rows);
 
-    var idx: i16 = 0;
-    while (idx < total_levels) : (idx += 1) {{
-        // dispatch to the correct layer parameters
-        var currentlayer:[9]i16 = switch(idx) {{
-{switch_cases}
-            else => @comptime_assert("Invalid layer data or no layer found while layout generation")
-        }};
+    // common data
+    // WSE related data.
+    const common_params = .{{
+        .layer_start_x = layer_start_x,
+        .layer_start_y = layer_start_y,
+        .layer_end_x = layer_end_x,
+        .layer_end_y = layer_end_y,
+        .layer_kernel_rows = total_pe_rows,
+        .layer_kernel_cols = total_pe_cols,
+        .layer_task_id = [1]local_task_id{{STATE_MACHINE}},
+    }};
+    
+    // map tiles for this layer
+    var px: i16 = layer_start_x;
+    while (px < layer_end_x) : (px += 1) {{
+        var py: i16 = layer_start_y;
+        const memcpy_params = memcpy.get_params(px);
+        while (py < layer_end_y) : (py += 1) {{
+            const c2d_params    = c2d.get_params(px, py, c2d_struct);
 
-        // unpack currentlayer
-        var layer_rows_A      = currentlayer[0];
-        var layer_cols_A      = currentlayer[1];
-        var layer_rows_R      = currentlayer[2];
-        var layer_cols_R      = currentlayer[3];
-        var layer_start_x     = currentlayer[4];
-        var layer_start_y     = currentlayer[5];
-        var layer_kernel_cols = currentlayer[6];
-        var layer_kernel_rows = currentlayer[7];
-        var layer_index       = currentlayer[8];
-
-        // compute local dims and ends
-        const LOCAL_rows_A  : i16 = layer_rows_A / layer_kernel_rows;
-        const LOCAL_cols_A  : i16 = layer_cols_A / layer_kernel_cols;
-        const LOCAL_rows_R  : i16 = layer_rows_R / layer_kernel_rows;
-        const LOCAL_cols_R  : i16 = layer_cols_R / layer_kernel_cols;
-        const layer_end_x   : i16 = layer_start_x + layer_kernel_cols;
-        const layer_end_y   : i16 = layer_start_y + layer_kernel_rows;
-
-        // current layer struct
-        const current_layer_params = .{{
-            .M = layer_rows_A,
-            .N = layer_cols_A,
-            .M_local = LOCAL_rows_A,
-            .N_local = LOCAL_cols_A,
-            .R_M_local = LOCAL_rows_R,
-            .R_N_local = LOCAL_cols_R,
-            .layer_start_x = layer_start_x,
-            .layer_start_y = layer_start_y,
-            .layer_end_x = layer_end_x,
-            .layer_end_y = layer_end_y,
-            .layer_kernel_rows = layer_kernel_rows,
-            .layer_kernel_cols = layer_kernel_cols,
-            .layer_index = layer_index,
-            .layer_task_id = [1]local_task_id{{STATE_MACHINE}},
-        }};
-        
-        // map tiles for this layer
-        var px: i16 = layer_start_x;
-        while (px < layer_end_x) : (px += 1) {{
-            var py: i16 = layer_start_y;
-            const memcpy_params = memcpy.get_params(px);
-            while (py < layer_end_y) : (py += 1) {{
-                const c2d_params    = c2d.get_params(px, py, c2d_struct);
-
-                var params: comptime_struct = .{{ 
-                    .memcpy_params     = memcpy_params,
-                    .c2d_params        = c2d_params,
-                    .layer_params      = current_layer_params,
-                    .pe_id_x           = px,
-                    .pe_id_y           = py,
-                    .total_pe_cols     = total_pe_cols,
-                    .total_levels_count = total_levels,
-                }};
-                @set_tile_code(px, py, "./libraries/single_layer/single_layer_pe.csl", params);
-            }}
+            var params: comptime_struct = .{{ 
+                .memcpy_params     = memcpy_params,
+                .c2d_params        = c2d_params,
+                .common_params     = common_params,
+                .layers_data       = layers_data,
+                .pe_id_x           = px,
+                .pe_id_y           = py,
+                .total_pe_cols     = total_pe_cols,
+                .total_levels_count = total_levels,
+            }};
+            @set_tile_code(px, py, "./libraries/single_layer/single_layer_pe.csl", params);
         }}
     }}
 
@@ -305,11 +272,15 @@ def generate_layout_amg(total_pe_cols, total_pe_rows, total_levels, layers, file
     num_layers = len(layers)
 
     # 1) Header
+    layer0 = layers[0]
     out = STATIC_HEADER.format(
         total_pe_cols=total_pe_cols,
         total_pe_rows=total_pe_rows,
-        total_levels=total_levels,
-        num_layers=num_layers
+        num_layers=num_layers,
+        start_x=layer0['start_x'],
+        start_y=layer0['start_y'],
+        end_x=layer0['start_x'] + layer0['pe_cols'],
+        end_y=layer0['start_y'] + layer0['pe_rows'],
     )
 
     # 2) Layer‑param blocks
@@ -321,10 +292,6 @@ def generate_layout_amg(total_pe_cols, total_pe_rows, total_levels, layers, file
             param layer_N_{i}: i16; // = {L['N']};
             param layer_R_M_{i}: i16; // = {L['R_M']};
             param layer_R_N_{i}: i16; // = {L['R_N']};
-            param layer_start_x_{i}: i16; // = {L['start_x']};
-            param layer_start_y_{i}: i16; // = {L['start_y']};
-            param layer_pe_cols_{i}: i16; // = {L['pe_cols']};
-            param layer_pe_rows_{i}: i16; // = {L['pe_rows']};
             param layer_index_{i}: i16; // = {L['index']};
         """), prefix=""))
 
@@ -333,19 +300,28 @@ def generate_layout_amg(total_pe_cols, total_pe_rows, total_levels, layers, file
     # 3) Const layer arrays
     const_blocks = []
     for i in range(num_layers):
-        const_blocks.append(f"const layer_{i} = [9]i16 {{ layer_M_{i}, layer_N_{i}, layer_R_M_{i}, layer_R_N_{i}, layer_start_x_{i}, layer_start_y_{i}, layer_pe_cols_{i}, layer_pe_rows_{i}, layer_index_{i} }};")
+        comma = "," if i < num_layers - 1 else ""
+        const_blocks.append(textwrap.indent(textwrap.dedent(f"""\
+            // ── Layer {i} ─────────────────────────────────
+            .{{
+                .M = layer_M_{i}, 
+                .N = layer_N_{i}, 
+                .M_local = layer_M_{i} / total_pe_rows,          // layer_rows_A / kernel_rows
+                .N_local = layer_N_{i} / total_pe_cols,          // layer_cols_A / kernel_cols
+                .R_M_local = layer_R_M_{i} / total_pe_rows,        // layer_rows_R / kernel_rows
+                .R_N_local = layer_R_N_{i} / total_pe_cols,        // layer_cols_R / kernel_cols
+                .layer_index = layer_index_{i},
+            }}{comma}"""), prefix=""))
     out += "// ── Layer const arrays ─────────────────────────────────\n"
+    out += "const layers_data = [2]comptime_struct{\n"
     out += "\n".join(const_blocks) + "\n\n"
+    out += "};\n"
 
     # 4) Static imports
     out += STATIC_IMPORTS + "\n"
 
-    # 5) Build switch cases
-    cases = [f"            {i} => layer_{i}," for i in range(num_layers)]
-    switch_cases = "\n".join(cases)
-
     # 6) Layout body
-    out += LAYOUT_TEMPLATE.format(switch_cases=switch_cases)
+    out += LAYOUT_TEMPLATE.format()
 
     # 7) Write file
     with open(filename, "w") as f:
