@@ -1,28 +1,32 @@
 // params
 param memcpy_params: comptime_struct;
 param c2d_params: comptime_struct;
-param layer_params: comptime_struct;
+param common_params: comptime_struct;
 param pe_id_x: i16;
 param pe_id_y: i16;
 param total_pe_cols: i16;
 param total_levels_count: i16;
+param layers_data: [total_levels_count]comptime_struct;
 
-const M: i16 = layer_params.M; // Height of local matrix, or num rows per PE
-const N: i16 = layer_params.N; // Width of local matrix, or num cols per PE
-const M_local: i16 = layer_params.M_local; // Height of local matrix, or num rows per PE
-const N_local: i16 = layer_params.N_local; // Width of local matrix, or num cols per PE
-const R_M_local: i16 = layer_params.R_M_local; // Height of local matrix, or num rows per PE
-const R_N_local: i16 = layer_params.R_N_local; // Width of local matrix, or num cols per PE
-const layer_start_x: i16 = layer_params.layer_start_x;
-const layer_start_y: i16 = layer_params.layer_start_y;
-const layer_end_x: i16 = layer_params.layer_end_x;
-const layer_end_y: i16 = layer_params.layer_end_y;
-const layer_kernel_rows: i16 = layer_params.layer_kernel_rows;
-const layer_kernel_cols: i16 = layer_params.layer_kernel_cols;
-const layer_index: i16 = layer_params.layer_index;
+// layer params
+const M: i16 = layers_data[0].M; // Height of local matrix, or num rows per PE
+const N: i16 = layers_data[0].N; // Width of local matrix, or num cols per PE
+const M_local: i16 = layers_data[0].M_local; // Height of local matrix, or num rows per PE
+const N_local: i16 = layers_data[0].N_local; // Width of local matrix, or num cols per PE
+const R_M_local: i16 = layers_data[0].R_M_local; // Height of local matrix, or num rows per PE
+const R_N_local: i16 = layers_data[0].R_N_local; // Width of local matrix, or num cols per PE
+const layer_index: i16 = layers_data[0].layer_index;
+
+// common params
+const layer_start_x: i16 = common_params.layer_start_x;
+const layer_start_y: i16 = common_params.layer_start_y;
+const layer_end_x: i16 = common_params.layer_end_x;
+const layer_end_y: i16 = common_params.layer_end_y;
+const layer_kernel_rows: i16 = common_params.layer_kernel_rows;
+const layer_kernel_cols: i16 = common_params.layer_kernel_cols;
+const STATE_MACHINE: local_task_id = common_params.layer_task_id[0];
 
 // Task IDs
-const STATE_MACHINE: local_task_id = layer_params.layer_task_id[0];
 const STATE_INIT: i16 = 1;
 const STATE_EXIT: i16 = 2;
 const STATE_COMPUTE_JACOBI: i16 = 3;

@@ -313,7 +313,7 @@ def generate_layout_amg(total_pe_cols, total_pe_rows, total_levels, layers, file
                 .layer_index = layer_index_{i},
             }}{comma}"""), prefix=""))
     out += "// ── Layer const arrays ─────────────────────────────────\n"
-    out += "const layers_data = [2]comptime_struct{\n"
+    out += f"const layers_data = [{num_layers}]comptime_struct{{\n"
     out += "\n".join(const_blocks) + "\n\n"
     out += "};\n"
 
