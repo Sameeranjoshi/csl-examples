@@ -1,0 +1,38 @@
+
+const Pw: u16 = 1;
+const Ph: u16 = 1;
+const memcpy_params = @import_module("<memcpy/get_params>", .{
+  .width = Pw,
+  .height = Ph,
+});
+
+const total_levels_count: u16 = 3;
+// ── Layer const arrays ─────────────────────────────────
+const layers_data = [total_levels_count]comptime_struct{
+.{.M = 5, .layer_index = 0,}, 
+.{.M = 4, .layer_index = 1,}, 
+.{.M = 3, .layer_index = 2,}
+};
+
+
+layout {
+  @set_rectangle(Pw, Ph);
+
+  for (@range(u16, Pw)) |Px| {
+    for (@range(u16, Ph)) |Py| {     
+      const memcpy_params = memcpy_params.get_params(Px);
+      @set_tile_code(Px, Py, "code.csl", .{ 
+        .memcpy_params = memcpy_params,
+        .layers_data = layers_data,
+        .total_levels_count = total_levels_count,
+        });
+    }
+  }
+
+  @export_name("init_data_blob", fn()void);
+  @export_name("print_data_blob", fn()void);
+  @export_name("before", fn()void);
+
+  // data
+  @export_name("A_blob", [*]f32, true);
+}
