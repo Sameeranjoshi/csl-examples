@@ -49,3 +49,21 @@ def jacobi_csr(A_Csr, x, b, omega=1.0/3.0, iterations=1):
             if diag != 0.0:
                 x[i] = (1 - omega) * temp[i] + omega * (b[i] - rsum) / diag
     return x
+
+############################################################
+import cloudpickle
+import os
+
+def save_v_cycle_data(v_data, folder="vcycle_dump"):
+    """Save v_cycle_data as a pickle file."""
+    os.makedirs(folder, exist_ok=True)
+    with open(f"{folder}/v_cycle_data.pkl", "wb") as f:
+        cloudpickle.dump(v_data, f)
+    print(f"v_cycle_data saved successfully to {folder}/v_cycle_data.pkl")
+
+def load_v_cycle_data(folder="vcycle_dump"):
+    """Load v_cycle_data from a pickle file."""
+    with open(f"{folder}/v_cycle_data.pkl", "rb") as f:
+        v_data = cloudpickle.load(f)
+    print(f"v_cycle_data loaded successfully from {folder}/v_cycle_data.pkl")
+    return v_data

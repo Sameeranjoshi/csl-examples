@@ -9,12 +9,12 @@ from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyDataType, Me
 from cmd_parser import parse_args
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
-import pyamg
+# import pyamg
 import amg as amg 
 import copy
 from mapper_layouts.different_layouts import *
 from src.libraries.single_layer.jacobi_only import pad_A, pad_1d, unpad_1d
- 
+import utilities as save_data
 def calculate_fabric_dimensions(width, height, width_west_buf, width_east_buf):
   # fabric-offsets = 1,1
   fabric_offset_x = 1
@@ -557,62 +557,66 @@ def pad_and_make_dense(layer_coordinates_map, v_cycle_data):
                 
 
 def main():
-  random.seed(127)
+  # random.seed(127)
 
-  print("############################################################")
-  print("# INPUT DATA")
-  print("############################################################")
-  N = 7
-  M = 7
-  eps = 1.e-5
-  max_iterations = 1
+  # print("############################################################")
+  # print("# INPUT DATA")
+  # print("############################################################")
+  # N = 7
+  # M = 7
+  # eps = 1.e-5
+  # max_iterations = 1
     
-  A0, x0, b0 = generate_input2(M, N, type=np.float32)
-  nrm_b = np.linalg.norm(b0, 2)
-  relative_tol = eps * nrm_b # relative tolerance
+  # A0, x0, b0 = generate_input2(M, N, type=np.float32)
+  # nrm_b = np.linalg.norm(b0, 2)
+  # relative_tol = eps * nrm_b # relative tolerance
 
-  # print data
-  print("Input problem size:", M, N)
-  print("Input Matrix Shape:", A0.shape)
-  print("Input b_1d Shape:", b0.shape)
-  print("Input x_1d Shape:", x0.shape)
-  print("Norm of b:", nrm_b)
-  print("Relative Tolerance:", relative_tol)
+  # # print data
+  # print("Input problem size:", M, N)
+  # print("Input Matrix Shape:", A0.shape)
+  # print("Input b_1d Shape:", b0.shape)
+  # print("Input x_1d Shape:", x0.shape)
+  # print("Norm of b:", nrm_b)
+  # print("Relative Tolerance:", relative_tol)
   
-  # wrap into a dictionary
-  input_data = {
-    "A0": A0,
-    "x0": x0,
-    "b0": b0,
-    "tol": relative_tol,
-    "max_iterations": max_iterations
-  }
-  print("############################################################")
-  print("# AMG SETUP")
-  print("############################################################")
-  print("\tPerforming AMG Setup")
-  solver_callable_host = amg.scipy_direct_solver
-  ml, setup_config = amg.smooth_aggregate_setup_only(input_data["A0"], x=input_data["x0"], b=input_data["b0"], 
-                                                     solver=solver_callable_host, max_level=10, max_coarse=2)
-  # print(ml)
-  print(amg.print_table_shapes(ml.levels))
+  # # wrap into a dictionary
+  # input_data = {
+  #   "A0": A0,
+  #   "x0": x0,
+  #   "b0": b0,
+  #   "tol": relative_tol,
+  #   "max_iterations": max_iterations
+  # }
+  # print("############################################################")
+  # print("# AMG SETUP")
+  # print("############################################################")
+  # print("\tPerforming AMG Setup")
+  # solver_callable_host = amg.scipy_direct_solver
+  # ml, setup_config = amg.smooth_aggregate_setup_only(input_data["A0"], x=input_data["x0"], b=input_data["b0"], 
+  #                                                    solver=solver_callable_host, max_level=10, max_coarse=2)
+  # # print(ml)
+  # print(amg.print_table_shapes(ml.levels))
   
-  V_levels = len(ml.levels)
-  x_level = [None] * V_levels
-  b_level = [None] * V_levels
-  x_level[0] = np.copy(x0)
-  b_level[0] = np.copy(b0)  
-  for i in range(V_levels - 1): # We know this
-    x_level[i+1] = np.zeros(ml.levels[i].R.shape[0], dtype=np.float32) # Changed to 1D array
+  # V_levels = len(ml.levels)
+  # x_level = [None] * V_levels
+  # b_level = [None] * V_levels
+  # x_level[0] = np.copy(x0)
+  # b_level[0] = np.copy(b0)  
+  # for i in range(V_levels - 1): # We know this
+  #   x_level[i+1] = np.zeros(ml.levels[i].R.shape[0], dtype=np.float32) # Changed to 1D array
     
-  v_cycle_data = {
-    "ml": ml,
-    "x_level": x_level,
-    "b_level": b_level,
-    "setup_config": setup_config,
-    "tol": relative_tol,
-    "max_iterations": max_iterations
-  }
+  # v_cycle_data = {
+  #   "ml": ml,
+  #   "x_level": x_level,
+  #   "b_level": b_level,
+  #   "setup_config": setup_config,
+  #   "tol": relative_tol,
+  #   "max_iterations": max_iterations
+  # }
+  # save_data.save_v_cycle_data(v_cycle_data)
+  v_cycle_data = save_data.load_v_cycle_data(folder="vcycle_dump")
+
+  
   v_cycle_data_device = copy.deepcopy(v_cycle_data) # This is expensive
   print("############################################################")
   print("# DEVICE CALCULATIONS")
@@ -623,3 +627,4 @@ def main():
 
 if __name__ == "__main__":
   main()
+
