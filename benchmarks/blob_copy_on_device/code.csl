@@ -51,6 +51,8 @@ fn fill_data_in_A_tiles() [A_tiles_total_size]f32 {
 const A_tiles_total_size: u16 = get_total_size_of_A_tile(); // size
 var A_tiles = fill_data_in_A_tiles();  // allocate memory for A_tiles
 var dsd_A_tiles = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> A_tiles[i] });
+const even_index = .{.base_address = &A_tiles, .extent = 1, .stride = 1, .offset = 0};
+const odd_index = .{.base_address = &A_tiles, .extent = 1, .stride = 2, .offset = 0};
 var ptr_A_tiles: [*]f32 = &A_tiles;
 
 
@@ -63,28 +65,39 @@ fn print_me(val: f32) void {
   simprint.fmt_with_coords("val = {f}", .{val});
   sys_mod.unblock_cmd_stream();
 }
+// level_index = What layer is this?
+// layouttoapply = Apply this layout to the data.
+// data = The address of the data to apply dsd on, like A, R, P, x, b, etc.
+// data_name = Must be same as the data, A, R, P,...
 
-// Initialize data
-fn init_data_blob() void {
-
-  for (@range(u16, total_levels_count)) |level_index| {
-    var offset_index: u16 = get_offset(&layer_offset_map_A, level_index);
-    var size_index: u16 = get_size(&layer_size_map_A, level_index);
-    
-    var sourceDSD = @set_dsd_base_addr(dsd_A_tiles, &A_tiles);
-    @map(print_me, sourceDSD);
-    simprint.print_string("\nbase_addr___\n");
-    sourceDSD = @increment_dsd_offset(sourceDSD, @as(i16, offset_index), f32);
-    @map(print_me, sourceDSD);
-    simprint.print_string("\nincremented___\n");
-    sourceDSD = @set_dsd_length(sourceDSD, size_index);
-    @map(print_me, sourceDSD);
-    simprint.print_string("\nset_length___\n");
-
-    // change the value to level_index
-    @fmovs(sourceDSD, @as(f32, level_index));
+fn get_level_dsd(level_index: u16, layouttoapply: mem1d_dsd, data: [*]f32, comptime data_name: comptime_string) mem1d_dsd {
+  var offset_index: u16 = 0;
+  var size_index: u16 = 0;
+  if (data_name == "A") {
+    offset_index = get_offset(&layer_offset_map_A, level_index);
+    size_index = get_size(&layer_size_map_A, level_index);
+  } else if (data_name == "R") {
+    offset_index = get_offset(&layer_offset_map_R, level_index);
+    size_index = get_size(&layer_size_map_R, level_index);
+  } else if (data_name == "P") {
+    offset_index = get_offset(&layer_offset_map_P, level_index);
+    size_index = get_size(&layer_size_map_P, level_index);
   }
-  sys_mod.unblock_cmd_stream();
+  // First find the correct level and then apply the layout.
+  var sourceDSD = @set_dsd_base_addr(layouttoapply, data);
+  sourceDSD = @increment_dsd_offset(sourceDSD, @as(i16, offset_index), f32);
+  sourceDSD = @set_dsd_length(sourceDSD, size_index);
+  
+  return sourceDSD;
+}
+
+fn init_data_blob() void {
+    for (@range(u16, total_levels_count)) |level_index| {
+        var sourceDSD = get_level_dsd(level_index, dsd_A_tiles, &A_tiles, "A");
+        // change the value to level_index
+        @fmovs(sourceDSD, @as(f32, level_index));
+    }
+    sys_mod.unblock_cmd_stream();
 }
 
 fn print_data_blob() void {

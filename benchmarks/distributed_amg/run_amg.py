@@ -747,6 +747,7 @@ def device_calculations_distributed(v_cycle_data):
         
         copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer=None)
         print("Step 4: Compute")
+        simulator.launch("layout_print", np.uint32(0), nonblock=False)        
         simulator.launch("v_cycle_down", nonblock=False)        
         amg.debugprint(ml.levels, b_level, x_level)
         

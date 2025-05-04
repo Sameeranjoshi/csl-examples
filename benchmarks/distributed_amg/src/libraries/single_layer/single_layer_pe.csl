@@ -40,19 +40,8 @@ const STATE_BCAST_PROLONGATION: i16 = 10;
 
 // bridge colors
 const bcast_color  : color         = @get_color(4); // This is also activating color.
-
 // state_machine tasks(8,9,10,11,12)
-// const state_init_id: local_task_id = @get_local_task_id(13);
-// const state_compute_jacobi_id: local_task_id = @get_local_task_id(14);
-// const state_bcast_jacobi_id: local_task_id = @get_local_task_id(15);
-// const state_check_jacobi_id: local_task_id = @get_local_task_id(16);
-// const state_compute_residual_id: local_task_id = @get_local_task_id(17); 
-// const state_bcast_residual_id: local_task_id = @get_local_task_id(18);
-// const state_compute_restriction_id: local_task_id = @get_local_task_id(19);
-// const state_prolongation_id: local_task_id = @get_local_task_id(20);
-// const state_bcast_prolongation_id: local_task_id = @get_local_task_id(21);
 const state_exit_id: local_task_id = @get_local_task_id(13);
-
 // tasks
 const recv_b_tile_id: data_task_id = @get_data_task_id(bcast_color); //This should unblock
 const exit_task_id: local_task_id = @get_local_task_id(14);
@@ -65,7 +54,6 @@ const send_bcast_iq = @get_input_queue(0);
 
 const math_lib = @import_module("<math>");
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
-
 const mpi_x = @import_module("<collectives_2d/pe>", .{
     .dim_params = c2d_params.x,
     .queues = [2]u16{2,4},
@@ -82,15 +70,40 @@ const mpi_y = @import_module("<collectives_2d/pe>", .{
     });
 const simprint = @import_module("<simprint>", .{ .enable = true });
 
+// Layers_data has shape for each level, M0, M1, M2, ... 
+// meta data for each level.
+// size map = [M0, M1, M2, ...]
+// offset map = [0, M0, M0 + M1, M0 + M1 + M2, ...]
+const layer_size_map_A = layeridx_to_size_map("A");  
+const layer_offset_map_A = layeridx_to_offset_map("A");  
+const layer_size_map_R = layeridx_to_size_map("R");  
+const layer_offset_map_R = layeridx_to_offset_map("R");
+const layer_size_map_P = layeridx_to_size_map("P");  
+const layer_offset_map_P = layeridx_to_offset_map("P");
+const layer_size_map_x = layeridx_to_size_map("x");  
+const layer_offset_map_x = layeridx_to_offset_map("x");
+const layer_size_map_b = layeridx_to_size_map("b");  
+const layer_offset_map_b = layeridx_to_offset_map("b");
+
+// total sizes 
+const A_tiles_total_size: u16 = get_total_size_of("A");
+const R_tiles_total_size: u16 = get_total_size_of("R");
+const P_tiles_total_size: u16 = get_total_size_of("P");
+const x_tiles_total_size: u16 = get_total_size_of("x");
+const b_tiles_total_size: u16 = get_total_size_of("b");
+
+
+// var dsd_A_tiles = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> A_tiles[i] });
 
 //x, b, A, R will be partitioned using 2D Block decomposition.
 // input
-var A_tile = @zeros([M_local*N_local]f32);
-var R_tile = @zeros([R_M_local*R_N_local]f32);
-var P_tile = @zeros([R_N_local*R_M_local]f32);  // transpose of R_tile
-var x_tile = @zeros([N_local]f32);
+// init_data_blob(size, value, type)
+var A_tile = @zeros([A_tiles_total_size]f32);
+var R_tile = @zeros([R_tiles_total_size]f32);
+var P_tile = @zeros([P_tiles_total_size]f32);  // transpose of R_tile
+var x_tile = @zeros([x_tiles_total_size]f32);
 var x_coarse = @zeros([R_M_local]f32);  // P @ x_coarse( So x_coarse has to match 2nd dim of P.)
-var b_tile = @zeros([M_local]f32);
+var b_tile = @zeros([b_tiles_total_size]f32);
 var omega = @zeros([1]f32);
 var iterations = @constants([1]i32, 0); // default is 0 iteration.
 
@@ -247,15 +260,6 @@ comptime {
   @block(STATE_MACHINE);
   // Bind all state tasks
   @bind_local_task(f_state, STATE_MACHINE);
-  // @bind_local_task(state_init, state_init_id);
-  // @bind_local_task(state_compute_jacobi, state_compute_jacobi_id);
-  // @bind_local_task(state_bcast_jacobi, state_bcast_jacobi_id);
-  // @bind_local_task(state_check_jacobi, state_check_jacobi_id);
-  // @bind_local_task(state_compute_residual, state_compute_residual_id);
-  // @bind_local_task(state_bcast_residual, state_bcast_residual_id);
-  // @bind_local_task(state_compute_restriction, state_compute_restriction_id);
-  // @bind_local_task(state_prolongation, state_prolongation_id);
-  // @bind_local_task(state_bcast_prolongation, state_bcast_prolongation_id);
   @bind_local_task(state_exit, state_exit_id);
   @bind_local_task(exit_task, exit_task_id);
   @bind_local_task(bcast_b_tile, bcast_b_tile_id);
@@ -376,29 +380,65 @@ fn state_bcast_prolongation() void {
 }
 
 fn layout_print(runtime_layer_index: u32) void {
-  if (runtime_layer_index == @as(u32, layer_index)) {
-    simprint.fmt_with_coords("layout_print layer index: {d}", .{@as(u32, layer_index)});
-    // print x_tile
-    for (x_tile) |val, i| {
-      simprint.fmt_with_coords("x_tile[{d}] = {f}", .{ i, val });
+  if (pe_id_x ==0 and pe_id_y ==0) {
+    //1.
+    simprint.fmt_with_coords("total_size_of_A_tile = {d}", .{A_tiles_total_size});
+    simprint.fmt_with_coords("total_size_of_R_tile = {d}", .{R_tiles_total_size});
+    simprint.fmt_with_coords("total_size_of_x_tile = {d}", .{x_tiles_total_size});
+    simprint.fmt_with_coords("total_size_of_b_tile = {d}", .{b_tiles_total_size});
+
+    //2.
+    simprint.print_string("Printing A\n");
+    for (@range(u16, total_levels_count)) |i| {
+      const size:u16 = get_size(&layer_size_map_A, i);
+      const offset:u16 = get_offset(&layer_offset_map_A, i);
+      simprint.fmt_with_coords("size = {d}, offset = {d}", .{size, offset});
     }
-    // A_tile
-    for (A_tile) |val, i| {
-      simprint.fmt_with_coords("A_tile[{d}] = {f}", .{ i, val });
+    simprint.print_string("Printing R\n");
+    for (@range(u16, total_levels_count)) |i| {
+      const size:u16 = get_size(&layer_size_map_R, i);
+      const offset:u16 = get_offset(&layer_offset_map_R, i);
+      simprint.fmt_with_coords("size = {d}, offset = {d}", .{size, offset});
     }
-    // b_tile
-    for (b_tile) |val, i| {
-      simprint.fmt_with_coords("b_tile[{d}] = {f}", .{ i, val });
+
+    simprint.print_string("Printing x\n");
+    for (@range(u16, total_levels_count)) |i| {
+      const size:u16 = get_size(&layer_size_map_x, i);
+      const offset:u16 = get_offset(&layer_offset_map_x, i);
+      simprint.fmt_with_coords("size = {d}, offset = {d}", .{size, offset});
     }
-    // R_tile 
-    for (R_tile) |val, i| {
-      simprint.fmt_with_coords("R_tile[{d}] = {f}", .{ i, val });
+
+    simprint.print_string("Printing b\n");
+    for (@range(u16, total_levels_count)) |i| {
+      const size:u16 = get_size(&layer_size_map_b, i);
+      const offset:u16 = get_offset(&layer_offset_map_b, i);
+      simprint.fmt_with_coords("size = {d}, offset = {d}", .{size, offset});
     }
-    // b_next
-    for (b_next) |val, i| {
-      simprint.fmt_with_coords("b_next[{d}] = {f}", .{ i, val });
-    }
+    
   }
+  // if (runtime_layer_index == @as(u32, layer_index)) {
+  //   simprint.fmt_with_coords("layout_print layer index: {d}", .{@as(u32, layer_index)});
+  //   // print x_tile
+  //   for (x_tile) |val, i| {
+  //     simprint.fmt_with_coords("x_tile[{d}] = {f}", .{ i, val });
+  //   }
+  //   // A_tile
+  //   for (A_tile) |val, i| {
+  //     simprint.fmt_with_coords("A_tile[{d}] = {f}", .{ i, val });
+  //   }
+  //   // b_tile
+  //   for (b_tile) |val, i| {
+  //     simprint.fmt_with_coords("b_tile[{d}] = {f}", .{ i, val });
+  //   }
+  //   // R_tile 
+  //   for (R_tile) |val, i| {
+  //     simprint.fmt_with_coords("R_tile[{d}] = {f}", .{ i, val });
+  //   }
+  //   // b_next
+  //   for (b_next) |val, i| {
+  //     simprint.fmt_with_coords("b_next[{d}] = {f}", .{ i, val });
+  //   }
+  // }
   sys_mod.unblock_cmd_stream();
 }
 
@@ -566,4 +606,94 @@ fn layer_recv_column() bool {
 
 fn layer_middle_column() bool {
   return !is_layer_first_column() and !is_layer_last_column();
+}
+
+//// blob and memcpy helper routines.
+// create the layer size map and offset map.
+fn layeridx_to_size_map(comptime data: comptime_string) [total_levels_count]u16 {
+  var result = @zeros([total_levels_count]u16);
+  for (layers_data) |layer_data, index| {
+  // layer params
+    const M_local: u16 = layer_data.M_local; 
+    const N_local: u16 = layer_data.N_local; 
+    const R_M_local: u16 = layer_data.R_M_local; 
+    const R_N_local: u16 = layer_data.R_N_local; 
+    if (data == "A") {
+      result[index] = M_local * N_local;
+    } else if (data == "R") {
+      result[index] = R_M_local * R_N_local;
+    } else if (data == "P") {
+      result[index] = R_N_local * R_M_local;
+    } else if (data == "x") {
+      result[index] = N_local;
+    } else if (data == "b") {
+      result[index] = M_local;
+    } else {
+      @compileError("Invalid string for layeridx_to_size_map");
+    }
+  }
+  return result;
+}
+fn layeridx_to_offset_map(comptime data: comptime_string) [total_levels_count]u16 {
+  var result = @zeros([total_levels_count]u16);
+  var running_sum: u16 = 0;
+  for (layers_data) |layer_data, index| {
+  // layer params
+    const M_local: u16 = layer_data.M_local; 
+    const N_local: u16 = layer_data.N_local; 
+    const R_M_local: u16 = layer_data.R_M_local; 
+    const R_N_local: u16 = layer_data.R_N_local; 
+    if (data == "A") {
+      result[index] = running_sum;
+      running_sum += M_local * N_local;
+    } else if (data == "R") {
+      result[index] = running_sum;
+      running_sum += R_M_local * R_N_local;
+    } else if (data == "P") {
+      result[index] = running_sum;
+      running_sum += R_N_local * R_M_local;
+    } else if (data == "x") {
+      result[index] = running_sum;
+      running_sum += N_local;
+    } else if (data == "b") {
+      result[index] = running_sum;
+      running_sum += M_local;
+    } else {
+      @compileError("Invalid string for layeridx_to_offset_map");
+    }
+  }
+  return result;
+}
+fn get_total_size_of(comptime data: comptime_string) u16 {
+  var total_size_of_data: u16 = 0;
+    for (layers_data) |layer_data| {
+        // layer params
+        const M_local: u16 = layer_data.M_local; 
+        const N_local: u16 = layer_data.N_local; 
+        const R_M_local: u16 = layer_data.R_M_local; 
+        const R_N_local: u16 = layer_data.R_N_local; 
+        if (data == "A") {
+          total_size_of_data += M_local * N_local;
+        } else if (data == "R") {
+          total_size_of_data += R_M_local * R_N_local;
+        } else if (data == "P") {
+          total_size_of_data += R_N_local * R_M_local;
+        } else if (data == "x") {
+          total_size_of_data += N_local;
+        } else if (data == "b") {
+          total_size_of_data += M_local;
+        } else {
+          @compileError("Invalid string for get_total_size_of");
+        }
+    }
+    return total_size_of_data;
+}
+
+fn get_size(layer_size_map: *const [total_levels_count] u16,  index: u16) u16 {
+  @assert(index < @as(u16, total_levels_count));
+  return (layer_size_map.*)[index];
+}
+fn get_offset(layer_offset_map: *const [total_levels_count] u16, index: u16) u16 {
+  @assert(index < @as(u16, total_levels_count));
+  return (layer_offset_map.*)[index];
 }
