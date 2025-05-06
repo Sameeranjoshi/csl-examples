@@ -42,7 +42,7 @@ symbols = {
 }
 
 runner.launch("before", nonblock=False)
-runner.memcpy_h2d(symbols['A_blob'], A_blob, 0, 0, 1, 1, A_blob.size, streaming=False, order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
+# runner.memcpy_h2d(symbols['A_blob'], A_blob, 0, 0, 1, 1, A_blob.size, streaming=False, order=MemcpyOrder.ROW_MAJOR, data_type=MemcpyDataType.MEMCPY_32BIT, nonblock=False)
 runner.launch("before", nonblock=False)
 runner.launch("init_data_blob", nonblock=False)
 runner.launch("print_data_blob", nonblock=False)

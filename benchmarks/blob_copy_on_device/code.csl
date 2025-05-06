@@ -50,9 +50,12 @@ fn fill_data_in_A_tiles() [A_tiles_total_size]f32 {
 
 const A_tiles_total_size: u16 = get_total_size_of_A_tile(); // size
 var A_tiles = fill_data_in_A_tiles();  // allocate memory for A_tiles
-var dsd_A_tiles = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> A_tiles[i] });
-const even_index = .{.base_address = &A_tiles, .extent = 1, .stride = 1, .offset = 0};
-const odd_index = .{.base_address = &A_tiles, .extent = 1, .stride = 2, .offset = 0};
+
+var N = 1;
+var dsd_even_index = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N+1/2} -> A_tiles[2*i] });
+// const odd_index = .{.base_address = &A_tiles, .extent = 1, .stride = 2, .offset = 1};
+
+var dsd_odd_index = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{N/2} -> A_tiles[2*i + 1] });
 var ptr_A_tiles: [*]f32 = &A_tiles;
 
 
@@ -83,19 +86,27 @@ fn get_level_dsd(level_index: u16, layouttoapply: mem1d_dsd, data: [*]f32, compt
     offset_index = get_offset(&layer_offset_map_P, level_index);
     size_index = get_size(&layer_size_map_P, level_index);
   }
-  // First find the correct level and then apply the layout.
-  var sourceDSD = @set_dsd_base_addr(layouttoapply, data);
-  sourceDSD = @increment_dsd_offset(sourceDSD, @as(i16, offset_index), f32);
-  sourceDSD = @set_dsd_length(sourceDSD, size_index);
-  
+
+  simprint.fmt_with_coords("offset_index = {d}", .{offset_index});
+  simprint.fmt_with_coords("size_index = {d}", .{size_index});
+  // // First find the correct level and then apply the layout.
+  // var sourceDSD = @set_dsd_base_addr(layouttoapply, data);
+  var sourceDSD = @increment_dsd_offset(layouttoapply, @as(i16, offset_index), f32);
+  // sourceDSD = @set_dsd_length(sourceDSD, (size_index + 1)/2);
+  N = (size_index);
   return sourceDSD;
 }
 
 fn init_data_blob() void {
     for (@range(u16, total_levels_count)) |level_index| {
-        var sourceDSD = get_level_dsd(level_index, dsd_A_tiles, &A_tiles, "A");
+        // (level, layout, onwhatdata, "data name")
+        var indexed_A_dsd = get_level_dsd(level_index, dsd_odd_index, &A_tiles, "A");
+        @map(print_me, indexed_A_dsd);
+
         // change the value to level_index
-        @fmovs(sourceDSD, @as(f32, level_index));
+        @fmovs(indexed_A_dsd, @as(f32, 555));
+        // simprint.print_string("After fmovs\n");
+        // @map(print_me, indexed_A_dsd);
     }
     sys_mod.unblock_cmd_stream();
 }
