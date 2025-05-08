@@ -1,0 +1,36 @@
+param total_levels: u16;
+param layer_N_0: u16;
+param layer_M_0: u16;
+param layer_K_0: u16;
+param layer_L_0: u16;
+param layer_N_1: u16;
+param layer_M_1: u16;
+param layer_K_1: u16;
+param layer_L_1: u16;
+
+const runtime_array =  [2, 4]u16 {layer_N_0, layer_M_0, layer_K_0, layer_L_0,
+                                  layer_N_1, layer_M_1, layer_K_1, layer_L_1};
+
+const layers_data = [1]comptime_struct{
+.{
+    .N = layer_N_0,
+    .M = layer_M_0,
+ },
+ 
+};
+const memcpy = @import_module("<memcpy/get_params>", .{
+    .width  = 1,
+    .height = 1
+});
+layout {
+    @set_rectangle(1, 1);
+    const memcpy_params = memcpy.get_params(0);
+    var params: comptime_struct = .{
+        .memcpy_params     = memcpy_params,
+        .total_levels_count = total_levels,
+        .layers_data = layers_data,
+        .runtime_array = runtime_array,
+    };
+    @set_tile_code(0, 0, "pe.csl", params);
+    @export_name("user", fn()void);
+}
