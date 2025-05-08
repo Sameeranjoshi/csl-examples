@@ -612,7 +612,7 @@ def copy_layer_on_device(simple_memcpy, simulator,symbols, level_index, level, c
     
     # Setup solver parameters
     omega = np.zeros(h*w, dtype=np.float32)
-    iterations = np.zeros(h*w, dtype=np.int32)
+    iterations = np.zeros(h*w, dtype=np.uint32)
     omega[:] = amg.get_omega_from_presmoother(setup_config)
     iterations[:] = amg.get_iterations_from_presmoother(setup_config)
     
@@ -653,6 +653,7 @@ def copy_layer_on_device(simple_memcpy, simulator,symbols, level_index, level, c
     # So our input array for memcpy_h2d must be ordered as follows after ROW_MAJOR copy ordering.
     # [ 0, 1, 4, 5, 2, 3, 6, 7, 8, 9, 12, 13, 10, 11, 14, 15 ]    
     # Transform data for device layout
+    print("R: ", R)
     print("Step 1: Transform data for device layout")
     A_transformed = np.stack(np.split(np.stack(np.split(A, h, axis=1)), w, axis=1)).ravel()
     R_transformed = np.stack(np.split(np.stack(np.split(R, h, axis=1)), w, axis=1)).ravel()
@@ -747,17 +748,17 @@ def device_calculations_distributed(v_cycle_data):
         
         copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer=None)
         print("Step 4: Compute")
-        simulator.launch("layout_print", np.uint32(0), nonblock=False)        
+        # simulator.launch("layout_print", np.uint32(0), nonblock=False)        
         simulator.launch("v_cycle_down", nonblock=False)        
         amg.debugprint(ml.levels, b_level, x_level)
         
-        # D2H transfers
-        print("Step 6: D2H Transfers")
-        coarse_level = ml.levels[len(ml.levels)-1]
-        b_coarse_shape = coarse_level.A.shape[0]
-        b_coarse_device = np.zeros(total_pe_rows*b_coarse_shape, dtype=np.float32)
-        simple_memcpy.do_memcpy_d2h(b_coarse_device, symbols['b_next'], total_pe_cols-1, 0, 1, total_pe_rows, b_coarse_shape*1) # copy from symbol into result.
-        print(f"b_coarse_device: {b_coarse_device}")
+        # # D2H transfers
+        # print("Step 6: D2H Transfers")
+        # coarse_level = ml.levels[len(ml.levels)-1]
+        # b_coarse_shape = coarse_level.A.shape[0]
+        # b_coarse_device = np.zeros(total_pe_rows*b_coarse_shape, dtype=np.float32)
+        # simple_memcpy.do_memcpy_d2h(b_coarse_device, symbols['b_next'], total_pe_cols-1, 0, 1, total_pe_rows, b_coarse_shape*1) # copy from symbol into result.
+        # print(f"b_coarse_device: {b_coarse_device}")
         
         # Coarse solve
         # x_level[-1] = perform_coarse_solve(ml.levels[-1], x_level, b_level, solver_callable_host)
@@ -818,17 +819,19 @@ def main():
   print("############################################################")
   print("# INPUT DATA")
   print("############################################################")
-  N = 3
-  M = 3
+  N = 7
+  M = 7
   eps = 1.e-5
   max_iterations = 1
     
   A0, x0, b0 = generate_input2(M, N, type=np.float32)
+  print(f"x0: {x0}")
+  print(f"b0: {b0}")
   nrm_b = np.linalg.norm(b0, 2)
   relative_tol = eps * nrm_b # relative tolerance
   
   checkinput(A0, b0, x0, relative_tol, max_iterations)  # Runs solvers from pyamg and scipy.
-
+  print("A0: ", A0.toarray())
   # print data
   print("Input problem size:", M, N)
   print("Input Matrix Shape:", A0.shape)

@@ -132,7 +132,7 @@ amg_paper_layout = {
 }
 
 amg_2_layers = {
-    0: {"layer_start_x": 0, "layer_start_y": 0, "layer_pe_cols": 4, "layer_pe_rows":4}
+    0: {"layer_start_x": 0, "layer_start_y": 0, "layer_pe_cols": 2, "layer_pe_rows":2}
 }
 
 
@@ -168,13 +168,13 @@ STATIC_HEADER = textwrap.dedent("""\
 //   8 collective_y_color_up    17 STATE_MACHINE      26                    35
 
 // fixed parameters
-param total_pe_cols: i16; // = {total_pe_cols}; // width of the core rectangle
-param total_pe_rows: i16; //  = {total_pe_rows}; // height of the core rectangle
-param total_levels: i16; // = {num_layers};     // number of levels in the AMG hierarchy
-param layer_start_x: i16; // = {start_x};
-param layer_start_y: i16; // = {start_y};
-param layer_end_x: i16; // = {end_x};
-param layer_end_y: i16; // = {end_y};
+param total_pe_cols: u16; // = {total_pe_cols}; // width of the core rectangle
+param total_pe_rows: u16; //  = {total_pe_rows}; // height of the core rectangle
+param total_levels: u16; // = {num_layers};     // number of levels in the AMG hierarchy
+param layer_start_x: u16; // = {start_x};
+param layer_start_y: u16; // = {start_y};
+param layer_end_x: u16; // = {end_x};
+param layer_end_y: u16; // = {end_y};
 
 """)
 
@@ -230,9 +230,9 @@ layout {{
     }};
     
     // map tiles for this layer
-    var px: i16 = layer_start_x;
+    var px: u16 = layer_start_x;
     while (px < layer_end_x) : (px += 1) {{
-        var py: i16 = layer_start_y;
+        var py: u16 = layer_start_y;
         const memcpy_params = memcpy.get_params(px);
         while (py < layer_end_y) : (py += 1) {{
             const c2d_params    = c2d.get_params(px, py, c2d_struct);
@@ -242,6 +242,7 @@ layout {{
                 .c2d_params        = c2d_params,
                 .common_params     = common_params,
                 .layers_data       = layers_data,
+                .runtime_data      = runtime_data,
                 .pe_id_x           = px,
                 .pe_id_y           = py,
                 .total_pe_cols     = total_pe_cols,
@@ -261,7 +262,7 @@ layout {{
     @export_name("v_cycle_down", fn()void);
     @export_name("b_next", [*]f32, true);
     @export_name("omega", [*]f32, true);
-    @export_name("iterations", [*]i32, true);
+    @export_name("iterations", [*]u32, true);
     @export_name("layout_print", fn(u32)void);
 
 }}  // end layout
@@ -288,11 +289,11 @@ def generate_layout_amg(total_pe_cols, total_pe_rows, total_levels, layers, file
     for i, L in enumerate(layers):
         param_blocks.append(textwrap.indent(textwrap.dedent(f"""\
             // ── LAYER {i} ───────────────────────────────────
-            param layer_M_{i}: i16; // = {L['M']};
-            param layer_N_{i}: i16; // = {L['N']};
-            param layer_R_M_{i}: i16; // = {L['R_M']};
-            param layer_R_N_{i}: i16; // = {L['R_N']};
-            param layer_index_{i}: i16; // = {L['index']};
+            param layer_M_{i}: u16; // = {L['M']};
+            param layer_N_{i}: u16; // = {L['N']};
+            param layer_R_M_{i}: u16; // = {L['R_M']};
+            param layer_R_N_{i}: u16; // = {L['R_N']};
+            param layer_index_{i}: u16; // = {L['index']};
         """), prefix=""))
 
     out += "\n".join(param_blocks) + "\n\n"
@@ -317,6 +318,21 @@ def generate_layout_amg(total_pe_cols, total_pe_rows, total_levels, layers, file
     out += "\n".join(const_blocks) + "\n\n"
     out += "};\n"
 
+    # 3.1) runtime layer arrays
+    runtime_blocks = []
+    for i in range(num_layers):
+        comma = "," if i < num_layers - 1 else ""
+        runtime_blocks.append(textwrap.indent(textwrap.dedent(f"""\
+              // ── Layer {i} ─────────────────────────────────
+              layer_M_{i}, layer_N_{i}, layer_M_{i} / total_pe_rows, layer_N_{i} / total_pe_cols, layer_R_M_{i} / total_pe_rows, layer_R_N_{i} / total_pe_cols, layer_index_{i}{comma}
+            """), prefix=""))
+    out += "// ── Layer runtime arrays ─────────────────────────────────\n"
+    out += "// [.M, .N, .M_local, .N_local, .R_M_local, .R_N_local, .layer_index]\n"
+    out += f"const runtime_data = [{num_layers}, 7]u16 {{\n"
+    out += "\n".join(runtime_blocks) + "\n"
+    out += "};\n"
+    
+    
     # 4) Static imports
     out += STATIC_IMPORTS + "\n"
 
