@@ -19,18 +19,22 @@ const layers_data = [1]comptime_struct{
  
 };
 const memcpy = @import_module("<memcpy/get_params>", .{
-    .width  = 1,
+    .width  = 5,
     .height = 1
 });
 layout {
-    @set_rectangle(1, 1);
-    const memcpy_params = memcpy.get_params(0);
-    var params: comptime_struct = .{
-        .memcpy_params     = memcpy_params,
-        .total_levels_count = total_levels,
-        .layers_data = layers_data,
-        .runtime_array = runtime_array,
-    };
-    @set_tile_code(0, 0, "pe.csl", params);
+    @set_rectangle(5, 1);
+    for (@range(u16, 5)) |i| {
+        const memcpy_params = memcpy.get_params(i);
+        var params: comptime_struct = .{
+            .memcpy_params     = memcpy_params,
+            .total_levels_count = total_levels,
+            .pe_id_x = i,
+            .width = 5,
+            .layers_data = layers_data,
+            .runtime_array = runtime_array,
+        };
+        @set_tile_code(i, 0, "pe.csl", params);
+    }
     @export_name("user", fn()void);
 }
