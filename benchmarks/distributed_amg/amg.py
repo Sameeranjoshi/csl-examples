@@ -34,14 +34,14 @@ def each_layer_solver_down(level, x_level, b_level, ml, setup_config, level_id, 
                  omega=get_omega_from_presmoother(setup_config), 
                  iterations=get_iterations_from_presmoother(setup_config))
     timing.smoothing_time = time.time() - smooth_start
-    print("smooth X", x.flatten())
+    # print("smooth X", x.flatten())
     # Time residual calculation
     residual_start = time.time()
     r = b - A @ x   # residual
-    print("b", b.flatten())
-    print("A", A.toarray())
-    print("x", x.flatten())
-    print("r", r.flatten())
+    # print("b", b.flatten())
+    # print("A", A.toarray())
+    # print("x", x.flatten())
+    # print("r", r.flatten())
     timing.residual_time = time.time() - residual_start
     
     # Time restriction
@@ -492,8 +492,8 @@ def smooth_aggregate_setup_only(A, x, b, solver, max_level=None, max_coarse=None
     smoothed_aggregation_solver_config = {
         'B': b,
         'symmetry': 'symmetric',
-        'aggregate': ('lloyd', {'ratio': 0.10}),  # Reduce coarsening aggressiveness
-        'strength': ('symmetric', {'theta': 0.10}),  # Capture more connections
+        'aggregate': ('lloyd', {'ratio': 0.50}),  # increase for more layers
+        'strength': ('symmetric', {'theta': 0.50}),  # increase for more layers
         'smooth': 'jacobi',
         # withrho is essential for answers to be correct
         'presmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 1, 'withrho': False}),

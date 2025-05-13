@@ -577,103 +577,153 @@ def perform_coarse_solve(level, x_level, b_level, solver_callable_host):
     
     return x_coarsest
   
-def copy_all_layers_on_device(simple_memcpy, simulator,symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer):
-    """Copy data from all layers on device"""
-    for level_index in range(len(ml.levels) - 1):
-        deviceprofiling.add_other_info(iteration, level_index, "down")
-        
-        copy_layer_on_device(simple_memcpy, simulator,symbols, level_index, ml.levels[level_index],
-                layer_coordinates_map[0], x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer)
-
-
-
-def copy_layer_on_device(simple_memcpy, simulator,symbols, level_index, level, coords, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer):
-    """Handle downward pass operations for a single level"""
-    print("\n" + "-"*40)
-    print(f"│ DOWN PHASE - LAYER {level_index}")
-    print("-"*40)
+def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer):
+    """Copy all layers data as concatenated blobs to device
     
-    # Extract coordinates
+    Example for 4x4 matrices on 2x2 PE grid with 2 layers:
+    
+    Layer A0:                Layer A1:               PE Grid:
+          +                         +
+    [0  1 | 2  3]            [16 17 | 18 19]          +----+----+
+    [4  5 | 6  7]            [20 21 | 22 23]          |P00 |P01 |
+  + ------------- +          + ------------- +      +----+----+
+    [8  9 | 10 11]           [24 25 | 26 27]          |P10 |P11 |
+    [12 13| 14 15]           [28 29 | 30 31]          +----+----+
+          +                                         
+    
+    1. Split each layer into PE chunks:
+       PE(0,0): A0[0,1,4,5]     PE(0,1): A0[2,3,6,7]
+       PE(1,0): A0[8,9,12,13]   PE(1,1): A0[10,11,14,15]
+       
+       PE(0,0): A1[16,17,20,21] PE(0,1): A1[18,19,22,23]
+       PE(1,0): A1[24,25,28,29] PE(1,1): A1[26,27,30,31]
+    
+    2. Concatenate layers for each PE:
+       PE(0,0): [0,1,4,5,16,17,20,21]      # Layer0 chunk + Layer1 chunk
+       PE(0,1): [2,3,6,7,18,19,22,23]      # Layer0 chunk + Layer1 chunk
+       PE(1,0): [8,9,12,13,24,25,28,29]    # Layer0 chunk + Layer1 chunk
+       PE(1,1): [10,11,14,15,26,27,30,31]  # Layer0 chunk + Layer1 chunk
+    
+    3. Final A_blob sent to device:
+       [0,1,4,5,16,17,20,21,    # PE(0,0) data
+        2,3,6,7,18,19,22,23,    # PE(0,1) data
+        8,9,12,13,24,25,28,29,  # PE(1,0) data
+        10,11,14,15,26,27,30,31]# PE(1,1) data
+    
+    Each PE receives its concatenated chunk containing data from all layers.
+    """
+    print("\n" + "-"*40)
+    print("│ COPYING ALL LAYERS TO DEVICE")
+    print("-"*40)
+
+    # Get coordinates from first layer as reference
+    coords = layer_coordinates_map[0]
     px, py = coords['layer_start_x'], coords['layer_start_y']
     w, h = coords['layer_pe_cols'], coords['layer_pe_rows']
+
+    # Initialize dictionaries to store PE-wise chunks
+    pe_chunks_A = {(i, j): [] for i in range(h) for j in range(w)}
+    pe_chunks_R = {(i, j): [] for i in range(h) for j in range(w)}
+    pe_chunks_x = {(i, j): [] for i in range(h) for j in range(w)}
+    b_transformed = None
     
-    # Get matrices and vectors
-    A, R = level.A, level.R
-    M, N = A.shape
-    R_M, R_N = R.shape
-    x = x_level[level_index]
-    b = b_level[level_index]
+    # Transform data for all layers
+    for level_index, level in enumerate(ml.levels[:-1]):
+        # Get matrices and vectors (already padded from pad_and_make_dense)
+        A, R = level.A, level.R
+        M, N = A.shape
+        R_M, R_N = R.shape
+        x = x_level[level_index]
+        
+        # Calculate per-PE dimensions (must be equal for all PEs)
+        per_pe_rows = M // h
+        per_pe_cols = N // w
+        per_pe_restrict_rows = R_M // h
+        per_pe_restrict_cols = R_N // w
+        
+        print(f"\nLayer {level_index} sizes (after padding):")
+        print(f"  A: {A.shape} | R: {R.shape}")
+        print(f"  x: {x.shape}")
+        
+        # Transform A matrix using stack/split and store PE-wise
+        A_transformed = np.stack(np.split(np.stack(np.split(A, h, axis=1)), w, axis=1))
+        # Transform R matrix using stack/split and store PE-wise
+        R_transformed = np.stack(np.split(np.stack(np.split(R, h, axis=1)), w, axis=1))        
+        # Transform x vector and store PE-wise (x is already padded)
+        x_transformed = x.reshape(h, per_pe_rows)        
+        for i in range(h):
+            for j in range(w):
+                pe_chunks_A[(i,j)].append(A_transformed[i,j].ravel())
+                pe_chunks_R[(i,j)].append(R_transformed[i,j].ravel())
+                pe_chunks_x[(i,j)].append(x_transformed[i].ravel())
+        
+        # Handle b vector for first layer only (b is already padded)
+        if level_index == 0:
+            b = b_level[0]
+            b_transformed = b.flatten(order='C')
+            
+        print(f"Per PE Data Sizes:")
+        print(f"  A: {per_pe_rows}x{per_pe_cols}")
+        print(f"  R: {per_pe_restrict_rows}x{per_pe_restrict_cols}")
+        print(f"  x: {per_pe_rows}x{1}")
+
+    # Concatenate PE-wise chunks and prepare final blobs
+    A_final_blob = []
+    R_final_blob = []
+    x_final_blob = []
     
-    # Calculate per-PE dimensions
-    per_pe_rows = M // h
-    per_pe_cols = N // w
-    per_pe_restrict_rows = R_M // h
-    per_pe_restrict_cols = R_N // w
-    
-    # Setup solver parameters
+    for i in range(h):
+        for j in range(w):
+            # Concatenate all layers for each PE
+            A_pe_data = np.concatenate(pe_chunks_A[(i,j)])
+            R_pe_data = np.concatenate(pe_chunks_R[(i,j)])
+            x_pe_data = np.concatenate(pe_chunks_x[(i,j)])
+                            
+            A_final_blob.append(A_pe_data)
+            R_final_blob.append(R_pe_data)
+            x_final_blob.append(x_pe_data)
+
+            if (i,j) == (0,0):
+                print(f"PE({i},{j}) concatenated sizes:")
+                print(f"  A: {A_pe_data.shape}")
+                print(f"  R: {R_pe_data.shape}")
+                print(f"  x: {x_pe_data.shape}")
+                              
+                print("PE(0,0) data:")
+                print(f"A_pe_data: {A_pe_data}")
+                print(f"R_pe_data: {R_pe_data}")
+                print(f"x_pe_data: {x_pe_data}")
+
+    # Flatten the final blobs
+    A_blob = np.concatenate(A_final_blob)
+    R_blob = np.concatenate(R_final_blob)
+    x_blob = np.concatenate(x_final_blob)
+
+    # Setup solver parameters (same as before)
     omega = np.zeros(h*w, dtype=np.float32)
     iterations = np.zeros(h*w, dtype=np.uint32)
     omega[:] = amg.get_omega_from_presmoother(setup_config)
     iterations[:] = amg.get_iterations_from_presmoother(setup_config)
-    
-    print(f"  A: {A.shape} | R: {R.shape}")
-    if (level_index == 0):
-        print(f"  b: {b.shape}")
-    print(f"  x: {x.shape}")
-    print(f"  omega: {omega.shape} | iterations: {iterations.shape}")
-    print("PE Configuration:")
-    print(f"  Position: ({px}, {py}) | Size: {w}x{h}")    
-    print(f"Per PE Data Sizes:")
-    print(f"  x: {per_pe_rows}x{1} | b: {per_pe_cols}x{1}")
-    print(f"  A: {per_pe_rows}x{per_pe_cols} | R: {per_pe_restrict_rows}x{per_pe_restrict_cols}")
-    print("Step 0: Collect layer data")
-                          
-    ############################################################
-    # TRANSFORM THE DATA TO MAP ON DEVICE.( single_layer_run.py ) 
-    ############################################################
-    # x is across rows and b is across cols (row major)
-    # A is across rows and cols (row major)
-    # R is across rows and cols (row major)
-    # P is across rows and cols (row major)
-    # b_next is across last col (row major)
-    
-    # As an example, consider A[4, 4], mapped onto a 2x2 grid of PEs:
-    #
-    #   Matrix A on host            2 x 2 PE grid, row major A submatrices
-    # +----+----+----+----+         +----------------+----------------+
-    # | 0  | 1  | 2  | 3  |         | PE (0, 0):     | PE (1, 0):     |
-    # +----+----+----+----+         |  0,  1,  4,  5 |  2,  3,  6,  7 |
-    # | 4  | 5  | 6  | 7  |         |                |                |
-    # +----+----+----+----+   --->  +----------------+----------------+
-    # | 8  | 9  | 10 | 11 |         | PE (0, 1):     | PE (1, 1):     |
-    # +----+----+----+----+         |  8,  9, 12, 13 | 10, 11, 14, 15 |
-    # | 12 | 13 | 14 | 15 |         |                |                |
-    # +----+----+----+----+         +----------------+----------------+
-    #
-    # So our input array for memcpy_h2d must be ordered as follows after ROW_MAJOR copy ordering.
-    # [ 0, 1, 4, 5, 2, 3, 6, 7, 8, 9, 12, 13, 10, 11, 14, 15 ]    
-    # Transform data for device layout
-    print("R: ", R)
-    print("Step 1: Transform data for device layout")
-    A_transformed = np.stack(np.split(np.stack(np.split(A, h, axis=1)), w, axis=1)).ravel()
-    R_transformed = np.stack(np.split(np.stack(np.split(R, h, axis=1)), w, axis=1)).ravel()
-    x_transformed = x.flatten(order='C')
-    if (level_index == 0):
-      b_transformed = b.flatten(order='C')
-    
 
+    print("\nFinal blob sizes:")
+    print(f"A blob: {A_blob.shape}")
+    print(f"R blob: {R_blob.shape}")
+    print(f"x blob: {x_blob.shape}")
+
+    # Copy concatenated data to device
+    print("\nStep 2: H2D Transfers of concatenated data")
     start_time = time.time()
-    print("Step 2: H2D Transfers")
-    simple_memcpy.do_memcpy_h2d(symbols['A'], A_transformed, px, py, w, h, per_pe_rows*per_pe_cols)
-    simple_memcpy.do_memcpy_h2d(symbols['R'], R_transformed, px, py, w, h, per_pe_restrict_rows*per_pe_restrict_cols)
-    simple_memcpy.do_memcpy_h2d_bcast(symbols['x'], x_transformed, px, py, w, h, per_pe_cols*1, is_rowbcast=False)
-    # Only first layer has b0
-    if (level_index == 0):
-        # simple_memcpy.do_memcpy_h2d_bcast(symbols['b'], b_transformed, px, py, w, h, per_pe_rows*1, is_rowbcast=True)
-        simple_memcpy.do_memcpy_h2d(symbols['b'], b_transformed, px, py, 1, h, per_pe_rows*1)
+    simple_memcpy.do_memcpy_h2d(symbols['A'], A_blob, px, py, w, h, A_blob.size//(w*h))
+    simple_memcpy.do_memcpy_h2d(symbols['R'], R_blob, px, py, w, h, R_blob.size//(w*h))
+    simple_memcpy.do_memcpy_h2d_bcast(symbols['x'], x_blob, px, py, w, h, x_blob.size//(w*h), is_rowbcast=False)
+    
+    if b_transformed is not None:
+        simple_memcpy.do_memcpy_h2d(symbols['b'], b_transformed, px, py, 1, h, b_transformed.size//h)
+    
     simple_memcpy.do_memcpy_h2d(symbols['omega'], omega, px, py, w, h, 1)
     simple_memcpy.do_memcpy_h2d(symbols['iterations'], iterations, px, py, w, h, 1)
     h2d_time = time.time() - start_time
+    print(f"H2D transfer time: {h2d_time:.4f}s")
 
 def device_calculations_distributed(v_cycle_data):
     run_args, logs_dir = parse_args()
@@ -742,36 +792,24 @@ def device_calculations_distributed(v_cycle_data):
     # Initialize device profiler
     deviceprofiling = time_ut.DeviceProfiling()
     # hardwareTimer = HardwareTimerManager(simulator) # enable_timer, sync
+    copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer=None)
     
-    while iteration < max_iterations and residual > tol:
-        print(f"\n{'='*40}\n│ ITERATION {iteration}\n{'='*40}")
-        
-        copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer=None)
-        print("Step 4: Compute")
-        # simulator.launch("layout_print", np.uint32(0), nonblock=False)        
-        simulator.launch("v_cycle_down", nonblock=False)        
-        amg.debugprint(ml.levels, b_level, x_level)
-        
-        # # D2H transfers
-        print("Step 6: D2H Transfers")
-        coarse_level = ml.levels[len(ml.levels)-1]
-        b_coarse_shape = coarse_level.A.shape[0]
-        b_coarse_device = np.zeros(total_pe_rows*b_coarse_shape, dtype=np.float32)
-        simple_memcpy.do_memcpy_d2h(b_coarse_device, symbols['b_next'], total_pe_cols-1, 0, 1, total_pe_rows, b_coarse_shape*1) # copy from symbol into result.
-        print(f"b_coarse_device: {b_coarse_device}")
-        
-        # Coarse solve
-        # x_level[-1] = perform_coarse_solve(ml.levels[-1], x_level, b_level, solver_callable_host)
-        
-        # Check convergence
-        # residual = np.linalg.norm(ml.levels[0].A @ x_level[0] - b_level[0])
-        # print(f"\n{'='*40}\n│ ITERATION {iteration} SUMMARY\n{'='*40}\nResidual: {residual:.6e}, tol: {tol:.6e}" + ("\nConvergence achieved!" if residual <= tol else "") + f"\n{'='*40}\n")
-        # amg.debugprint(ml.levels, b_level, x_level)
-        iteration += 1
-
+    print("Step 4: Compute")    
+    simulator.launch("v_cycle_down", nonblock=False)        
+    amg.debugprint(ml.levels, b_level, x_level)
+    
+    # # D2H transfers
+    print("Step 6: D2H Transfers")
+    coarse_level = ml.levels[len(ml.levels)-1]
+    b_coarse_shape = coarse_level.A.shape[0]
+    b_coarse_device = np.zeros(total_pe_rows*b_coarse_shape, dtype=np.float32)
+    simple_memcpy.do_memcpy_d2h(b_coarse_device, symbols['b_next'], total_pe_cols-1, 0, 1, total_pe_rows, b_coarse_shape*1) # copy from symbol into result.
+    print(f"b_coarse_device: {b_coarse_device}")
+    
+    # Coarse solve
+    # x_level[-1] = perform_coarse_solve(ml.levels[-1], x_level, b_level, solver_callable_host)
     # Print timing summary before cleanup
     # deviceprofiling.print_timing_summary()
-    
     ############################################################
     # Cleanup simulator
     ############################################################
@@ -779,12 +817,10 @@ def device_calculations_distributed(v_cycle_data):
     ############################################################
     # Final results
     ############################################################
-    # b_solution_device, x_solution_device = b_level[0], x_level[0] // enentually
-    A_solution, b_solution_device, x_solution_device = ml.levels[len(ml.levels)-1].A, b_coarse_device, x_level[len(ml.levels)-1]
-
     # time_ut.analyze_timing_data("reports/timing_data.csv")
     # print("\nTiming analysis complete. Open timing_report.html to view the results.")
-
+    # b_solution_device, x_solution_device = b_level[0], x_level[0] // enentually
+    A_solution, b_solution_device, x_solution_device = ml.levels[len(ml.levels)-1].A, b_coarse_device, x_level[len(ml.levels)-1]
     residual_device = np.linalg.norm(A_solution @ x_solution_device - b_solution_device)
     return b_solution_device, x_solution_device, residual_device
   
@@ -820,19 +856,19 @@ def main():
   print("############################################################")
   print("# INPUT DATA")
   print("############################################################")
-  N = 2
-  M = 2
+  N = 3
+  M = 3
   eps = 1.e-5
   max_iterations = 1
     
   A0, x0, b0 = generate_input2(M, N, type=np.float32)
-  print(f"x0: {x0}")
-  print(f"b0: {b0}")
+  # print(f"x0: {x0}")
+  # print(f"b0: {b0}")
   nrm_b = np.linalg.norm(b0, 2)
   relative_tol = eps * nrm_b # relative tolerance
   
   checkinput(A0, b0, x0, relative_tol, max_iterations)  # Runs solvers from pyamg and scipy.
-  print("A0: ", A0.toarray())
+  # print("A0: ", A0.toarray())
   # print data
   print("Input problem size:", M, N)
   print("Input Matrix Shape:", A0.shape)
