@@ -30,7 +30,7 @@ const STATE_COMPUTE_RESTRICTION: u16 = 8;
 const STATE_PROLONGATION: u16 = 9;
 const STATE_BCAST_PROLONGATION: u16 = 10;
 const STATE_BCAST_B_TILE_RIGHT: u16 = 11;
-
+const STATE_NEXT_LAYER_CHECK: u16 = 12;
 
 const state_exit_id: local_task_id = @get_local_task_id(14);
 // Queue IDs
@@ -134,17 +134,29 @@ var ptr_omega: [*]f32 = &omega;
 var ptr_iter: [*]u32 = &iterations;
 
 ///////////////////////////////////////////////
-// Temp
+// Temporary variables
+// Refers to the fine level data as it's the largest.
+// Applying a DSD on such might not cause issue of overwriting into another data.
 ///////////////////////////////////////////////
-var Ax = @zeros([1]f32);  //Ax
-var Rx = @zeros([1]f32);  // Rr
-var Px = @zeros([1]f32);  // Px = P @ x_coarse
-var residual_tile = @zeros([1]f32);
-var term_2 = @zeros([1]f32);
-var px_sum_tile = @zeros([1]f32);
-var D_inv = @zeros([1]f32); // vector of diagonals of A_tile
-var w_dinv_a_x = @zeros([1]f32);
-var i_into_x = @zeros([1]f32);
+const Ax_max_size: u16 = comptime get_max_size_of("Ax");
+const Rx_max_size: u16 = comptime get_max_size_of("Rx");
+const Px_max_size: u16 = comptime get_max_size_of("Px");
+const residual_tile_max_size: u16 = comptime get_max_size_of("residual_tile");
+const D_inv_max_size: u16 = comptime get_max_size_of("D_inv");
+const term_2_max_size: u16 = comptime get_max_size_of("term_2");
+const px_sum_tile_max_size: u16 = comptime get_max_size_of("px_sum_tile");
+const w_dinv_a_x_max_size: u16 = comptime get_max_size_of("w_dinv_a_x");
+const i_into_x_max_size: u16 = comptime get_max_size_of("i_into_x");
+
+var Ax = @zeros([Ax_max_size]f32);  //Ax
+var Rx = @zeros([Rx_max_size]f32);  // Rr
+var Px = @zeros([Px_max_size]f32);  // Px = P @ x_coarse
+var residual_tile = @zeros([residual_tile_max_size]f32);
+var term_2 = @zeros([term_2_max_size]f32);
+var px_sum_tile = @zeros([px_sum_tile_max_size]f32);
+var D_inv = @zeros([D_inv_max_size]f32); // vector of diagonals of A_tile
+var w_dinv_a_x = @zeros([w_dinv_a_x_max_size]f32);
+var i_into_x = @zeros([i_into_x_max_size]f32);
 var iter_count: i32 = 0;
 var dot = @zeros([1]f32);
 
@@ -174,7 +186,8 @@ var i_into_x_struct_i: dsd_struct;
 // output
 ///////////////////////////////////////////////
 // Pattern: data, dsd, struct, pointer
-var b_next = @zeros([1]f32);  // rightmost Column
+const b_next_max_size: u16 = comptime get_total_size_of("b_next");
+var b_next = @zeros([b_next_max_size]f32);  // rightmost Column
 var dsd_b_next : mem1d_dsd; // = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> b_next[i] });
 var b_next_struct_i: dsd_struct;
 var ptr_b_next : [*]f32 = &b_next;
@@ -221,6 +234,7 @@ task f_state() void {
       STATE_COMPUTE_RESIDUAL => state_compute_residual(),
       STATE_BCAST_RESIDUAL => state_bcast_residual(),
       STATE_COMPUTE_RESTRICTION => state_compute_restriction(),
+      STATE_NEXT_LAYER_CHECK => state_next_layer_check(),
       STATE_PROLONGATION => state_prolongation(),
       STATE_BCAST_PROLONGATION => state_bcast_prolongation(),
       STATE_EXIT => @activate(state_exit_id),
@@ -280,7 +294,7 @@ fn init_dsds_for_layer(layer_index: u16) void {
   term_2_struct_i = dsd_struct { .base_address = &term_2, .stride = 1, .extent = M_local_i, .offset = 0 }; // .{ .tensor_access = |i|{M_local} -> term_2[i] }
   px_sum_tile_struct_i = dsd_struct { .base_address = &px_sum_tile, .stride = 1, .extent = N_local_i, .offset = 0 }; // .{ .tensor_access = |i|{N_local} -> px_sum_tile[i] }
   w_dinv_a_x_struct_i = dsd_struct { .base_address = &w_dinv_a_x, .stride = 1, .extent = M_local_i, .offset = 0 }; // .{ .tensor_access = |i|{M_local} -> w_dinv_a_x[i] }
-  i_into_x_struct_i = dsd_struct { .base_address = &i_into_x, .stride = 1, .extent = M_local_i, .offset = 0 };
+  i_into_x_struct_i = dsd_struct { .base_address = &i_into_x, .stride = 1, .extent = M_local_i, .offset = 0 }; // .{ .tensor_access = |i|{M_local} -> i_into_x[i] }
 
   dsd_Ax = get_runtime_dsd_i(Ax_struct_i);
   dsd_Rx = get_runtime_dsd_i(Rx_struct_i);
@@ -314,7 +328,7 @@ fn init_dsds_for_layer(layer_index: u16) void {
 }
 
 fn print_dsd(value: f32) void {
-  simprint.fmt_with_coords("DSD_DINV_after[] = {f}", .{value});
+  simprint.fmt_with_coords("DSD_residual_after[] = {f}", .{value});
 }
 
 // // Entrypoint into kernel
@@ -382,6 +396,10 @@ fn state_bcast_jacobi() void {
 }
 
 fn state_check_jacobi() void {
+  // print x_tile
+  for (x_tile) |val, i| {
+    simprint.fmt_with_coords("after jacobi x_tile[{d}] = {f}", .{ i, val });
+  }
   if (@as(u32, iter_count) < iterations[0]) {
       next_state = STATE_COMPUTE_JACOBI;
   } else {
@@ -407,15 +425,22 @@ fn state_bcast_residual() void {
 
 fn state_compute_restriction() void {
   simprint.print_string("STATE_COMPUTE_RESTRICTION\n");
-  current_active_layer_index += 1;
+  @map(print_dsd, dsd_residual_tile);
+  next_state = STATE_NEXT_LAYER_CHECK;
+  compute_restriction();
+
+}
+
+fn state_next_layer_check() void {
+  simprint.print_string("STATE_NEXT_LAYER_CHECK\n");
+  current_active_layer_index += 1;   
   if (current_active_layer_index <= total_levels_count - 1) {
     init_dsds_for_layer(current_active_layer_index);
     next_state = STATE_INIT;
-  } else {
+  } else { // up cycle at some point.
     next_state = STATE_EXIT;
   }
-  compute_restriction();
-
+  f_trigger_state_machine();
 }
 
 fn state_prolongation() void {
@@ -487,7 +512,6 @@ fn matvec(N_tile: u16, dsd_mv_tile: mem1d_dsd, dsd_matrix_tile: mem1d_dsd, vecto
 // The diagonal PEs add the term_1 so that we don't have to gather on diag PE.
 
 fn jacobi_local() void {
-  simprint.print_string("jacobi_local\n");
   // dsd_A_tile = @set_dsd_base_addr(dsd_A_tile, &A_tile); // make sure you do this before
   // compute_mv_per_tile(N_local, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax(vector) = Ax(matrix * vector)
   matvec(N_local_i, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax(vector) = Ax(matrix * vector)
@@ -551,11 +575,14 @@ fn compute_residual() void {
 
 // bcast(residual_tile) to all PEs.
 fn bcast_residual() void {
-  if (px == py) {
+  // if (px == py) {
     @fsubs(dsd_residual_tile, dsd_b_tile, dsd_residual_tile);  // r = b - Ax
-  }
+  // }
   cur_state = next_state;
-  mpi_y.broadcast(px, @ptrcast([*]u32, &residual_tile), M_local_i, STATE_MACHINE);
+    var send_buf = @ptrcast([*]u32, &residual_tile_struct_i.base_address[residual_tile_struct_i.offset]);
+    mpi_y.broadcast(px, send_buf, residual_tile_struct_i.extent, STATE_MACHINE);  
+  // mpi_y.broadcast(px, @ptrcast([*]u32, &residual_tile), M_local_i, STATE_MACHINE);
+  // broadcast_diagonal.transfer_data(dsd_D_inv, D_inv_struct_i.extent, STATE_MACHINE);
 }
 
 // Compute restriction
@@ -693,9 +720,34 @@ fn get_total_size_of(comptime data: comptime_string) u16 {
           total_size_of_data += M_local;
         } else if (data == "x_coarse") {
           total_size_of_data += R_M_local;
+        } else if (data == "b_next") {
+          total_size_of_data += R_M_local;
         } else {
           @compileError("Invalid string for get_total_size_of");
         }
+    }
+    return total_size_of_data;
+}
+
+fn get_max_size_of(comptime data: comptime_string) u16 {
+    var total_size_of_data: u16 = 0;
+    const layer_0_fine = layers_data[0];
+    // layer params
+    const M_local: u16 = layer_0_fine.M_local; 
+    const N_local: u16 = layer_0_fine.N_local; 
+    const R_M_local: u16 = layer_0_fine.R_M_local; 
+    const R_N_local: u16 = layer_0_fine.R_N_local; 
+
+    if (data == "Ax" or data == "residual_tile" or data == "D_inv" or data == "term_2" or data == "w_dinv_a_x" or data == "i_into_x") {
+      total_size_of_data = M_local;
+    } else if (data == "Rx") {
+      total_size_of_data = R_M_local;
+    } else if (data == "Px") {
+      total_size_of_data = R_N_local;
+    } else if (data == "px_sum_tile") {
+      total_size_of_data = N_local;
+    } else {
+      @compileError("Invalid string for get_total_size_of");
     }
     return total_size_of_data;
 }

@@ -753,12 +753,12 @@ def device_calculations_distributed(v_cycle_data):
         amg.debugprint(ml.levels, b_level, x_level)
         
         # # D2H transfers
-        # print("Step 6: D2H Transfers")
-        # coarse_level = ml.levels[len(ml.levels)-1]
-        # b_coarse_shape = coarse_level.A.shape[0]
-        # b_coarse_device = np.zeros(total_pe_rows*b_coarse_shape, dtype=np.float32)
-        # simple_memcpy.do_memcpy_d2h(b_coarse_device, symbols['b_next'], total_pe_cols-1, 0, 1, total_pe_rows, b_coarse_shape*1) # copy from symbol into result.
-        # print(f"b_coarse_device: {b_coarse_device}")
+        print("Step 6: D2H Transfers")
+        coarse_level = ml.levels[len(ml.levels)-1]
+        b_coarse_shape = coarse_level.A.shape[0]
+        b_coarse_device = np.zeros(total_pe_rows*b_coarse_shape, dtype=np.float32)
+        simple_memcpy.do_memcpy_d2h(b_coarse_device, symbols['b_next'], total_pe_cols-1, 0, 1, total_pe_rows, b_coarse_shape*1) # copy from symbol into result.
+        print(f"b_coarse_device: {b_coarse_device}")
         
         # Coarse solve
         # x_level[-1] = perform_coarse_solve(ml.levels[-1], x_level, b_level, solver_callable_host)
@@ -779,12 +779,13 @@ def device_calculations_distributed(v_cycle_data):
     ############################################################
     # Final results
     ############################################################
-    b_solution_device, x_solution_device = b_level[0], x_level[0]
+    # b_solution_device, x_solution_device = b_level[0], x_level[0] // enentually
+    A_solution, b_solution_device, x_solution_device = ml.levels[len(ml.levels)-1].A, b_coarse_device, x_level[len(ml.levels)-1]
 
     # time_ut.analyze_timing_data("reports/timing_data.csv")
     # print("\nTiming analysis complete. Open timing_report.html to view the results.")
 
-    residual_device = np.linalg.norm(ml.levels[0].A @ x_solution_device - b_level[0])
+    residual_device = np.linalg.norm(A_solution @ x_solution_device - b_solution_device)
     return b_solution_device, x_solution_device, residual_device
   
 def pad_and_make_dense(layer_coordinates_map, v_cycle_data):
