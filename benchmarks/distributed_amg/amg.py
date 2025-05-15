@@ -498,8 +498,8 @@ def smooth_aggregate_setup_only(A, x, b, solver, max_level=None, max_coarse=None
         'strength': ('symmetric', {'theta': 0.50}),  # increase for more layers
         'smooth': 'jacobi',
         # withrho is essential for answers to be correct
-        'presmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 2, 'withrho': False}),
-        'postsmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 2, 'withrho': False}),  
+        'presmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 1, 'withrho': False}),
+        'postsmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 1, 'withrho': False}),  
         'improve_candidates': (('gauss_seidel', {'sweep': 'symmetric', 'iterations': 6}), None),
         'coarse_solver': coarse_solver_callable
     }
