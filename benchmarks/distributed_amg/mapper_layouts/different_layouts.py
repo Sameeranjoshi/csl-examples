@@ -282,6 +282,7 @@ layout {{
     @export_name("b_next", [*]f32, true);
     @export_name("omega", [*]f32, true);
     @export_name("iterations", [*]u32, true);
+    @export_name("print_data", fn()void);
 
 }}  // end layout
 """)

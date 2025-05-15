@@ -635,6 +635,11 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
         R_M, R_N = R.shape
         x = x_level[level_index]
         
+        # print(f"level_index: {level_index}")
+        # print(f"A: {A}")
+        # print(f"R: {R}")
+        # print(f"x: {x}")
+        
         # Calculate per-PE dimensions (must be equal for all PEs)
         per_pe_rows = M // h
         per_pe_cols = N // w
@@ -662,10 +667,10 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
             b = b_level[0]
             b_transformed = b.flatten(order='C')
             
-        print(f"Per PE Data Sizes:")
-        print(f"  A: {per_pe_rows}x{per_pe_cols}")
-        print(f"  R: {per_pe_restrict_rows}x{per_pe_restrict_cols}")
-        print(f"  x: {per_pe_rows}x{1}")
+        # print(f"Per PE Data Sizes:")
+        # print(f"  A: {per_pe_rows}x{per_pe_cols}")
+        # print(f"  R: {per_pe_restrict_rows}x{per_pe_restrict_cols}")
+        # print(f"  x: {per_pe_rows}x{1}")
 
     # Concatenate PE-wise chunks and prepare final blobs
     A_final_blob = []
@@ -689,10 +694,10 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
                 print(f"  R: {R_pe_data.shape}")
                 print(f"  x: {x_pe_data.shape}")
                               
-                print("PE(0,0) data:")
-                print(f"A_pe_data: {A_pe_data}")
-                print(f"R_pe_data: {R_pe_data}")
-                print(f"x_pe_data: {x_pe_data}")
+                # print("PE(0,0) data:")
+                # print(f"A_pe_data: {A_pe_data}")
+                # print(f"R_pe_data: {R_pe_data}")
+                # print(f"x_pe_data: {x_pe_data}")
 
     # Flatten the final blobs
     A_blob = np.concatenate(A_final_blob)
@@ -795,6 +800,7 @@ def device_calculations_distributed(v_cycle_data):
     copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer=None)
     
     print("Step 4: Compute")    
+    # simulator.launch("print_data", nonblock=False)
     simulator.launch("v_cycle_down", nonblock=False)        
     amg.debugprint(ml.levels, b_level, x_level)
     
@@ -862,6 +868,9 @@ def main():
   max_iterations = 1
     
   A0, x0, b0 = generate_input2(M, N, type=np.float32)
+  # print("A0: ", A0.toarray())
+  # print("x0: ", x0)
+  # print("b0: ", b0)
   # print(f"x0: {x0}")
   # print(f"b0: {b0}")
   nrm_b = np.linalg.norm(b0, 2)

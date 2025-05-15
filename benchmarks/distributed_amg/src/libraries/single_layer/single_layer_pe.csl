@@ -326,6 +326,9 @@ fn init_dsds_for_layer(layer_index: u16) void {
   // }
 
 }
+fn print_restricttion_dsd(value: f32) void {
+  simprint.fmt_with_coords("DSD_restriction_after[] = {f}", .{value});
+}
 
 fn print_dsd(value: f32) void {
   simprint.fmt_with_coords("DSD_residual_after[] = {f}", .{value});
@@ -343,9 +346,43 @@ fn v_cycle_down() void {
   @activate(STATE_MACHINE);
 }
 
+fn print_data() void {
+  if (pe_id_x == 0 and pe_id_y == 0) {
+    // print A_tile
+    simprint.print_string("A_tile\n");
+    for (A_tile) |val, i| {
+    simprint.fmt_with_coords("A_tile[{d}] = {f}", .{ i, val });
+    }
+    simprint.print_string("R_tile\n");
+    for (R_tile) |val, i| {
+      simprint.fmt_with_coords("R_tile[{d}] = {f}", .{ i, val });
+    }
+    simprint.print_string("x_tile\n");
+    for (x_tile) |val, i| {
+      simprint.fmt_with_coords("x_tile[{d}] = {f}", .{ i, val });
+    }
+    simprint.print_string("b_tile\n");
+    for (b_tile) |val, i| {
+      simprint.fmt_with_coords("b_tile[{d}] = {f}", .{ i, val });
+    }
+
+    // 
+    simprint.print_string("A_tiles_total_size\n");
+    simprint.fmt_with_coords("A_tiles_total_size = {d}", .{A_tiles_total_size});
+    simprint.print_string("R_tiles_total_size\n");
+    simprint.fmt_with_coords("R_tiles_total_size = {d}", .{R_tiles_total_size});
+    simprint.print_string("x_tiles_total_size\n");
+    simprint.fmt_with_coords("x_tiles_total_size = {d}", .{x_tiles_total_size});
+    simprint.print_string("b_tiles_total_size\n");
+    simprint.fmt_with_coords("b_tiles_total_size = {d}", .{b_tiles_total_size});
+
+  }
+}
+
 
 //########################################################################################
 // Dataflow and Routing.
+//########################################################################################
 //########################################################################################
 comptime {
   // Bind all state tasks
@@ -362,6 +399,7 @@ comptime {
   @export_symbol(ptr_omega, "omega");
   @export_symbol(ptr_iter, "iterations");
   @export_symbol(v_cycle_down);
+  @export_symbol(print_data);
 
 
   broadcast_diagonal.configure_network();
@@ -433,6 +471,7 @@ fn state_compute_restriction() void {
 
 fn state_next_layer_check() void {
   simprint.print_string("STATE_NEXT_LAYER_CHECK\n");
+  @map(print_restricttion_dsd, dsd_b_next);
   current_active_layer_index += 1;   
   if (current_active_layer_index <= total_levels_count - 1) {
     init_dsds_for_layer(current_active_layer_index);
@@ -481,6 +520,26 @@ fn bcast_b_tile_right() void {
 
   // buf is at an offset from the base address for each layer.
   var send_buf = @ptrcast([*]u32, &b_tile[b_tile_struct_i.offset]);
+  mpi_x.broadcast(0, send_buf, b_tile_struct_i.extent, STATE_MACHINE);
+
+  // var recv_buf = @ptrcast([*]u32, &b_tile[b_tile_struct_i.offset]);
+
+  // // works
+  // if (pe_id_x == 0) { // leftmost columns
+  //   mpi_x.broadcast(0, send_buf, b_tile_struct_i.extent, STATE_MACHINE);  // M_local_i size.
+  // } else {
+  //   mpi_x.broadcast(0, recv_buf, b_tile_struct_i.extent, STATE_MACHINE);
+  // }
+}
+
+
+fn bcast_b_tile_left() void {
+  cur_state = next_state;
+
+  // buf is at an offset from the base address for each layer.
+  var send_buf = @ptrcast([*]u32, &b_next[b_next_struct_i.offset]);
+  var recv_buf = @ptrcast([*]u32, &b_tile[b_tile_struct_i.offset]);
+
   mpi_x.broadcast(0, send_buf, b_tile_struct_i.extent, STATE_MACHINE);
 
   // var recv_buf = @ptrcast([*]u32, &b_tile[b_tile_struct_i.offset]);
