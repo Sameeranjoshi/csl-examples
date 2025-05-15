@@ -208,24 +208,6 @@ const c2d_struct = .{
     .x_entrypoints  = .{C2D_X_ENTRYPOINT_0,       C2D_X_ENTRYPOINT_1},
     .y_entrypoints  = .{C2D_Y_ENTRYPOINT_0,       C2D_Y_ENTRYPOINT_1},
 };
-const C0 : color = @get_color(4);
-const C1 : color = @get_color(5);
-const C2 : color = @get_color(6);
-const C3 : color = @get_color(7);
-const C4 : color = @get_color(8);
-
-// entrypoints of sync module
-const STARTUP: local_task_id = @get_local_task_id(15);
-const SYNC_Y: local_task_id = @get_local_task_id(16);
-const SYNC_BCAST: local_task_id = @get_local_task_id(17);
-const EXIT: local_task_id = @get_local_task_id(18);
-
-const sync = @import_module( "libraries/single_layer/sync/layout.csl", .{
-    .colors = [5]color{C0, C1, C2, C3, C4},
-    .entrypoints = [4]local_task_id{STARTUP, SYNC_Y, SYNC_BCAST, EXIT},
-    .width = total_pe_cols,
-    .height = total_pe_rows
-    });
 
 """)
 
@@ -254,7 +236,6 @@ layout {{
         const memcpy_params = memcpy.get_params(px);
         while (py < layer_end_y) : (py += 1) {{
             const c2d_params    = c2d.get_params(px, py, c2d_struct);
-            const syncParams = sync.get_params(px, py);
 
             var params: comptime_struct = .{{ 
                 .memcpy_params     = memcpy_params,
@@ -264,7 +245,6 @@ layout {{
                 .runtime_data      = runtime_data,
                 .pe_id_x           = px,
                 .pe_id_y           = py,
-                .syncParams = syncParams,
                 .total_levels_count = total_levels,
             }};
             @set_tile_code(px, py, "./libraries/single_layer/single_layer_pe.csl", params);

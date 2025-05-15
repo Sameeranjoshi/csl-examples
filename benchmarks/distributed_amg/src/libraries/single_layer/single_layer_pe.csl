@@ -1,7 +1,6 @@
 param memcpy_params: comptime_struct;
 param c2d_params: comptime_struct;
 param common_params: comptime_struct;
-param syncParams: comptime_struct;
 param pe_id_x: u16;
 param pe_id_y: u16;
 param total_levels_count: u16;
@@ -33,6 +32,7 @@ const STATE_BCAST_B_TILE_RIGHT: u16 = 11;
 const STATE_NEXT_LAYER_CHECK: u16 = 12;
 
 const state_exit_id: local_task_id = @get_local_task_id(14);
+const no_op_id: local_task_id = @get_local_task_id(15);
 // Queue IDs
 const send_bcast_oq = @get_output_queue(1);
 const send_bcast_iq = @get_input_queue(0);
@@ -157,7 +157,7 @@ var px_sum_tile = @zeros([px_sum_tile_max_size]f32);
 var D_inv = @zeros([D_inv_max_size]f32); // vector of diagonals of A_tile
 var w_dinv_a_x = @zeros([w_dinv_a_x_max_size]f32);
 var i_into_x = @zeros([i_into_x_max_size]f32);
-var iter_count: i32 = 0;
+var iter_count: u32 = 0;
 var dot = @zeros([1]f32);
 
 // DSDs
@@ -307,7 +307,7 @@ fn init_dsds_for_layer(layer_index: u16) void {
   dsd_i_into_x = get_runtime_dsd_i(i_into_x_struct_i);
 
   // output
-  var b_next_struct_i = dsd_struct { .base_address = &b_next, .stride = 1, .extent = R_M_local_i, .offset = 0 };
+  b_next_struct_i = dsd_struct { .base_address = &b_next, .stride = 1, .extent = R_M_local_i, .offset = 0 };
   dsd_b_next = get_runtime_dsd_i(b_next_struct_i);
 
   // if (pe_id_x == 0 and pe_id_y == 0) {
@@ -326,7 +326,7 @@ fn init_dsds_for_layer(layer_index: u16) void {
   // }
 
 }
-fn print_restricttion_dsd(value: f32) void {
+fn print_restriction_dsd(value: f32) void {
   simprint.fmt_with_coords("DSD_restriction_after[] = {f}", .{value});
 }
 
@@ -388,6 +388,7 @@ comptime {
   // Bind all state tasks
   @bind_local_task(f_state, STATE_MACHINE);
   @bind_local_task(state_exit, state_exit_id);
+  @bind_local_task(no_op, no_op_id);
 
   @export_symbol(ptr_A, "A");
   @export_symbol(ptr_x, "x");
@@ -436,9 +437,9 @@ fn state_bcast_jacobi() void {
 fn state_check_jacobi() void {
   // print x_tile
   for (x_tile) |val, i| {
-    simprint.fmt_with_coords("after jacobi x_tile[{d}] = {f}", .{ i, val });
+    simprint.fmt_with_coords("after smoothing x_tile[{d}] = {f}", .{ i, val });
   }
-  if (@as(u32, iter_count) < iterations[0]) {
+  if (iter_count < iterations[0]) {
       next_state = STATE_COMPUTE_JACOBI;
   } else {
       if (is_v_cycle_up) {
@@ -470,12 +471,18 @@ fn state_compute_restriction() void {
 }
 
 fn state_next_layer_check() void {
-  simprint.print_string("STATE_NEXT_LAYER_CHECK\n");
-  @map(print_restricttion_dsd, dsd_b_next);
+  simprint.fmt_with_coords("STATE_NEXT_LAYER_CHECK, layer_index={d}", .{ @as(u32, current_active_layer_index) });
+  @map(print_restriction_dsd, dsd_b_next);
+
   current_active_layer_index += 1;   
   if (current_active_layer_index <= total_levels_count - 1) {
-    init_dsds_for_layer(current_active_layer_index);
-    next_state = STATE_INIT;
+    // bcast_left first then start the next layer.
+    bcast_b_tile_left();
+    
+
+    // init_dsds_for_layer(current_active_layer_index);
+    // next_state = STATE_INIT;
+    next_state = STATE_EXIT;
   } else { // up cycle at some point.
     next_state = STATE_EXIT;
   }
@@ -503,12 +510,9 @@ fn initialize() void {
   v_cycle_iteration += 1;
   is_v_cycle_up = false;
   iter_count = 0;
-
-  // if (px == py) {
-    @map(inverse_callback, dsd_A_diag, dsd_D_inv);
-  // }
   cur_state = next_state;
 
+  @map(inverse_callback, dsd_A_diag, dsd_D_inv);
   // var send_buf = @ptrcast([*]u32, &D_inv_struct_i.base_address[D_inv_struct_i.offset]);
   // mpi_x.broadcast(py, send_buf, D_inv_struct_i.extent, STATE_MACHINE);
   broadcast_diagonal.transfer_data(dsd_D_inv, D_inv_struct_i.extent, STATE_MACHINE);
@@ -518,29 +522,19 @@ fn initialize() void {
 fn bcast_b_tile_right() void {
   cur_state = next_state;
 
-  // buf is at an offset from the base address for each layer.
-  var send_buf = @ptrcast([*]u32, &b_tile[b_tile_struct_i.offset]);
-  mpi_x.broadcast(0, send_buf, b_tile_struct_i.extent, STATE_MACHINE);
-
-  // var recv_buf = @ptrcast([*]u32, &b_tile[b_tile_struct_i.offset]);
-
-  // // works
-  // if (pe_id_x == 0) { // leftmost columns
-  //   mpi_x.broadcast(0, send_buf, b_tile_struct_i.extent, STATE_MACHINE);  // M_local_i size.
-  // } else {
-  //   mpi_x.broadcast(0, recv_buf, b_tile_struct_i.extent, STATE_MACHINE);
-  // }
+  const sizetosend = b_tile_struct_i.extent;
+  var send_buf = @ptrcast([*]u32, &b_tile_struct_i.base_address[b_tile_struct_i.offset]);
+  mpi_x.broadcast(0, send_buf, sizetosend, STATE_MACHINE);
 }
 
 
 fn bcast_b_tile_left() void {
   cur_state = next_state;
 
-  // buf is at an offset from the base address for each layer.
   var send_buf = @ptrcast([*]u32, &b_next[b_next_struct_i.offset]);
-  var recv_buf = @ptrcast([*]u32, &b_tile[b_tile_struct_i.offset]);
+  // var recv_buf = @ptrcast([*]u32, &b_tile[b_tile_struct_i.offset]);
 
-  mpi_x.broadcast(0, send_buf, b_tile_struct_i.extent, STATE_MACHINE);
+  mpi_x.broadcast(layer_kernel_cols-1, send_buf, b_next_struct_i.extent, no_op_id);
 
   // var recv_buf = @ptrcast([*]u32, &b_tile[b_tile_struct_i.offset]);
 
@@ -573,7 +567,9 @@ fn matvec(N_tile: u16, dsd_mv_tile: mem1d_dsd, dsd_matrix_tile: mem1d_dsd, vecto
 fn jacobi_local() void {
   // dsd_A_tile = @set_dsd_base_addr(dsd_A_tile, &A_tile); // make sure you do this before
   // compute_mv_per_tile(N_local, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax(vector) = Ax(matrix * vector)
-  matvec(N_local_i, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax(vector) = Ax(matrix * vector)
+  const x_tile_vector: [*]const f32 = @ptrcast([*]const f32, &x_tile_struct_i.base_address[x_tile_struct_i.offset]); // summedinto
+  const vectorsize = x_tile_struct_i.extent;
+  matvec(vectorsize, dsd_Ax, dsd_A_tile, x_tile_vector);  // Ax(vector) = Ax(matrix * vector)
   @fmuls(dsd_w_dinv_a_x, dsd_D_inv, dsd_Ax); // tmp = D_inv * Ax (vector * vector)
   @fmuls(dsd_w_dinv_a_x, omega[0], dsd_w_dinv_a_x); // tmp = w * D_inv * Ax (scalar * vector)
 
@@ -595,7 +591,10 @@ fn jacobi_local() void {
 fn residual_local() void {
   // dsd_A_tile = @set_dsd_base_addr(dsd_A_tile, &A_tile); // make sure you do this before
   // compute_mv_per_tile(N_local, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax = A_tile * x_tile
-  matvec(N_local_i, dsd_Ax, dsd_A_tile, @ptrcast([*]const f32, &x_tile));  // Ax = A_tile * x_tile
+
+  const x_tile_vector: [*]const f32 = @ptrcast([*]const f32, &x_tile_struct_i.base_address[x_tile_struct_i.offset]); // summedinto
+  const vectorsize = x_tile_struct_i.extent;
+  matvec(vectorsize, dsd_Ax, dsd_A_tile, x_tile_vector);  // Ax = A_tile * x_tile
 }
 
 
@@ -612,46 +611,61 @@ fn f_trigger_state_machine() void {
 
 // Compute Jacobi iteration
 fn compute_jacobi() void {
-  jacobi_local();  // updates term_2
-  // notice the py instead of 0.
   cur_state = next_state;
-  mpi_x.reduce_fadds(py, @ptrcast([*]f32, &term_2), @ptrcast([*]f32, &x_tile),
-                     M_local_i, STATE_MACHINE); // reduce across rows towards left
+  jacobi_local();  // updates term_2
+
+  var send_buf = @ptrcast([*]f32, &term_2_struct_i.base_address[term_2_struct_i.offset]);
+  var sizetosend = term_2_struct_i.extent;
+  var recv_buf = @ptrcast([*]f32, &x_tile_struct_i.base_address[x_tile_struct_i.offset]); // summedinto
+  mpi_x.reduce_fadds(py, send_buf, recv_buf,
+                     sizetosend, STATE_MACHINE); // reduce across rows towards left into x_tile
 }
 
 fn bcast_jacobi() void {
   cur_state = next_state;
-  mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local_i, STATE_MACHINE);
+
+  var send_buf = @ptrcast([*]u32, &x_tile_struct_i.base_address[x_tile_struct_i.offset]);
+  var sizetosend = x_tile_struct_i.extent;
+  mpi_y.broadcast(px, send_buf, sizetosend, STATE_MACHINE);
 }
 
 // Compute residual
 fn compute_residual() void {
-  residual_local(); // has answers in dsd_Ax
   cur_state = next_state;
-  mpi_x.reduce_fadds(py, @ptrcast([*]f32, &Ax), @ptrcast([*]f32, &residual_tile),
-                     M_local_i, STATE_MACHINE); // reduce across rows towards left
+
+  residual_local(); // has answers in dsd_Ax
+  var send_buf = @ptrcast([*]f32, &Ax_struct_i.base_address[Ax_struct_i.offset]);
+  var sizetosend = Ax_struct_i.extent;
+  var recv_buf = @ptrcast([*]f32, &residual_tile_struct_i.base_address[residual_tile_struct_i.offset]); // summedinto
+  mpi_x.reduce_fadds(py, send_buf, recv_buf,
+                     sizetosend, STATE_MACHINE); // output: residual_tile
 }
 
 // bcast(residual_tile) to all PEs.
 fn bcast_residual() void {
-  // if (px == py) {
-    @fsubs(dsd_residual_tile, dsd_b_tile, dsd_residual_tile);  // r = b - Ax
-  // }
   cur_state = next_state;
-    var send_buf = @ptrcast([*]u32, &residual_tile_struct_i.base_address[residual_tile_struct_i.offset]);
-    mpi_y.broadcast(px, send_buf, residual_tile_struct_i.extent, STATE_MACHINE);  
+  @fsubs(dsd_residual_tile, dsd_b_tile, dsd_residual_tile);  // residual_tile = b - Ax
+  var send_buf = @ptrcast([*]u32, &residual_tile_struct_i.base_address[residual_tile_struct_i.offset]);
+  var sizetosend = residual_tile_struct_i.extent;
+  mpi_y.broadcast(px, send_buf, sizetosend, STATE_MACHINE);  
+
   // mpi_y.broadcast(px, @ptrcast([*]u32, &residual_tile), M_local_i, STATE_MACHINE);
   // broadcast_diagonal.transfer_data(dsd_D_inv, D_inv_struct_i.extent, STATE_MACHINE);
 }
 
 // Compute restriction
 fn compute_restriction() void {
-  // dsd_R_tile = @set_dsd_base_addr(dsd_R_tile, &R_tile); // make sure you do this before
-  // compute_mv_per_tile(R_N_local, dsd_Rx, dsd_R_tile, @ptrcast([*]const f32, &residual_tile));
-  matvec(R_N_local_i, dsd_Rx, dsd_R_tile, @ptrcast([*]const f32, &residual_tile));
   cur_state = next_state;
-  mpi_x.reduce_fadds(layer_kernel_cols-1, @ptrcast([*]f32, &Rx), @ptrcast([*]f32, &b_next),
-                     R_M_local_i, STATE_MACHINE); // reduce across rows towards left
+
+  const residual_tile_vector: [*]const f32 = @ptrcast([*]const f32, &residual_tile_struct_i.base_address[residual_tile_struct_i.offset]); // summedinto
+  const vectorsize = residual_tile_struct_i.extent; // Note: R_M_local_i == M_local_i(during restriction)
+  matvec(vectorsize, dsd_Rx, dsd_R_tile, residual_tile_vector);
+
+  var send_buf = @ptrcast([*]f32, &Rx_struct_i.base_address[Rx_struct_i.offset]);
+  var sizetosend = Rx_struct_i.extent;
+  var recv_buf = @ptrcast([*]f32, &b_next_struct_i.base_address[b_next_struct_i.offset]); // summedinto
+  mpi_x.reduce_fadds(layer_kernel_cols-1, send_buf, recv_buf,
+                     sizetosend, STATE_MACHINE); // output: b_next
 }
 
 // Compute prolongation
@@ -672,7 +686,7 @@ fn bcast_prolongation() void {
   mpi_y.broadcast(px, @ptrcast([*]u32, &x_tile), N_local_i, STATE_MACHINE);
 }
 
-fn no_op() void {
+task no_op() void {
   // simprint.print_string("no_op\n");
 }
 
