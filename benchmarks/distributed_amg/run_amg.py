@@ -694,10 +694,10 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
                 print(f"  R: {R_pe_data.shape}")
                 print(f"  x: {x_pe_data.shape}")
                               
-                # print("PE(0,0) data:")
-                # print(f"A_pe_data: {A_pe_data}")
-                # print(f"R_pe_data: {R_pe_data}")
-                # print(f"x_pe_data: {x_pe_data}")
+                print("PE(0,0) data:")
+                print(f"A_pe_data: {A_pe_data}")
+                print(f"R_pe_data: {R_pe_data}")
+                print(f"x_pe_data: {x_pe_data}")
 
     # Flatten the final blobs
     A_blob = np.concatenate(A_final_blob)

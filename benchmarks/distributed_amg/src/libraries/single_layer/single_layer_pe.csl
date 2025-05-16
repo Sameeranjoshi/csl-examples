@@ -1,3 +1,7 @@
+
+// ##############################################
+// Parameters and derived parameters
+// ##############################################
 param memcpy_params: comptime_struct;
 param c2d_params: comptime_struct;
 param common_params: comptime_struct;
@@ -17,6 +21,7 @@ const layer_kernel_rows: u16 = common_params.layer_kernel_rows;
 const layer_kernel_cols: u16 = common_params.layer_kernel_cols;
 const STATE_MACHINE: local_task_id = common_params.layer_task_id[0];
 
+
 // Task IDs
 const STATE_INIT: u16 = 1;
 const STATE_EXIT: u16 = 2;
@@ -32,14 +37,15 @@ const STATE_BCAST_B_TILE_RIGHT: u16 = 11;
 const STATE_NEXT_LAYER_CHECK: u16 = 12;
 const STATE_MOVE_B_NEXT_TO_B_TILE: u16 = 13;
 
+// ##############################################
+// TASKS, COLORS, QUEUES
+// ##############################################
 const state_exit_id: local_task_id = @get_local_task_id(14);
 const no_op_id: local_task_id = @get_local_task_id(15);
-// Queue IDs
-const send_bcast_oq = @get_output_queue(1);
-const send_bcast_iq = @get_input_queue(0);
 
-
+// ##############################################
 // Libraries
+// ##############################################
 const math_lib = @import_module("<math>");
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 const mpi_x = @import_module("<collectives_2d/pe>", .{
@@ -57,7 +63,6 @@ const mpi_y = @import_module("<collectives_2d/pe>", .{
     .src1_dsr_ids = [1]u16{2}
     });
 const simprint = @import_module("<simprint>", .{ .enable = true });
-
 const broadcast_diagonal = @import_module("broadcast.csl", .{
     .color_1 = @get_color(19),
     .pe_id = pe_id_x,
@@ -66,7 +71,17 @@ const broadcast_diagonal = @import_module("broadcast.csl", .{
     .NEG_DIR = WEST,
     .start_index = 0, // should be 0, 3, 6
     .end_index = layer_kernel_cols - 1
-});
+  });
+
+// ##############################################
+// Helpers
+// ##############################################
+const dsd_struct = struct {
+  base_address: [*]f32,
+  stride: i8,
+  extent: u16,
+  offset: i16
+};
 
 // Layers_data has shape for each level, M0, M1, M2, ... 
 const layer_size_map_A = comptime layeridx_to_size_map("A");  
@@ -80,25 +95,18 @@ const layer_offset_map_x = comptime layeridx_to_offset_map("x");
 const layer_size_map_b = comptime layeridx_to_size_map("b");  
 const layer_offset_map_b = comptime layeridx_to_offset_map("b");
 
-// total sizes 
-const A_tiles_total_size: u16 = comptime get_total_size_of("A");
+// ##############################################
+// Pattern: size, data, dsd, struct, pointer
+// ##############################################
+// x, b, A, R will be partitioned using 2D Block decomposition.
+// Input
+const A_tiles_total_size: u16 = comptime get_total_size_of("A");  // total sizes = summation for each level.
 const R_tiles_total_size: u16 = comptime get_total_size_of("R");
 const P_tiles_total_size: u16 = comptime get_total_size_of("P");
 const x_tiles_total_size: u16 = comptime get_total_size_of("x");
 const b_tiles_total_size: u16 = comptime get_total_size_of("b");
 const x_coarse_total_size: u16 = comptime get_total_size_of("x_coarse");
 
-
-const dsd_struct = struct {
-  base_address: [*]f32,
-  stride: i8,
-  extent: u16,
-  offset: i16
-};
-
-///////////////////////////////////////////////
-// x, b, A, R will be partitioned using 2D Block decomposition.
-// Input
 var A_tile = @zeros([A_tiles_total_size]f32);
 var R_tile = @zeros([R_tiles_total_size]f32);
 var P_tile = @zeros([P_tiles_total_size]f32);  // transpose of R_tile
@@ -108,13 +116,13 @@ var x_coarse = @zeros([x_coarse_total_size]f32);  // P @ x_coarse( So x_coarse h
 var omega = @zeros([1]f32);
 var iterations = @constants([1]u32, 0); // default is 0 iteration.
 
-// DSDs
-var dsd_A_tile: mem1d_dsd;
-var dsd_A_diag: mem1d_dsd;
-var dsd_R_tile: mem1d_dsd;
-var dsd_P_tile: mem1d_dsd;
-var dsd_x_tile: mem1d_dsd;
-var dsd_b_tile: mem1d_dsd;
+// Don't keep DSDs null, initialize them.
+var dsd_A_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> A_tile[i] }); // 1 col of A_tile
+var dsd_A_diag = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> A_tile[i] });
+var dsd_R_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> R_tile[i] }); // 1 col of R_tile
+var dsd_P_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> P_tile[i] }); // 1 col of P_tile
+var dsd_x_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> x_tile[i]});
+var dsd_b_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> b_tile[i]});
 
 // Layouts for DSDs
 var A_tile_struct_i: dsd_struct;
@@ -134,11 +142,12 @@ var ptr_x_coarse : [*]f32 = &x_coarse;
 var ptr_omega: [*]f32 = &omega;
 var ptr_iter: [*]u32 = &iterations;
 
-///////////////////////////////////////////////
+
+/////////////////////////////////////////////////
 // Temporary variables
 // Refers to the fine level data as it's the largest.
 // Applying a DSD on such might not cause issue of overwriting into another data.
-///////////////////////////////////////////////
+/////////////////////////////////////////////////
 const Ax_max_size: u16 = comptime get_max_size_of("Ax");
 const Rx_max_size: u16 = comptime get_max_size_of("Rx");
 const Px_max_size: u16 = comptime get_max_size_of("Px");
@@ -162,15 +171,15 @@ var iter_count: u32 = 0;
 var dot = @zeros([1]f32);
 
 // DSDs
-var dsd_Ax : mem1d_dsd; 
-var dsd_Rx : mem1d_dsd; 
-var dsd_Px : mem1d_dsd; 
-var dsd_residual_tile : mem1d_dsd;
-var dsd_D_inv : mem1d_dsd; 
-var dsd_term_2 : mem1d_dsd;
-var dsd_px_sum_tile : mem1d_dsd;
-var dsd_w_dinv_a_x : mem1d_dsd;   
-var dsd_i_into_x : mem1d_dsd;    
+var dsd_Ax = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> Ax[i] }); 
+var dsd_Rx = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> Rx[i] }); 
+var dsd_Px = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> Px[i] }); 
+var dsd_residual_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> residual_tile[i] });
+var dsd_D_inv = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> D_inv[i] }); 
+var dsd_term_2 = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> term_2[i] });
+var dsd_px_sum_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> px_sum_tile[i] });
+var dsd_w_dinv_a_x = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> w_dinv_a_x[i] });
+var dsd_i_into_x = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> i_into_x[i] });
 
 // Layout for DSDs
 var Ax_struct_i: dsd_struct;
@@ -183,18 +192,21 @@ var px_sum_tile_struct_i: dsd_struct;
 var w_dinv_a_x_struct_i: dsd_struct;
 var i_into_x_struct_i: dsd_struct;
 
-///////////////////////////////////////////////
-// output
-///////////////////////////////////////////////
-// Pattern: data, dsd, struct, pointer
+// No pointers exposed to host for temporaries.
+
+/////////////////////////////////////////////////
+// Output
+/////////////////////////////////////////////////
 const b_next_max_size: u16 = comptime get_total_size_of("b_next");
 var b_next = @zeros([b_next_max_size]f32);  // rightmost Column
 var dsd_b_next : mem1d_dsd; // = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> b_next[i] });
 var b_next_struct_i: dsd_struct;
 var ptr_b_next : [*]f32 = &b_next;
-///////////////////////////////////////////////
 
-// global variables
+
+// ##############################################
+// Local variables on each PE.
+// ##############################################
 var M_i: u16; // Height of local matrix, or num rows per PE
 var N_i: u16; // Width of local matrix, or num cols per PE
 var M_local_i: u16; // Height of local matrix, or num rows per PE
@@ -211,18 +223,20 @@ var v_cycle_iteration: i32 = 0;
 var cur_state: u16 = 0;// State tracking variables
 var next_state: u16 = 0;
 var current_active_layer_index: u16 = 0;
-const M_local_infinite:u16 = 0x7fff;
 var buf = @zeros([1]f32);
 
-///////////////////////////////////////////////
 
+// ##############################################
+// Tasks
+// ##############################################
 task state_exit() void {
   simprint.fmt_with_coords("STATE_EXIT layer_index={d}", .{current_active_layer_index });
   if (pe_id_x == 1) {
     simprint.print_string("b_next_final\n");
-    for (b_next) |val, i| {
-      simprint.fmt_with_coords("b_next_final[{d}] = {f}", .{ i, val });
-    }
+    @map(print_b_next_final, dsd_b_next);
+    // for (b_next) |val, i| {
+    //   simprint.fmt_with_coords("b_next_final[{d}] = {f}", .{ i, val });
+    // }
     simprint.print_string("\n");
   }
   // if (pe_id_x == 1 and pe_id_y == 1) {
@@ -259,15 +273,18 @@ task f_state() void {
 }
 
 fn get_runtime_dsd_i(dsd_struct_i: dsd_struct) mem1d_dsd {
-  return @get_dsd(mem1d_dsd, .{ .base_address = dsd_struct_i.base_address,
+  var temp_dsd = @get_dsd(mem1d_dsd, .{ .base_address = dsd_struct_i.base_address,
                                 .stride = dsd_struct_i.stride, 
                                 .extent = dsd_struct_i.extent, 
-                                .offset = dsd_struct_i.offset });
+                                .offset = 1 });
+  // We can't use .offset inside the @get_dsd because it's needs either to be multiplied by the word size or be an integer.
+  // example: .offset = dsd_struct_i.offset*@as(i16, word_size_of(f32)) should work, otherwise let @increment_dsd_offset do the job.
+  temp_dsd = @increment_dsd_offset(temp_dsd, dsd_struct_i.offset, f32);
+  return temp_dsd;
 }
 
 // Generate dsds at runtime and set some global structs, variables.
 fn init_dsds_for_layer(layer_index: u16) void {
-
   // Get shapes of the data.
   // [.M, .N, .M_local, .N_local, .R_M_local, .R_N_local, .layer_index]
   M_i = runtime_data[layer_index, 0];
@@ -323,23 +340,25 @@ fn init_dsds_for_layer(layer_index: u16) void {
   b_next_struct_i = dsd_struct { .base_address = &b_next, .stride = 1, .extent = R_M_local_i, .offset = 0 };
   dsd_b_next = get_runtime_dsd_i(b_next_struct_i);
 
-  if (pe_id_x == 0 and pe_id_y == 0) {
-    simprint.fmt_with_coords("layer_index={d}\n", .{layer_index_i});
-    simprint.print_string("A_tile\n");
-    @map(print_dsd_layer, dsd_A_tile);
-    simprint.print_string("A_diag\n");
-    @map(print_dsd_layer, dsd_A_diag);
-    simprint.print_string("R_tile\n");
-    @map(print_dsd_layer, dsd_R_tile);
-    simprint.print_string("P_tile\n");
-    @map(print_dsd_layer, dsd_P_tile);
-    simprint.print_string("x_tile\n");
-    @map(print_dsd_layer, dsd_x_tile);
-    simprint.print_string("b_tile\n");
-    @map(print_dsd_layer, dsd_b_tile);
-    simprint.print_string("b_next\n");
-    @map(print_dsd_layer, dsd_b_next);
-  }
+  // if (pe_id_x == 0 and pe_id_y == 0) {
+  //   simprint.fmt_with_coords("layer_index={d}\n", .{layer_index_i});
+  //   // print all sizes.
+  //   simprint.fmt_with_coords("M_i={d}, N_i={d}, M_local_i={d}, N_local_i={d}, R_M_local_i={d}, R_N_local_i={d}, layer_index_i={d}\n", .{M_i, N_i, M_local_i, N_local_i, R_M_local_i, R_N_local_i, layer_index_i});
+  //   simprint.print_string("A_tile\n");
+  //   @map(print_dsd_layer, dsd_A_tile);
+  //   simprint.print_string("A_diag\n");
+  //   @map(print_dsd_layer, dsd_A_diag);
+  //   simprint.print_string("R_tile\n");
+  //   @map(print_dsd_layer, dsd_R_tile);
+  //   simprint.print_string("P_tile\n");
+  //   @map(print_dsd_layer, dsd_P_tile);
+  //   simprint.print_string("x_tile\n");
+  //   @map(print_dsd_layer, dsd_x_tile);
+  //   simprint.print_string("b_tile\n");
+  //   @map(print_dsd_layer, dsd_b_tile);
+  //   simprint.print_string("b_next\n");
+  //   @map(print_dsd_layer, dsd_b_next);
+  // }
 
 }
 fn print_restriction_dsd(value: f32) void {
@@ -352,6 +371,10 @@ fn print_dsd(value: f32) void {
 
 fn print_dsd_layer(value: f32) void {
   simprint.fmt_with_coords("DSD_layer[] = {f}", .{value});
+}
+
+fn print_b_next_final(value: f32) void {
+  simprint.fmt_with_coords("b_next_final[] = {f}", .{value});
 }
 
 // // Entrypoint into kernel
@@ -855,159 +878,3 @@ fn get_offset(layer_offset_map: *const [total_levels_count] u16, index: u16) u16
   @assert(index < total_levels_count);
   return (layer_offset_map.*)[index];
 }
-
-
-// 
-  // // Reset completely else the next iteration starts from the first layers dsd equations and produces wrong results.
-  // dsd_A_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> A_tile[i] }); // 1 col of A_tile
-  // dsd_A_diag = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> A_tile[i] });
-  // dsd_R_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> R_tile[i] }); // 1 col of R_tile
-  // dsd_P_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> P_tile[i] }); // 1 col of P_tile
-  // dsd_x_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> x_tile[i]});
-  // dsd_b_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> b_tile[i]});
-
-
-  // // set base
-  // dsd_A_tile = @set_dsd_base_addr(dsd_A_tile, &A_tile);
-  // dsd_A_diag = @set_dsd_base_addr(dsd_A_diag, &A_tile);
-  // dsd_R_tile = @set_dsd_base_addr(dsd_R_tile, &R_tile);
-  // dsd_P_tile = @set_dsd_base_addr(dsd_P_tile, &P_tile);
-  // dsd_x_tile = @set_dsd_base_addr(dsd_x_tile, &x_tile);
-  // dsd_b_tile = @set_dsd_base_addr(dsd_b_tile, &b_tile);
-
-  // increment to the current levels offset.
-  // const offset_A = @as(i16, get_offset(&layer_offset_map_A, layer_index));
-  // const offset_A_diag = @as(i16, get_offset(&layer_offset_map_A, layer_index));
-  // const offset_R = @as(i16, get_offset(&layer_offset_map_R, layer_index));
-  // const offset_P = @as(i16, get_offset(&layer_offset_map_P, layer_index));
-  // const offset_x = @as(i16, get_offset(&layer_offset_map_x, layer_index));
-  // const offset_b = @as(i16, get_offset(&layer_offset_map_b, layer_index));
-
-
-  // // dsd_A_tile = @increment_dsd_offset(dsd_A_tile, offset_A, f32);
-  // dsd_A_diag = @increment_dsd_offset(dsd_A_diag, offset_A_diag, f32);
-  // dsd_R_tile = @increment_dsd_offset(dsd_R_tile, offset_R, f32);
-  // dsd_P_tile = @increment_dsd_offset(dsd_P_tile, offset_P, f32);
-  // dsd_x_tile = @increment_dsd_offset(dsd_x_tile, offset_x, f32);
-  // dsd_b_tile = @increment_dsd_offset(dsd_b_tile, offset_b, f32);
-
-
-  // dsd_A_tile = @set_dsd_length(dsd_A_tile, (M_local_i));
-  // dsd_A_tile = @set_dsd_stride(dsd_A_tile, @as(i8, N_local_i)); // |i|{M_local} -> A_tiles[i*N_local]
-
-  // // dsd_A_diag
-  // // Trickier - diagonal can be a stride of N_local + 1
-  // dsd_A_diag = @set_dsd_length(dsd_A_diag, (M_local_i));
-  // dsd_A_diag = @set_dsd_stride(dsd_A_diag, @as(i8, N_local_i + 1)); // |i|{M_local} -> A_tiles[i*N_local + i]
-
-  // // dsd_R_tile
-  // dsd_R_tile = @set_dsd_length(dsd_R_tile, (R_M_local_i));
-  // dsd_R_tile = @set_dsd_stride(dsd_R_tile, @as(i8, R_N_local_i)); // |i|{R_M_local} -> R_tiles[i*R_N_local]
-
-  // // dsd_P_tile
-  // dsd_P_tile = @set_dsd_length(dsd_P_tile, (R_N_local_i));
-  // dsd_P_tile = @set_dsd_stride(dsd_P_tile, @as(i8, R_M_local_i)); // |i|{R_N_local} -> P_tiles[i*R_M_local]
-
-  // // dsd_x_tile
-  // dsd_x_tile = @set_dsd_length(dsd_x_tile, (N_local_i));
-  // dsd_x_tile = @set_dsd_stride(dsd_x_tile, @as(i8, 1)); // |i|{N_local} -> x_tiles[i]
-
-  // // dsd_b_tile
-  // dsd_b_tile = @set_dsd_length(dsd_b_tile, (M_local_i));
-  // dsd_b_tile = @set_dsd_stride(dsd_b_tile, @as(i8, 1)); // |i|{M_local} -> b_tiles[i]
-
-
-  // dsd_Ax = @set_dsd_base_addr(dsd_Ax, &Ax);
-  // dsd_Rx = @set_dsd_base_addr(dsd_Rx, &Rx);
-  // dsd_Px = @set_dsd_base_addr(dsd_Px, &Px);
-  // dsd_residual_tile = @set_dsd_base_addr(dsd_residual_tile, &residual_tile);
-  // dsd_D_inv = @set_dsd_base_addr(dsd_D_inv, &D_inv);
-  // dsd_term_2 = @set_dsd_base_addr(dsd_term_2, &term_2);
-  // dsd_px_sum_tile = @set_dsd_base_addr(dsd_px_sum_tile, &px_sum_tile);
-  // dsd_w_dinv_a_x = @set_dsd_base_addr(dsd_w_dinv_a_x, &w_dinv_a_x);
-  // dsd_i_into_x = @set_dsd_base_addr(dsd_i_into_x, &i_into_x);
-
-  // dsd_Ax = @set_dsd_length(dsd_Ax, (M_local_i));
-  // dsd_Rx = @set_dsd_length(dsd_Rx, (R_M_local_i));
-  // dsd_Px = @set_dsd_length(dsd_Px, (R_N_local_i));
-  // dsd_residual_tile = @set_dsd_length(dsd_residual_tile, (M_local_i));
-  // dsd_D_inv = @set_dsd_length(dsd_D_inv, (M_local_i));
-  // dsd_term_2 = @set_dsd_length(dsd_term_2, (M_local_i));
-  // dsd_px_sum_tile = @set_dsd_length(dsd_px_sum_tile, (N_local_i));
-  // dsd_w_dinv_a_x = @set_dsd_length(dsd_w_dinv_a_x, (M_local_i));
-  // dsd_i_into_x = @set_dsd_length(dsd_i_into_x, (M_local_i));
-
-  // output
-  // var b_next = @zeros([R_M_local]f32);  // rightmost Column
-  // var dsd_b_next = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> b_next[i] });
-
-  // dsd_b_next = @set_dsd_base_addr(dsd_b_next, &b_next);
-  // dsd_b_next = @set_dsd_length(dsd_b_next, (R_M_local_i));
-
-  // if (pe_id_x == 0 and pe_id_y == 0) {
-  //   // full data.
-
-  //   simprint.print_string("A_tile flattened full");
-  //   for (A_tile) |val, i| {
-  //     simprint.print_f32(val);
-  //   }
-  //   simprint.print_string("\n");
-  //   // print R_tile
-  //   simprint.print_string("\nR_tile flattened full");
-  //   for (R_tile) |val, i| {
-  //     simprint.print_f32(val);
-  //   }
-  //   // print P_tile
-  //   simprint.print_string("\nP_tile flattened full");
-  //   for (P_tile) |val, i| {
-  //     simprint.print_f32(val);
-  //   }
-  //   // print x_tile
-  //   simprint.print_string("\nx_tile flattened full");
-  //   for (x_tile) |val, i| {
-  //     simprint.print_f32(val);
-  //   }
-  //   // print b_tile
-  //   simprint.print_string("\nb_tile flattened full");
-  //   for (b_tile) |val, i| {
-  //     simprint.print_f32(val);
-  //   }
-
-  //   // size offset maps.
-
-  //   simprint.print_string("\nlayer_size_map_A\n");
-  //   for (layer_size_map_A) |val, i| {
-  //     simprint.print_u16_decimal(val);
-  //   }
-  //   simprint.print_string("\nlayer_offset_map_A\n");
-  //   for (layer_offset_map_A) |val, i| {
-  //     simprint.print_u16_decimal(val);
-  //   }
-  //   simprint.print_string("\nlayer_size_map_R\n");
-  //   for (layer_size_map_R) |val, i| {
-  //     simprint.print_u16_decimal(val);
-  //   }
-  //   simprint.print_string("\nlayer_offset_map_R\n");
-  //   for (layer_offset_map_R) |val, i| {
-  //     simprint.print_u16_decimal(val);
-  //   }
-  //   simprint.print_string("\nlayer_offset_map_P\n");
-  //   for (layer_offset_map_P) |val, i| {
-  //     simprint.print_u16_decimal(val);
-  //   }
-  //   simprint.print_string("\nlayer_size_map_x\n");
-  //   for (layer_size_map_x) |val, i| {
-  //     simprint.print_u16_decimal(val);
-  //   }
-  //   simprint.print_string("\nlayer_offset_map_x\n");
-  //   for (layer_offset_map_x) |val, i| {
-  //     simprint.print_u16_decimal(val);
-  //   }
-  //   simprint.print_string("\nlayer_size_map_b\n");
-  //   for (layer_size_map_b) |val, i| {
-  //     simprint.print_u16_decimal(val);
-  //   }
-  //   simprint.print_string("\nlayer_offset_map_b\n");
-  //   for (layer_offset_map_b) |val, i| {
-  //     simprint.print_u16_decimal(val);
-  //   }
