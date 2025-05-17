@@ -154,10 +154,10 @@ def find_total_pes_used(layer_coordinates_map):
 def run_command(command):
     try:
         result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        print("Command output:", result.stdout)
-        print("Layout compiled successfully.")
+        print("\tCommand output:", result.stdout)
+        print("\tLayout compiled successfully.")
     except subprocess.CalledProcessError as e:
-        print("Error occurred:", e.stderr)
+        print("\tError occurred:", e.stderr)
 
 def autogenerate_amg_layout(layer_param_map, total_pe_rows, total_pe_cols, total_levels, filename):
     # First prepare data 
@@ -311,22 +311,21 @@ def generate_dynamic_layout(run_args, ml, layer_coordinates_map:Optional[dict]=N
   # This is problem specific.
   layer_param_map, layer_coordinates_map = create_layer_param_map(ml, layer_coordinates_map)
   total_pe_cols, total_pe_rows = find_total_pes_used(layer_coordinates_map)
-  
+  print("############################################################")
+  find_max_memory_usage(layer_param_map, layer_coordinates_map)
+  print("############################################################")
+    
   generated_layout_file = "./src/auto_layout_amg.csl"
-  
   print("Precompile disabled, compiling based on problem size.")
   layout_command, fabric_dimensions = generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_cols, tot_level_minus_one, generated_layout_file, run_args)
   # ut.visualize_layout_with_empty_plotly(fabric_dimensions, layer_coordinates_map, layer_param_map, total_pe_cols, total_pe_rows, filename)
   print("############################################################")
   print("Generating blueprint layout with :\n")
-  print("\n1. Autogenerating layout file...")
+  print("\nStep 1: Autogenerating layout file...")
   autogenerate_amg_layout(layer_param_map, total_pe_rows, total_pe_cols, tot_level_minus_one, generated_layout_file)
-  print("\n2. Compiling layout file...")
-  print(layout_command)
+  print("\nStep 2: Compiling layout file...")
+  print("\t" + layout_command)
   run_command(layout_command)
-  print("############################################################")
-  find_max_memory_usage(layer_param_map, layer_coordinates_map)
-  print("############################################################")
   if (run_args.compile_only):
     print("Compilation complete, check the layout. exiting.")
     exit(0)
@@ -449,14 +448,14 @@ def host_calculations(v_cycle_data):
         # x_coarsest[:] = solver_callable_host(A_coarsest, b_coarsest)
         
         # # V up
-        for i in reversed(range(len(ml.levels) - 1)):
-            # Set context BEFORE the operation
-            hostprofiling.add_other_info(iteration, i, "up")
+        # for i in reversed(range(len(ml.levels) - 1)):
+        #     # Set context BEFORE the operation
+        #     hostprofiling.add_other_info(iteration, i, "up")
             
-            level = ml.levels[i]
-            x_lower_level = x_level[i+1]
-            x_current_updated, operator_timing = amg.each_layer_solver_up(level, x_level, b_level, ml, setup_config, i, x_lower_level, hostprofiling)
-            x_level[i] = x_current_updated
+            # level = ml.levels[i]
+            # x_lower_level = x_level[i+1]
+            # x_current_updated, operator_timing = amg.each_layer_solver_up(level, x_level, b_level, ml, setup_config, i, x_lower_level, hostprofiling)
+            # x_level[i] = x_current_updated
 
         # Check convergence
         # residual = b_level[0] - ml.levels[0].A @ x_level[0] # after Up cycle
@@ -470,7 +469,7 @@ def host_calculations(v_cycle_data):
         
     print("After final solver:")
     amg.debugprint(ml.levels, b_level, x_level)
-    hostprofiling.print_timing_summary()
+    # hostprofiling.print_timing_summary()
     # Checks
     b_solution, x_solution, A_solution = b_level[len(ml.levels)-1], x_level[len(ml.levels)-1], ml.levels[len(ml.levels)-1].A  # last one
     residual_host = b_solution - A_solution @ x_solution
@@ -610,9 +609,9 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
     
     Each PE receives its concatenated chunk containing data from all layers.
     """
-    print("\n" + "-"*40)
-    print("│ COPYING ALL LAYERS TO DEVICE")
-    print("-"*40)
+    print("\n" + "\t" + "-"*40)
+    print("\t" + "│ COPYING ALL LAYERS TO DEVICE")
+    print("\t" + "-"*40)
 
     # Get coordinates from first layer as reference
     coords = layer_coordinates_map[0]
@@ -639,9 +638,9 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
         per_pe_restrict_rows = R_M // h
         per_pe_restrict_cols = R_N // w
         
-        print(f"\nLayer {level_index} sizes (after padding):")
-        print(f"  A: {A.shape} | R: {R.shape}")
-        print(f"  x: {x.shape}")
+        print(f"\n\tLayer {level_index} sizes (after padding):")
+        print(f"\t  A: {A.shape} | R: {R.shape}")
+        print(f"\t  x: {x.shape}")
         
         # Transform A matrix using stack/split and store PE-wise
         A_transformed = np.stack(np.split(np.stack(np.split(A, h, axis=1)), w, axis=1))
@@ -698,13 +697,12 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
     omega[:] = amg.get_omega_from_presmoother(setup_config)
     iterations[:] = amg.get_iterations_from_presmoother(setup_config)
 
-    print("\nFinal blob sizes:")
-    print(f"A blob: {A_blob.shape}")
-    print(f"R blob: {R_blob.shape}")
-    print(f"x blob: {x_blob.shape}")
+    print("\n\tFinal blob sizes:")
+    print(f"\tA blob: {A_blob.shape}")
+    print(f"\tR blob: {R_blob.shape}")
+    print(f"\tx blob: {x_blob.shape}")
 
     # Copy concatenated data to device
-    print("\nStep 2: H2D Transfers of concatenated data")
     start_time = time.time()
     simple_memcpy.do_memcpy_h2d(symbols['A'], A_blob, px, py, w, h, A_blob.size//(w*h))
     simple_memcpy.do_memcpy_h2d(symbols['R'], R_blob, px, py, w, h, R_blob.size//(w*h))
@@ -716,10 +714,10 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
     simple_memcpy.do_memcpy_h2d(symbols['omega'], omega, px, py, w, h, 1)
     simple_memcpy.do_memcpy_h2d(symbols['iterations'], iterations, px, py, w, h, 1)
     h2d_time = time.time() - start_time
-    print(f"H2D transfer time: {h2d_time:.4f}s")
+    print(f"\tH2D transfer time: {h2d_time:.4f}s")
 
-def copy_all_layers_b_from_device(simple_memcpy, symbols, ml, total_pe_rows, total_pe_cols, b_level):
-    """Copy b_coarse data from device and reconstruct layer-wise data
+def copy_all_layers_from_device(simple_memcpy, symbols, ml, total_pe_rows, total_pe_cols, level_data, symbol_name, is_b_level=False):
+    """Copy data from device and reconstruct layer-wise data
     
     Args:
         simple_memcpy: Memcpy handler
@@ -727,51 +725,83 @@ def copy_all_layers_b_from_device(simple_memcpy, symbols, ml, total_pe_rows, tot
         ml: Multilevel hierarchy
         total_pe_rows: Total number of PE rows
         total_pe_cols: Total number of PE columns
-        b_level: List to store b values for each level
+        level_data: List to store data for each level (e.g., b_level or x_level)
+        symbol_name: Name of the symbol to copy from device (e.g., 'b_next' or 'x')
+        is_b_level: Whether this is b_level data (affects how we calculate sizes and where to read from)
         
     Returns:
-        b_level: Updated list with reconstructed b values for each level
+        level_data: Updated list with reconstructed data for each level
     """
-    # Calculate total size of b_coarse_blob by summing R_M from each layer
-    total_b_coarse_size = 0
-    layer_sizes = []  # Store R_M for each layer
+    # Calculate total size by summing appropriate dimensions from each layer
+    total_size = 0
+    layer_sizes = []  # Store sizes for each layer
     for level in ml.levels[:-1]:  # Exclude coarsest level
-        R_M = level.R.shape[0]
-        layer_sizes.append(R_M)
-        total_b_coarse_size += R_M
+        if is_b_level:
+            # For b_level, use R_M
+            size = level.R.shape[0]
+        else:
+            # For x_level, use N
+            size = level.A.shape[1]
+        layer_sizes.append(size)
+        total_size += size
     
-    # Create buffer for entire b_coarse blob
-    b_coarse_blob = np.zeros(total_b_coarse_size, dtype=np.float32)
+    # Create buffer for entire blob
+    data_blob = np.zeros(total_size, dtype=np.float32)
     
     # Copy entire blob from device
-    simple_memcpy.do_memcpy_d2h(b_coarse_blob, symbols['b_next'], total_pe_cols-1, 0, 1, total_pe_rows, total_b_coarse_size//total_pe_rows)
+    if is_b_level:
+        # For b_level, read from last column
+        simple_memcpy.do_memcpy_d2h(data_blob, symbols[symbol_name], total_pe_cols-1, 0, 1, total_pe_rows, total_size//total_pe_rows)
+    else:
+        # For x_level, read from first row
+        simple_memcpy.do_memcpy_d2h(data_blob, symbols[symbol_name], 0, 0, total_pe_cols, 1, total_size//total_pe_cols)
     
     # First divide blob into PE chunks
-    pe_chunk_size = total_b_coarse_size // total_pe_rows
-    pe_chunks = []
-    for i in range(total_pe_rows):
-        start_idx = i * pe_chunk_size
-        end_idx = start_idx + pe_chunk_size
-        pe_chunks.append(b_coarse_blob[start_idx:end_idx])
+    if is_b_level:
+        # For b_level, divide by rows
+        pe_chunk_size = total_size // total_pe_rows
+        pe_chunks = []
+        for i in range(total_pe_rows):
+            start_idx = i * pe_chunk_size
+            end_idx = start_idx + pe_chunk_size
+            pe_chunks.append(data_blob[start_idx:end_idx])
+    else:
+        # For x_level, divide by columns
+        pe_chunk_size = total_size // total_pe_cols
+        pe_chunks = []
+        for i in range(total_pe_cols):
+            start_idx = i * pe_chunk_size
+            end_idx = start_idx + pe_chunk_size
+            pe_chunks.append(data_blob[start_idx:end_idx])
     
     # Track read offset within each PE chunk
-    pe_offsets = [0] * total_pe_rows
+    if is_b_level:
+        pe_offsets = [0] * total_pe_rows
+    else:
+        pe_offsets = [0] * total_pe_cols
     
-    # Reconstruct layer-wise data and copy into b_level[1:]
-    for layer_idx, R_M in enumerate(layer_sizes):
+    # Reconstruct layer-wise data and copy into level_data
+    start_idx = 1 if is_b_level else 0
+    for layer_idx, size in enumerate(layer_sizes):
         layer_data = []
-        R_M_per_pe = R_M // total_pe_rows
+        if is_b_level:
+            size_per_pe = size // total_pe_rows
+            num_pes = total_pe_rows
+        else:
+            size_per_pe = size // total_pe_cols
+            num_pes = total_pe_cols
+            
         for i, pe_chunk in enumerate(pe_chunks):
             start = pe_offsets[i]
-            end = start + R_M_per_pe
+            end = start + size_per_pe
             layer_data.extend(pe_chunk[start:end])
-            pe_offsets[i] += R_M_per_pe  # Move offset
-        # Copy reconstructed data into b_level[layer_idx + 1] since b_level[0] is b0
-        b_level[layer_idx + 1] = np.array(layer_data)
-        print(f"\nLayer {layer_idx} reconstructed data (size {len(layer_data)}):")
-        print(layer_data)
+            pe_offsets[i] += size_per_pe  # Move offset
+        # Copy reconstructed data into level_data
+        level_data[layer_idx + start_idx] = np.array(layer_data)
+        # print(f"\nLayer {layer_idx} reconstructed data for {symbol_name} (size {len(layer_data)}):")
+        # print(layer_data)
         
-    return b_level
+    return level_data
 
 def device_calculations_distributed(v_cycle_data):
     run_args, logs_dir = parse_args()
@@ -808,7 +838,7 @@ def device_calculations_distributed(v_cycle_data):
     start = time.time()
     simulator.load()
     end = time.time()
-    print(f"*** Layout Load done in {end-start}s")
+    print(f"\t*** Layout Load done in {end-start}s")
 
     simulator.run()
      
@@ -840,16 +870,18 @@ def device_calculations_distributed(v_cycle_data):
     # Initialize device profiler
     deviceprofiling = time_ut.DeviceProfiling()
     # hardwareTimer = HardwareTimerManager(simulator) # enable_timer, sync
+    print("Step 3: Copy all layers' data on device")
     copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer=None)
     
-    print("Step 4: Compute")    
-    # simulator.launch("print_data", nonblock=False)
+    print("Step 4: Compute V-Cycle Down")    
     simulator.launch("v_cycle_down", nonblock=False)        
     
     # # D2H transfers
-    print("Step 6: D2H Transfers")
-    b_level = copy_all_layers_b_from_device(simple_memcpy, symbols, ml, total_pe_rows, total_pe_cols, b_level)
+    print("Step 5: D2H Transfers x_smoothed and b_next")
+    b_level = copy_all_layers_from_device(simple_memcpy, symbols, ml, total_pe_rows, total_pe_cols, b_level, 'b_next', is_b_level=True)
+    x_level = copy_all_layers_from_device(simple_memcpy, symbols, ml, total_pe_rows, total_pe_cols, x_level, 'x', is_b_level=False)
     
+    print("Step 6: Print V-Cycle Down Results")
     amg.debugprint(ml.levels, b_level, x_level)
     ############################################################
     # Cleanup simulator
@@ -970,11 +1002,13 @@ def main():
   print("############################################################")
   print("# COMPARISON")
   print("############################################################")
-  assert np.allclose(residual_host, residual_device, atol=1e-6), "Residual do not match!"
+  
   # x_final_device = unpad_1d(x_final_device, x_final_host.shape[0])
   # b_final_device = unpad_1d(b_final_device, b_final_host.shape[0])  # HACK remove later.
+  assert np.allclose(residual_host, residual_device, atol=1e-6), "Residual do not match!"
+  assert np.allclose(x_final_host, x_final_device, atol=1e-6), "x_final of host and device do not match!"
   assert np.allclose(b_final_host, b_final_device, atol=1e-6), "b_final of host and device do not match!"
-  print("Results Match!")
+  print("Results Match!(Residual, x_final, b_final)")
 
 
 if __name__ == "__main__":
