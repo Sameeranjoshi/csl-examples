@@ -311,9 +311,9 @@ def generate_dynamic_layout(run_args, ml, layer_coordinates_map:Optional[dict]=N
   # This is problem specific.
   layer_param_map, layer_coordinates_map = create_layer_param_map(ml, layer_coordinates_map)
   total_pe_cols, total_pe_rows = find_total_pes_used(layer_coordinates_map)
-  print("############################################################")
-  find_max_memory_usage(layer_param_map, layer_coordinates_map)
-  print("############################################################")
+  # print("############################################################")
+  # find_max_memory_usage(layer_param_map, layer_coordinates_map)
+  # print("############################################################")
     
   generated_layout_file = "./src/auto_layout_amg.csl"
   print("Precompile disabled, compiling based on problem size.")
