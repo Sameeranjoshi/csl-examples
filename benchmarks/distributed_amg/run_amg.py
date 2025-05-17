@@ -432,7 +432,6 @@ def host_calculations(v_cycle_data):
     # Iteration parameters
     
     for iteration in range(max_iterations):
-        amg.debugprint(ml.levels, b_level, x_level)
         # V down
         for i, level in enumerate(ml.levels[:-1]):
             # Set context BEFORE the operation
@@ -442,14 +441,12 @@ def host_calculations(v_cycle_data):
             b_coarse_layer, x_coarse_layer, operator_timing = amg.each_layer_solver_down(level, x_level, b_level, ml, setup_config, i, hostprofiling)
             b_level[i + 1] = b_coarse_layer
             x_level[i + 1] = x_coarse_layer
-            # print("DOWN PHASE\n")
-            # amg.debugprint(ml.levels, b_level, x_level)
         
-        # V coarse
-        b_coarsest = b_level[-1]
-        x_coarsest = x_level[-1]
-        A_coarsest = ml.levels[-1].A
-        x_coarsest[:] = solver_callable_host(A_coarsest, b_coarsest)
+        # # V coarse
+        # b_coarsest = b_level[-1]
+        # x_coarsest = x_level[-1]
+        # A_coarsest = ml.levels[-1].A
+        # x_coarsest[:] = solver_callable_host(A_coarsest, b_coarsest)
         
         # # V up
         for i in reversed(range(len(ml.levels) - 1)):
@@ -460,24 +457,25 @@ def host_calculations(v_cycle_data):
             x_lower_level = x_level[i+1]
             x_current_updated, operator_timing = amg.each_layer_solver_up(level, x_level, b_level, ml, setup_config, i, x_lower_level, hostprofiling)
             x_level[i] = x_current_updated
-            # print("UP PHASE\n")
-            # amg.debugprint(ml.levels, b_level, x_level)
 
         # Check convergence
-        residual = b_level[0] - ml.levels[0].A @ x_level[0]
+        # residual = b_level[0] - ml.levels[0].A @ x_level[0] # after Up cycle
+        residual = b_level[len(ml.levels)-1] - ml.levels[len(ml.levels)-1].A @ x_level[len(ml.levels)-1] # after down.
         residual_norm = np.linalg.norm(residual)
         print(f"Residual: {residual_norm:.6e}, tol: {tol:.6e}, iteration: {iteration}")
         if residual_norm <= tol:
             print(f"Converged at iteration {iteration} with residual norm {residual_norm}")
             break
-
+        
+        
     print("After final solver:")
     amg.debugprint(ml.levels, b_level, x_level)
     hostprofiling.print_timing_summary()
     # Checks
-    b_solution, x_solution = b_level[-1], x_level[-1]
-    residual_host= np.linalg.norm(ml.levels[-1].A @ x_solution - b_solution)  
-    return b_solution, x_solution, residual_host
+    b_solution, x_solution, A_solution = b_level[len(ml.levels)-1], x_level[len(ml.levels)-1], ml.levels[len(ml.levels)-1].A  # last one
+    residual_host = b_solution - A_solution @ x_solution
+    residual_host_norm = np.linalg.norm(residual_host)
+    return b_solution, x_solution, residual_host_norm
 
 class HardwareTimerManager:
   # keep logs of time_memcpy_hwl, time_ref_hwl, h2d_time, d2h_time inside this class.
@@ -635,11 +633,6 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
         R_M, R_N = R.shape
         x = x_level[level_index]
         
-        # print(f"level_index: {level_index}")
-        # print(f"A: {A}")
-        # print(f"R: {R}")
-        # print(f"x: {x}")
-        
         # Calculate per-PE dimensions (must be equal for all PEs)
         per_pe_rows = M // h
         per_pe_cols = N // w
@@ -666,11 +659,6 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
         if level_index == 0:
             b = b_level[0]
             b_transformed = b.flatten(order='C')
-            
-        # print(f"Per PE Data Sizes:")
-        # print(f"  A: {per_pe_rows}x{per_pe_cols}")
-        # print(f"  R: {per_pe_restrict_rows}x{per_pe_restrict_cols}")
-        # print(f"  x: {per_pe_rows}x{1}")
 
     # Concatenate PE-wise chunks and prepare final blobs
     A_final_blob = []
@@ -688,16 +676,16 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
             R_final_blob.append(R_pe_data)
             x_final_blob.append(x_pe_data)
 
-            if (i,j) == (0,0):
-                print(f"PE({i},{j}) concatenated sizes:")
-                print(f"  A: {A_pe_data.shape}")
-                print(f"  R: {R_pe_data.shape}")
-                print(f"  x: {x_pe_data.shape}")
+            # if (i,j) == (0,0):
+            #     print(f"PE({i},{j}) concatenated sizes:")
+            #     print(f"  A: {A_pe_data.shape}")
+            #     print(f"  R: {R_pe_data.shape}")
+            #     print(f"  x: {x_pe_data.shape}")
                               
-                print("PE(0,0) data:")
-                print(f"A_pe_data: {A_pe_data}")
-                print(f"R_pe_data: {R_pe_data}")
-                print(f"x_pe_data: {x_pe_data}")
+            #     # print("PE(0,0) data:")
+            #     # print(f"A_pe_data: {A_pe_data}")
+            #     # print(f"R_pe_data: {R_pe_data}")
+            #     # print(f"x_pe_data: {x_pe_data}")
 
     # Flatten the final blobs
     A_blob = np.concatenate(A_final_blob)
@@ -729,6 +717,61 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
     simple_memcpy.do_memcpy_h2d(symbols['iterations'], iterations, px, py, w, h, 1)
     h2d_time = time.time() - start_time
     print(f"H2D transfer time: {h2d_time:.4f}s")
+
+def copy_all_layers_b_from_device(simple_memcpy, symbols, ml, total_pe_rows, total_pe_cols, b_level):
+    """Copy b_coarse data from device and reconstruct layer-wise data
+    
+    Args:
+        simple_memcpy: Memcpy handler
+        symbols: Dictionary of device symbols
+        ml: Multilevel hierarchy
+        total_pe_rows: Total number of PE rows
+        total_pe_cols: Total number of PE columns
+        b_level: List to store b values for each level
+        
+    Returns:
+        b_level: Updated list with reconstructed b values for each level
+    """
+    # Calculate total size of b_coarse_blob by summing R_M from each layer
+    total_b_coarse_size = 0
+    layer_sizes = []  # Store R_M for each layer
+    for level in ml.levels[:-1]:  # Exclude coarsest level
+        R_M = level.R.shape[0]
+        layer_sizes.append(R_M)
+        total_b_coarse_size += R_M
+    
+    # Create buffer for entire b_coarse blob
+    b_coarse_blob = np.zeros(total_b_coarse_size, dtype=np.float32)
+    
+    # Copy entire blob from device
+    simple_memcpy.do_memcpy_d2h(b_coarse_blob, symbols['b_next'], total_pe_cols-1, 0, 1, total_pe_rows, total_b_coarse_size//total_pe_rows)
+    
+    # First divide blob into PE chunks
+    pe_chunk_size = total_b_coarse_size // total_pe_rows
+    pe_chunks = []
+    for i in range(total_pe_rows):
+        start_idx = i * pe_chunk_size
+        end_idx = start_idx + pe_chunk_size
+        pe_chunks.append(b_coarse_blob[start_idx:end_idx])
+    
+    # Track read offset within each PE chunk
+    pe_offsets = [0] * total_pe_rows
+    
+    # Reconstruct layer-wise data and copy into b_level[1:]
+    for layer_idx, R_M in enumerate(layer_sizes):
+        layer_data = []
+        R_M_per_pe = R_M // total_pe_rows
+        for i, pe_chunk in enumerate(pe_chunks):
+            start = pe_offsets[i]
+            end = start + R_M_per_pe
+            layer_data.extend(pe_chunk[start:end])
+            pe_offsets[i] += R_M_per_pe  # Move offset
+        # Copy reconstructed data into b_level[layer_idx + 1] since b_level[0] is b0
+        b_level[layer_idx + 1] = np.array(layer_data)
+        print(f"\nLayer {layer_idx} reconstructed data (size {len(layer_data)}):")
+        print(layer_data)
+        
+    return b_level
 
 def device_calculations_distributed(v_cycle_data):
     run_args, logs_dir = parse_args()
@@ -802,32 +845,24 @@ def device_calculations_distributed(v_cycle_data):
     print("Step 4: Compute")    
     # simulator.launch("print_data", nonblock=False)
     simulator.launch("v_cycle_down", nonblock=False)        
-    amg.debugprint(ml.levels, b_level, x_level)
     
     # # D2H transfers
     print("Step 6: D2H Transfers")
-    coarse_level = ml.levels[len(ml.levels)-1]
-    b_coarse_shape = coarse_level.A.shape[0]
-    b_coarse_device = np.zeros(total_pe_rows*b_coarse_shape, dtype=np.float32)
-    simple_memcpy.do_memcpy_d2h(b_coarse_device, symbols['b_next'], total_pe_cols-1, 0, 1, total_pe_rows, b_coarse_shape*1) # copy from symbol into result.
-    print(f"b_coarse_device: {b_coarse_device}")
+    b_level = copy_all_layers_b_from_device(simple_memcpy, symbols, ml, total_pe_rows, total_pe_cols, b_level)
     
-    # Coarse solve
-    # x_level[-1] = perform_coarse_solve(ml.levels[-1], x_level, b_level, solver_callable_host)
-    # Print timing summary before cleanup
-    # deviceprofiling.print_timing_summary()
+    amg.debugprint(ml.levels, b_level, x_level)
     ############################################################
     # Cleanup simulator
     ############################################################
-    simulator.stop()        
+    simulator.stop()
     ############################################################
     # Final results
     ############################################################
     # time_ut.analyze_timing_data("reports/timing_data.csv")
     # print("\nTiming analysis complete. Open timing_report.html to view the results.")
-    # b_solution_device, x_solution_device = b_level[0], x_level[0] // enentually
-    A_solution, b_solution_device, x_solution_device = ml.levels[len(ml.levels)-1].A, b_coarse_device, x_level[len(ml.levels)-1]
-    residual_device = np.linalg.norm(A_solution @ x_solution_device - b_solution_device)
+        
+    A_solution, b_solution_device, x_solution_device = ml.levels[len(ml.levels)-1].A, b_level[len(ml.levels)-1], x_level[len(ml.levels)-1]
+    residual_device = np.linalg.norm(b_solution_device - A_solution @ x_solution_device)
     return b_solution_device, x_solution_device, residual_device
   
 def pad_and_make_dense(layer_coordinates_map, v_cycle_data):
@@ -868,11 +903,6 @@ def main():
   max_iterations = 1
     
   A0, x0, b0 = generate_input2(M, N, type=np.float32)
-  # print("A0: ", A0.toarray())
-  # print("x0: ", x0)
-  # print("b0: ", b0)
-  # print(f"x0: {x0}")
-  # print(f"b0: {b0}")
   nrm_b = np.linalg.norm(b0, 2)
   relative_tol = eps * nrm_b # relative tolerance
   
@@ -929,22 +959,21 @@ def main():
   b_final_host, x_final_host, residual_host = host_calculations(v_cycle_data_host)
   print("HOST CALCULATIONS DONE")
   print(f"\tResidual Host ||AX-b||:", residual_host)
-  # print(f"\n x_solution_final Host:", x_final_host.ravel())
+  print(f"\t b_solution_final Host:", b_final_host)
   print("############################################################")
   print("# DEVICE CALCULATIONS")
   print("############################################################")
   b_final_device, x_final_device, residual_device = device_calculations_distributed(v_cycle_data_device) # changed to dataflow
   print("\nDEVICE CALCULATIONS DONE")
   print(f"\tResidual Device ||AX-b||:", residual_device)
-  # print(f"\t x_solution_final Device:", x_final_device.ravel()) 
+  print(f"\t b_solution_final Device:", b_final_device)
   print("############################################################")
   print("# COMPARISON")
   print("############################################################")
-  # assert np.allclose(residual_host, residual_device, atol=1e-6), "Residual do not match!"
-  x_final_device = unpad_1d(x_final_device, x_final_host.shape[0])
-  b_final_device = unpad_1d(b_final_device, b_final_host.shape[0])  # HACK remove later.
+  assert np.allclose(residual_host, residual_device, atol=1e-6), "Residual do not match!"
+  # x_final_device = unpad_1d(x_final_device, x_final_host.shape[0])
+  # b_final_device = unpad_1d(b_final_device, b_final_host.shape[0])  # HACK remove later.
   assert np.allclose(b_final_host, b_final_device, atol=1e-6), "b_final of host and device do not match!"
-  assert np.allclose(x_final_host, x_final_device, atol=1e-6), "x_final of host and device do not match!"
   print("Results Match!")
 
 

@@ -35,20 +35,20 @@ def each_layer_solver_down(level, x_level, b_level, ml, setup_config, level_id, 
                  omega=get_omega_from_presmoother(setup_config), 
                  iterations=get_iterations_from_presmoother(setup_config))
     timing.smoothing_time = time.time() - smooth_start
-    print("smooth X", x.flatten())
+    # print("smooth X", x.flatten())
     # Time residual calculation
     residual_start = time.time()
     r = b - A @ x   # residual
     # print("b", b.flatten())
     # print("A", A.toarray())
     # print("x", x.flatten())
-    print("r", r.flatten())
+    # print("r", r.flatten())
     timing.residual_time = time.time() - residual_start
     
     # Time restriction
     restrict_start = time.time()
     b_coarse = R @ r    # restrict
-    print("b_coarse", b_coarse.flatten())
+    # print("b_coarse", b_coarse.flatten())
     timing.restriction_time = time.time() - restrict_start
     
     x_coarse = np.zeros_like(b_coarse)
@@ -498,8 +498,8 @@ def smooth_aggregate_setup_only(A, x, b, solver, max_level=None, max_coarse=None
         'strength': ('symmetric', {'theta': 0.50}),  # increase for more layers
         'smooth': 'jacobi',
         # withrho is essential for answers to be correct
-        'presmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 1, 'withrho': False}),
-        'postsmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 1, 'withrho': False}),  
+        'presmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5, 'withrho': False}),
+        'postsmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5, 'withrho': False}),  
         'improve_candidates': (('gauss_seidel', {'sweep': 'symmetric', 'iterations': 6}), None),
         'coarse_solver': coarse_solver_callable
     }
