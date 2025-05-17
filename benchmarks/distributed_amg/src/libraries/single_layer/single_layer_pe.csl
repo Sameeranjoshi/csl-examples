@@ -19,10 +19,9 @@ const layer_end_x: u16 = common_params.layer_end_x;
 const layer_end_y: u16 = common_params.layer_end_y;
 const layer_kernel_rows: u16 = common_params.layer_kernel_rows;
 const layer_kernel_cols: u16 = common_params.layer_kernel_cols;
-const STATE_MACHINE: local_task_id = common_params.layer_task_id[0];
 
 
-// Task IDs
+// Tasks
 const STATE_INIT: u16 = 1;
 const STATE_EXIT: u16 = 2;
 const STATE_COMPUTE_JACOBI: u16 = 3;
@@ -42,7 +41,7 @@ const STATE_MOVE_B_NEXT_TO_B_TILE: u16 = 13;
 // ##############################################
 const state_exit_id: local_task_id = @get_local_task_id(14);
 const no_op_id: local_task_id = @get_local_task_id(15);
-
+const STATE_MACHINE: local_task_id = common_params.layer_task_id[0];
 // ##############################################
 // Libraries
 // ##############################################
@@ -63,16 +62,15 @@ const mpi_y = @import_module("<collectives_2d/pe>", .{
     .src1_dsr_ids = [1]u16{2}
     });
 const simprint = @import_module("<simprint>", .{ .enable = true });
-const broadcast_diagonal = @import_module("broadcast.csl", .{
-    .color_1 = @get_color(19),
-    .pe_id = pe_id_x,
-    .root_id = pe_id_y, // diagonal
-    .POS_DIR = EAST,
-    .NEG_DIR = WEST,
-    .start_index = 0, // should be 0, 3, 6
-    .end_index = layer_kernel_cols - 1
-  });
-
+// const broadcast_diagonal = @import_module("broadcast.csl", .{
+//     .color_1 = @get_color(19),
+//     .pe_id = pe_id_x,
+//     .root_id = pe_id_y, // diagonal
+//     .POS_DIR = EAST,
+//     .NEG_DIR = WEST,
+//     .start_index = 0, // should be 0, 3, 6
+//     .end_index = layer_kernel_cols - 1
+//   });
 // ##############################################
 // Helpers
 // ##############################################
@@ -94,7 +92,8 @@ const layer_size_map_x = comptime layeridx_to_size_map("x");
 const layer_offset_map_x = comptime layeridx_to_offset_map("x");
 const layer_size_map_b = comptime layeridx_to_size_map("b");  
 const layer_offset_map_b = comptime layeridx_to_offset_map("b");
-
+const layer_size_map_b_next = comptime layeridx_to_size_map("b_next");
+const layer_offset_map_b_next = comptime layeridx_to_offset_map("b_next");
 // ##############################################
 // Pattern: size, data, dsd, struct, pointer
 // ##############################################
@@ -141,7 +140,6 @@ var ptr_P : [*]f32 = &P_tile;
 var ptr_x_coarse : [*]f32 = &x_coarse;
 var ptr_omega: [*]f32 = &omega;
 var ptr_iter: [*]u32 = &iterations;
-
 
 /////////////////////////////////////////////////
 // Temporary variables
@@ -199,7 +197,7 @@ var i_into_x_struct_i: dsd_struct;
 /////////////////////////////////////////////////
 const b_next_max_size: u16 = comptime get_total_size_of("b_next");
 var b_next = @zeros([b_next_max_size]f32);  // rightmost Column
-var dsd_b_next : mem1d_dsd; // = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> b_next[i] });
+var dsd_b_next = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> b_next[i] });
 var b_next_struct_i: dsd_struct;
 var ptr_b_next : [*]f32 = &b_next;
 
@@ -231,20 +229,13 @@ var buf = @zeros([1]f32);
 // ##############################################
 task state_exit() void {
   simprint.fmt_with_coords("STATE_EXIT layer_index={d}", .{current_active_layer_index });
+  simprint.print_string("b_next_final\n");
   if (pe_id_x == 1) {
-    simprint.print_string("b_next_final\n");
-    @map(print_b_next_final, dsd_b_next);
-    // for (b_next) |val, i| {
-    //   simprint.fmt_with_coords("b_next_final[{d}] = {f}", .{ i, val });
-    // }
-    simprint.print_string("\n");
+    for (b_next) |val, i| {
+      simprint.fmt_with_coords("b_next_final[{d}] = {f}", .{ i, val });
+    }
   }
-  // if (pe_id_x == 1 and pe_id_y == 1) {
-    // simprint.print_string("b_tile\n");
-    // for (b_tile) |val, i| {
-    //   simprint.fmt_with_coords("b_tile[{d}] = {f}", .{ i, val });
-    // }
-  // }
+  simprint.print_string("\n");
   sys_mod.unblock_cmd_stream();
 }
 
@@ -337,7 +328,7 @@ fn init_dsds_for_layer(layer_index: u16) void {
   dsd_i_into_x = get_runtime_dsd_i(i_into_x_struct_i);
 
   // output
-  b_next_struct_i = dsd_struct { .base_address = &b_next, .stride = 1, .extent = R_M_local_i, .offset = 0 };
+  b_next_struct_i = dsd_struct { .base_address = &b_next, .stride = 1, .extent = R_M_local_i, .offset = @as(i16, get_offset(&layer_offset_map_b_next, layer_index)) };
   dsd_b_next = get_runtime_dsd_i(b_next_struct_i);
 
   // if (pe_id_x == 0 and pe_id_y == 0) {
@@ -445,8 +436,7 @@ comptime {
   @export_symbol(v_cycle_down);
   @export_symbol(print_data);
 
-
-  broadcast_diagonal.configure_network();
+  // broadcast_diagonal.configure_network();
 }
 
 //########################################################################################
@@ -777,6 +767,8 @@ fn layeridx_to_size_map(comptime data: comptime_string) [total_levels_count]u16 
       result[index] = N_local;
     } else if (data == "b") {
       result[index] = M_local;
+    } else if (data == "b_next") {
+      result[index] = R_M_local;
     } else if (data == "x_coarse") {
       result[index] = R_M_local;
     } else {
@@ -809,6 +801,9 @@ fn layeridx_to_offset_map(comptime data: comptime_string) [total_levels_count]u1
     } else if (data == "b") {
       result[index] = running_sum;
       running_sum += M_local;
+    } else if (data == "b_next") {
+      result[index] = running_sum;
+      running_sum += R_M_local;
     } else if (data == "x_coarse") {
       result[index] = running_sum;
       running_sum += R_M_local;
