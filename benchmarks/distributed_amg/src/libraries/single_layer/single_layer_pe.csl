@@ -229,12 +229,11 @@ var buf = @zeros([1]f32);
 // ##############################################
 task state_exit() void {
   simprint.fmt_with_coords("STATE_EXIT layer_index={d}", .{current_active_layer_index });
-  simprint.print_string("b_next_final\n");
-  if (pe_id_x == 1) {
+  // if (pe_id_x == 1) {
     for (b_next) |val, i| {
       simprint.fmt_with_coords("b_next_final[{d}] = {f}", .{ i, val });
     }
-  }
+  // }
   simprint.print_string("\n");
   sys_mod.unblock_cmd_stream();
 }
@@ -352,21 +351,21 @@ fn init_dsds_for_layer(layer_index: u16) void {
   // }
 
 }
-fn print_restriction_dsd(value: f32) void {
-  simprint.fmt_with_coords("DSD_restriction_after[] = {f}", .{value});
-}
+// fn print_restriction_dsd(value: f32) void {
+//   simprint.fmt_with_coords("DSD_restriction_after[] = {f}", .{value});
+// }
 
-fn print_dsd(value: f32) void {
-  simprint.fmt_with_coords("DSD_residual_after[] = {f}", .{value});
-}
+// fn print_dsd(value: f32) void {
+//   simprint.fmt_with_coords("DSD_residual_after[] = {f}", .{value});
+// }
 
-fn print_dsd_layer(value: f32) void {
-  simprint.fmt_with_coords("DSD_layer[] = {f}", .{value});
-}
+// fn print_dsd_layer(value: f32) void {
+//   simprint.fmt_with_coords("DSD_layer[] = {f}", .{value});
+// }
 
-fn print_b_next_final(value: f32) void {
-  simprint.fmt_with_coords("b_next_final[] = {f}", .{value});
-}
+// fn print_b_next_final(value: f32) void {
+//   simprint.fmt_with_coords("b_next_final[] = {f}", .{value});
+// }
 
 fn print_total_data_size() void {
   if (pe_id_x == 0 and pe_id_y == 0) {
@@ -397,36 +396,36 @@ fn v_cycle_down() void {
 }
 
 fn print_data() void {
-  if (pe_id_x == 0 and pe_id_y == 0) {
-    // print A_tile
-    simprint.print_string("A_tile\n");
-    for (A_tile) |val, i| {
-    simprint.fmt_with_coords("A_tile[{d}] = {f}", .{ i, val });
-    }
-    simprint.print_string("R_tile\n");
-    for (R_tile) |val, i| {
-      simprint.fmt_with_coords("R_tile[{d}] = {f}", .{ i, val });
-    }
-    simprint.print_string("x_tile\n");
-    for (x_tile) |val, i| {
-      simprint.fmt_with_coords("x_tile[{d}] = {f}", .{ i, val });
-    }
-    simprint.print_string("b_tile\n");
-    for (b_tile) |val, i| {
-      simprint.fmt_with_coords("b_tile[{d}] = {f}", .{ i, val });
-    }
+  // if (pe_id_x == 0 and pe_id_y == 0) {
+  //   // print A_tile
+  //   simprint.print_string("A_tile\n");
+  //   for (A_tile) |val, i| {
+  //   simprint.fmt_with_coords("A_tile[{d}] = {f}", .{ i, val });
+  //   }
+  //   simprint.print_string("R_tile\n");
+  //   for (R_tile) |val, i| {
+  //     simprint.fmt_with_coords("R_tile[{d}] = {f}", .{ i, val });
+  //   }
+  //   simprint.print_string("x_tile\n");
+  //   for (x_tile) |val, i| {
+  //     simprint.fmt_with_coords("x_tile[{d}] = {f}", .{ i, val });
+  //   }
+  //   simprint.print_string("b_tile\n");
+  //   for (b_tile) |val, i| {
+  //     simprint.fmt_with_coords("b_tile[{d}] = {f}", .{ i, val });
+  //   }
 
-    // 
-    simprint.print_string("A_tiles_total_size\n");
-    simprint.fmt_with_coords("A_tiles_total_size = {d}", .{A_tiles_total_size});
-    simprint.print_string("R_tiles_total_size\n");
-    simprint.fmt_with_coords("R_tiles_total_size = {d}", .{R_tiles_total_size});
-    simprint.print_string("x_tiles_total_size\n");
-    simprint.fmt_with_coords("x_tiles_total_size = {d}", .{x_tiles_total_size});
-    simprint.print_string("b_tiles_total_size\n");
-    simprint.fmt_with_coords("b_tiles_total_size = {d}", .{b_tiles_total_size});
+  //   // 
+  //   simprint.print_string("A_tiles_total_size\n");
+  //   simprint.fmt_with_coords("A_tiles_total_size = {d}", .{A_tiles_total_size});
+  //   simprint.print_string("R_tiles_total_size\n");
+  //   simprint.fmt_with_coords("R_tiles_total_size = {d}", .{R_tiles_total_size});
+  //   simprint.print_string("x_tiles_total_size\n");
+  //   simprint.fmt_with_coords("x_tiles_total_size = {d}", .{x_tiles_total_size});
+  //   simprint.print_string("b_tiles_total_size\n");
+  //   simprint.fmt_with_coords("b_tiles_total_size = {d}", .{b_tiles_total_size});
 
-  }
+  // }
 }
 
 
@@ -472,7 +471,7 @@ fn state_init() void {
 }
 
 fn state_compute_jacobi() void {
-  simprint.fmt_with_coords("JACOBI, layer_index={d}", .{ @as(u32, current_active_layer_index) });
+  simprint.fmt_with_coords("JACOBI(iter_count={d}), layer_index={d}", .{ iter_count, @as(u32, current_active_layer_index) });
   iter_count += 1;
   next_state = STATE_BCAST_JACOBI;
   compute_jacobi();
@@ -485,9 +484,9 @@ fn state_bcast_jacobi() void {
 
 fn state_check_jacobi() void {
   // print x_tile
-  for (x_tile) |val, i| {
-    simprint.fmt_with_coords("SMOOTHED x_tile[{d}] = {f}", .{ i, val });
-  }
+  // for (x_tile) |val, i| {
+  //   simprint.fmt_with_coords("SMOOTHED x_tile[{d}] = {f}", .{ i, val });
+  // }
   if (iter_count < iterations[0]) {
       next_state = STATE_COMPUTE_JACOBI;
   } else {
@@ -513,7 +512,7 @@ fn state_bcast_residual() void {
 
 fn state_compute_restriction() void {
   simprint.fmt_with_coords("STATE_COMPUTE_RESTRICTION, layer_index={d}", .{ @as(u32, current_active_layer_index) });
-  @map(print_dsd, dsd_residual_tile);
+  // @map(print_dsd, dsd_residual_tile);
   next_state = STATE_NEXT_LAYER_CHECK;
   compute_restriction();
 
@@ -521,7 +520,7 @@ fn state_compute_restriction() void {
 
 fn state_next_layer_check() void {
   simprint.fmt_with_coords("STATE_NEXT_LAYER_CHECK, layer_index={d}", .{ @as(u32, current_active_layer_index) });
-  @map(print_restriction_dsd, dsd_b_next);
+  // @map(print_restriction_dsd, dsd_b_next);
 
   current_active_layer_index += 1;   
   if (current_active_layer_index <= total_levels_count - 1) {

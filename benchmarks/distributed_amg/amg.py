@@ -234,25 +234,26 @@ def print_table_shapes(levels):
         level_info = {'level': idx}
         # Handle A
         if hasattr(level, 'A') and level.A is not None:
-            format_str = level.A.format if hasattr(level.A, 'format') else 'dense'
-            level_info[f'A_shape({level.A.dtype},{format_str})'] = f"{level.A.shape}"
+            # format_str = level.A.format if hasattr(level.A, 'format') else 'dense'
+            # level_info[f'A_shape({level.A.dtype},{format_str})'] = f"{level.A.shape}"
+            level_info[f'A_shape({level.A.dtype})'] = f"{level.A.shape}"
         else:
             level_info['A_shape'] = "N/A"
 
-        # Handle B
-        if hasattr(level, 'B') and level.B is not None:
-            format_str = level.B.format if hasattr(level.B, 'format') else 'dense'
-            level_info[f'B_shape({level.B.dtype},{format_str})'] = f"{level.B.shape}"
-
-        # Handle P
-        if hasattr(level, 'P') and level.P is not None:
-            format_str = level.P.format if hasattr(level.P, 'format') else 'dense'
-            level_info[f'P_shape({level.P.dtype},{format_str})'] = f"{level.P.shape}"
+        # # Handle B
+        # if hasattr(level, 'B') and level.B is not None:
+        #     format_str = level.B.format if hasattr(level.B, 'format') else 'dense'
+        #     level_info[f'B_shape({level.B.dtype},{format_str})'] = f"{level.B.shape}"
 
         # Handle R
         if hasattr(level, 'R') and level.R is not None:
             format_str = level.R.format if hasattr(level.R, 'format') else 'dense'
             level_info[f'R_shape({level.R.dtype},{format_str})'] = f"{level.R.shape}"
+
+        # Handle P
+        if hasattr(level, 'P') and level.P is not None:
+            format_str = level.P.format if hasattr(level.P, 'format') else 'dense'
+            level_info[f'P_shape({level.P.dtype},{format_str})'] = f"{level.P.shape}"
 
         # Handle presmoother
         if hasattr(level, 'presmoother') and level.presmoother:
@@ -498,8 +499,8 @@ def smooth_aggregate_setup_only(A, x, b, solver, max_level=None, max_coarse=None
         'strength': ('symmetric', {'theta': 0.50}),  # increase for more layers
         'smooth': 'jacobi',
         # withrho is essential for answers to be correct
-        'presmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5, 'withrho': False}),
-        'postsmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 5, 'withrho': False}),  
+        'presmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 2, 'withrho': False}),
+        'postsmoother': ('jacobi', {'omega': 1.0/3.0, 'iterations': 2, 'withrho': False}),  
         'improve_candidates': (('gauss_seidel', {'sweep': 'symmetric', 'iterations': 6}), None),
         'coarse_solver': coarse_solver_callable
     }

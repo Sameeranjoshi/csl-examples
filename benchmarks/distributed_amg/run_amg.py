@@ -1003,8 +1003,8 @@ def main():
   print("# COMPARISON")
   print("############################################################")
   
-  # x_final_device = unpad_1d(x_final_device, x_final_host.shape[0])
-  # b_final_device = unpad_1d(b_final_device, b_final_host.shape[0])  # HACK remove later.
+#   x_final_device = unpad_1d(x_final_device, x_final_host.shape[0])
+#   b_final_device = unpad_1d(b_final_device, b_final_host.shape[0])  # HACK remove later.
   assert np.allclose(residual_host, residual_device, atol=1e-6), "Residual do not match!"
   assert np.allclose(x_final_host, x_final_device, atol=1e-6), "x_final of host and device do not match!"
   assert np.allclose(b_final_host, b_final_device, atol=1e-6), "b_final of host and device do not match!"
