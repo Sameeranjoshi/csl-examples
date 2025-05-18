@@ -39,7 +39,7 @@ const STATE_MOVE_B_NEXT_TO_B_TILE: u16 = 13;
 // ##############################################
 // TASKS, COLORS, QUEUES
 // ##############################################
-const state_exit_id: local_task_id = @get_local_task_id(14);
+// const state_exit_id: local_task_id = @get_local_task_id(14);
 const no_op_id: local_task_id = @get_local_task_id(15);
 const STATE_MACHINE: local_task_id = common_params.layer_task_id[0];
 // ##############################################
@@ -61,7 +61,8 @@ const mpi_y = @import_module("<collectives_2d/pe>", .{
     .src0_dsr_ids = [1]u16{2},
     .src1_dsr_ids = [1]u16{2}
     });
-const simprint = @import_module("<simprint>", .{ .enable = true });
+const simprint = @import_module("<simprint>", .{ .enable = false });
+const simprint2 = @import_module("<simprint>", .{ .enable = true });
 // const broadcast_diagonal = @import_module("broadcast.csl", .{
 //     .color_1 = @get_color(19),
 //     .pe_id = pe_id_x,
@@ -227,12 +228,12 @@ var buf = @zeros([1]f32);
 // ##############################################
 // Tasks
 // ##############################################
-task state_exit() void {
+fn state_exit() void {
   simprint.fmt_with_coords("STATE_EXIT layer_index={d}", .{current_active_layer_index });
   // if (pe_id_x == 1) {
     for (b_next) |val, i| {
       simprint.fmt_with_coords("b_next_final[{d}] = {f}", .{ i, val });
-    }
+    } 
   // }
   simprint.print_string("\n");
   sys_mod.unblock_cmd_stream();
@@ -253,7 +254,7 @@ task f_state() void {
       STATE_MOVE_B_NEXT_TO_B_TILE => state_move_b_next_to_b_tile(),
       STATE_PROLONGATION => state_prolongation(),
       STATE_BCAST_PROLONGATION => state_bcast_prolongation(),
-      STATE_EXIT => @activate(state_exit_id),
+      STATE_EXIT => state_exit(),
       else => {
           simprint.print_string("Error: unknown state\n");
           @assert(false);
@@ -369,16 +370,16 @@ fn init_dsds_for_layer(layer_index: u16) void {
 
 fn print_total_data_size() void {
   if (pe_id_x == 0 and pe_id_y == 0) {
-    const total_input_data = A_tiles_total_size + R_tiles_total_size + P_tiles_total_size + x_tiles_total_size + b_tiles_total_size + x_coarse_total_size;
-    const total_temp_data = Ax_max_size + Rx_max_size + Px_max_size + residual_tile_max_size + D_inv_max_size + term_2_max_size + px_sum_tile_max_size + w_dinv_a_x_max_size + i_into_x_max_size;
-    const total_output_data = b_next_max_size;
-    const total_data_per_per = total_input_data + total_temp_data + total_output_data;
-    const size_f32 = 4;
-    const total_data_size_per_pe = total_data_per_per * size_f32;
-    const total_data_size_per_pe_kb = @as(f32, total_data_size_per_pe) / @as(f32, 1024);
-    simprint.fmt_with_coords("total_data_size_per_pe = {d} in bytes", .{total_data_size_per_pe});
-    simprint.fmt_with_coords("Total data size = {f}kB", .{total_data_size_per_pe_kb});
-    simprint.print_string("Total memory per PE = 48kB\n");
+    const total_input_data:u32 = A_tiles_total_size + R_tiles_total_size + P_tiles_total_size + x_tiles_total_size + b_tiles_total_size + x_coarse_total_size;
+    const total_temp_data:u32 = Ax_max_size + Rx_max_size + Px_max_size + residual_tile_max_size + D_inv_max_size + term_2_max_size + px_sum_tile_max_size + w_dinv_a_x_max_size + i_into_x_max_size;
+    const total_output_data:u32 = b_next_max_size;
+    const total_data_per_per:u32 = total_input_data + total_temp_data + total_output_data;
+    const size_f32:u32 = 4;
+    const total_data_size_per_pe:u32 = total_data_per_per * size_f32;
+    const total_data_size_per_pe_kb:f32 = @as(f32, total_data_size_per_pe) / @as(f32, 1024);
+    simprint2.fmt_with_coords("total_data_size_per_pe = {d} in bytes", .{total_data_size_per_pe});
+    simprint2.fmt_with_coords("Total data size = {f}kB", .{total_data_size_per_pe_kb});
+    simprint2.print_string("Total memory per PE = 48kB\n");
   }
 }
 
@@ -436,7 +437,7 @@ fn print_data() void {
 comptime {
   // Bind all state tasks
   @bind_local_task(f_state, STATE_MACHINE);
-  @bind_local_task(state_exit, state_exit_id);
+  // @bind_local_task(state_exit, state_exit_id);
   @bind_local_task(no_op, no_op_id);
 
   @export_symbol(ptr_A, "A");
@@ -500,6 +501,12 @@ fn state_check_jacobi() void {
 }
 
 fn state_compute_residual() void {
+  // // print x_tile
+  // // if (pe_id_x == pe_id_y) {
+  //   for (x_tile) |val, i| {
+  //     simprint.fmt_with_coords("SMOOTHED x_tile[{d}] = {f}", .{ i, val });
+  //   }
+  // // }
   simprint.fmt_with_coords("STATE_COMPUTE_RESIDUAL, layer_index={d}", .{ @as(u32, current_active_layer_index) });
   next_state = STATE_BCAST_RESIDUAL;
   compute_residual();
@@ -529,8 +536,9 @@ fn state_next_layer_check() void {
 
   } else { // up cycle at some point.
     next_state = STATE_EXIT;
+    f_trigger_state_machine();
   }
-  f_trigger_state_machine();
+  
 }
 
 fn state_move_b_next_to_b_tile() void {
