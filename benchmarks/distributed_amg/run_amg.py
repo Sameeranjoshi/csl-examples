@@ -441,11 +441,11 @@ def host_calculations(v_cycle_data):
             b_level[i + 1] = b_coarse_layer
             x_level[i + 1] = x_coarse_layer
         
-        # # V coarse
-        # b_coarsest = b_level[-1]
-        # x_coarsest = x_level[-1]
-        # A_coarsest = ml.levels[-1].A
-        # x_coarsest[:] = solver_callable_host(A_coarsest, b_coarsest)
+        # V coarse
+        b_coarsest = b_level[-1]
+        x_coarsest = x_level[-1]
+        A_coarsest = ml.levels[-1].A
+        x_coarsest[:] = solver_callable_host(A_coarsest, b_coarsest)
         
         # # V up
         # for i in reversed(range(len(ml.levels) - 1)):
@@ -536,33 +536,29 @@ class simplerMemcpy:
         self._simulator.memcpy_d2h(result, symbol, px, py, w, h, size, streaming=False,
                             order=self._memcpy_order, data_type=self._memcpy_dtype, nonblock=False)
 
-def perform_coarse_solve(level, x_level, b_level, solver_callable_host):
+def perform_coarse_solve(A_coarse, x_coarsest, b_coarse, solver_callable_host):
     """Handle coarse level solve"""    
     ############################################################
     # Store original dimensions before unpadding - HACK.
-    unpadded_x_shape = level.A.shape[1]
-    unpadded_b_shape = level.A.shape[0]
-    padded_x_shape = x_level[-1].shape[0]
-    padded_b_shape = b_level[-1].shape[0]
+    unpadded_x_shape = A_coarse.shape[1]
+    unpadded_b_shape = A_coarse.shape[0]
+    padded_x_shape = x_coarsest.shape[0]
+    padded_b_shape = b_coarse.shape[0]
     # Unpad x and b for coarse level calculations
-    x_level[-1] = unpad_1d(x_level[-1], unpadded_x_shape)
-    b_level[-1] = unpad_1d(b_level[-1], unpadded_b_shape)
+    x_coarsest = unpad_1d(x_coarsest, unpadded_x_shape)
+    b_coarse = unpad_1d(b_coarse, unpadded_b_shape)
     
     # Convert A to CSR format for coarse solver
-    level.A = sp.csr_matrix(level.A)
+    A_coarse = sp.csr_matrix(A_coarse)
     ############################################################  
       
-    print("\n" + "-"*40)
-    print(f"│ COARSE SOLVE")
-    print("-"*40)
+    print("\n" + "\t" + "-"*40)
+    print("\t" + "│ COARSE SOLVE")
+    print("\t" + "-"*40)
     
-    x_coarsest = x_level[-1]
-    b_coarse = b_level[-1]
-    A_coarse = level.A
-    
-    print("Matrix Dimensions:")
-    print(f"  A: {A_coarse.shape}")
-    print(f"  x: {x_coarsest.shape} | b: {b_coarse.shape}")
+    print("\t" + "Matrix Dimensions:")
+    print("\t" + f"  A: {A_coarse.shape}")
+    print("\t" + f"  x: {x_coarsest.shape} | b: {b_coarse.shape}")
     
     x_coarsest[:] = solver_callable_host(A_coarse, b_coarse)
     
@@ -881,7 +877,16 @@ def device_calculations_distributed(v_cycle_data):
     b_level = copy_all_layers_from_device(simple_memcpy, symbols, ml, total_pe_rows, total_pe_cols, b_level, 'b_next', is_b_level=True)
     x_level = copy_all_layers_from_device(simple_memcpy, symbols, ml, total_pe_rows, total_pe_cols, x_level, 'x', is_b_level=False)
     
-    print("Step 6: Print V-Cycle Down Results")
+    ##### COARSE
+    # TODO: Perform on device.
+    print("Step 6: Coarse Solve")
+    b_coarsest = b_level[-1]
+    x_coarsest = x_level[-1]
+    A_coarsest = ml.levels[-1].A
+    # updates x_level
+    x_coarsest[:] = perform_coarse_solve(A_coarsest, x_coarsest, b_coarsest, solver_callable_host)
+
+    print("Step 7: Print V-Cycle Down Results")
     amg.debugprint(ml.levels, b_level, x_level)
     ############################################################
     # Cleanup simulator
@@ -929,8 +934,8 @@ def main():
   print("############################################################")
   print("# INPUT DATA")
   print("############################################################")
-  N = 7
-  M = 7
+  N = 4
+  M = 4
   eps = 1.e-5
   max_iterations = 1
     

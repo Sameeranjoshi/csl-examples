@@ -299,18 +299,18 @@ def generate_layout_amg(total_pe_cols, total_pe_rows, total_levels, layers, file
 
     # 3) Const layer arrays
     const_blocks = []
-    for i in range(num_layers):
+    for i, L in enumerate(layers):
         comma = "," if i < num_layers - 1 else ""
         const_blocks.append(textwrap.indent(textwrap.dedent(f"""\
             // ── Layer {i} ─────────────────────────────────
             .{{
-                .M = layer_M_{i}, 
-                .N = layer_N_{i}, 
-                .M_local = layer_M_{i} / total_pe_rows,          // layer_rows_A / kernel_rows
-                .N_local = layer_N_{i} / total_pe_cols,          // layer_cols_A / kernel_cols
-                .R_M_local = layer_R_M_{i} / total_pe_rows,        // layer_rows_R / kernel_rows
-                .R_N_local = layer_R_N_{i} / total_pe_cols,        // layer_cols_R / kernel_cols
-                .layer_index = layer_index_{i},
+                .M = layer_M_{i}, // = {L['M']}
+                .N = layer_N_{i}, // = {L['N']}
+                .M_local = layer_M_{i} / total_pe_rows, // = {L['M']} / {total_pe_rows} = {L['M'] // total_pe_rows if total_pe_rows else 'DIV0'}
+                .N_local = layer_N_{i} / total_pe_cols, // = {L['N']} / {total_pe_cols} = {L['N'] // total_pe_cols if total_pe_cols else 'DIV0'}
+                .R_M_local = layer_R_M_{i} / total_pe_rows, // = {L['R_M']} / {total_pe_rows} = {L['R_M'] // total_pe_rows if total_pe_rows else 'DIV0'}
+                .R_N_local = layer_R_N_{i} / total_pe_cols, // = {L['R_N']} / {total_pe_cols} = {L['R_N'] // total_pe_cols if total_pe_cols else 'DIV0'}
+                .layer_index = layer_index_{i}, // = {L['index']}
             }}{comma}"""), prefix=""))
     out += "// ── Layer const arrays ─────────────────────────────────\n"
     out += f"const layers_data = [{num_layers}]comptime_struct{{\n"
