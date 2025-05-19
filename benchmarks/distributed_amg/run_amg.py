@@ -569,7 +569,46 @@ def perform_coarse_solve(A_coarse, x_coarsest, b_coarse, solver_callable_host):
     ############################################################
     
     return x_coarsest
-  
+
+def copy_x_coarse_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer):
+    print("\n" + "\t" + "-"*40)
+    print("\t" + "│ COPYING X_COARSE TO DEVICE (column bcast down)")
+    print("\t" + "-"*40)
+
+    coords = layer_coordinates_map[0]
+    px, py = coords['layer_start_x'], coords['layer_start_y']
+    w, h = coords['layer_pe_cols'], coords['layer_pe_rows']
+
+    # Get R_M for all levels except the last (include L2!)
+    R_M_sizes = [ml.levels[i].R.shape[0] for i in range(0, len(ml.levels)-1)]
+    total_size = sum(R_M_sizes)
+    coarsest_size = ml.levels[-2].R.shape[0] // w  # R_M of the last level with R (L2)
+    chunk_size = total_size // w
+
+    # Get the coarsest x and divide its values by w
+    # x_coarse_last = x_level[-1]
+    R_M_before_last = ml.levels[-2].R.shape[0]
+    x_coarse_last = pad_1d(x_level[-1], R_M_before_last, variable_name=f"x_coarse_last")
+    x_coarse_last_chunks = np.split(x_coarse_last, w)
+
+    # For each column, build its chunk: zeros for all but last layer, last part is x_coarse_last_div
+    x_chunks = []
+    for j in range(w):
+        chunk = np.zeros(chunk_size, dtype=np.float32)
+        # Place the coarsest x values at the end of the chunk
+        chunk[-coarsest_size:] = x_coarse_last_chunks[j]
+        print(f"\tx_coarse_host chunk {j} shape: {chunk.shape}, last {coarsest_size} values set to: {x_coarse_last_chunks[j]}")
+        x_chunks.append(chunk)
+
+    x_blob = np.concatenate(x_chunks)
+
+    # Broadcast down columns: each row gets the same chunk for its column
+    start_time = time.time()
+    simple_memcpy.do_memcpy_h2d(symbols['x_coarse'], x_blob, px, py, w, 1, chunk_size)
+    h2d_time = time.time() - start_time
+    print(f"\tH2D transfer time: {h2d_time:.4f}s")
+
+
 def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer):
     """Copy all layers data as concatenated blobs to device
     
@@ -888,6 +927,11 @@ def device_calculations_distributed(v_cycle_data):
 
     print("Step 7: Print V-Cycle Down Results")
     amg.debugprint(ml.levels, b_level, x_level)
+    
+    print("Step 8: Copy x_coarse on device")
+    copy_x_coarse_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer=None)
+    print("Step 9: Print V-Cycle Up")
+    simulator.launch("print_data", nonblock=False)
     ############################################################
     # Cleanup simulator
     ############################################################
@@ -934,8 +978,8 @@ def main():
   print("############################################################")
   print("# INPUT DATA")
   print("############################################################")
-  N = 4
-  M = 4
+  N = 7
+  M = 7
   eps = 1.e-5
   max_iterations = 1
     

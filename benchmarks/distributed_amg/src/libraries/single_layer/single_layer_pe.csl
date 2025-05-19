@@ -95,6 +95,8 @@ const layer_size_map_b = comptime layeridx_to_size_map("b");
 const layer_offset_map_b = comptime layeridx_to_offset_map("b");
 const layer_size_map_b_next = comptime layeridx_to_size_map("b_next");
 const layer_offset_map_b_next = comptime layeridx_to_offset_map("b_next");
+const layer_size_map_x_coarse = comptime layeridx_to_size_map("x_coarse");
+const layer_offset_map_x_coarse = comptime layeridx_to_offset_map("x_coarse");
 // ##############################################
 // Pattern: size, data, dsd, struct, pointer
 // ##############################################
@@ -123,6 +125,7 @@ var dsd_R_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> R_tile[i] });
 var dsd_P_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> P_tile[i] }); // 1 col of P_tile
 var dsd_x_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> x_tile[i]});
 var dsd_b_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> b_tile[i]});
+var dsd_x_coarse = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> x_coarse[i]});
 
 // Layouts for DSDs
 var A_tile_struct_i: dsd_struct;
@@ -131,6 +134,7 @@ var R_tile_struct_i: dsd_struct;
 var P_tile_struct_i: dsd_struct;
 var x_tile_struct_i: dsd_struct;
 var b_tile_struct_i: dsd_struct;
+var x_coarse_struct_i: dsd_struct;
 
 // Pointers and advertised outside
 var ptr_x : [*]f32 = &x_tile;
@@ -298,6 +302,8 @@ fn init_dsds_for_layer(layer_index: u16) void {
   x_tile_struct_i = dsd_struct { .base_address = &x_tile, .stride = @as(i8, 1), .extent = N_local_i, .offset = @as(i16, get_offset(&layer_offset_map_x, layer_index)) };
   // var dsd_b_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{M_local} -> b_tile[i]});
   b_tile_struct_i = dsd_struct { .base_address = &b_tile, .stride = @as(i8, 1), .extent = M_local_i, .offset = @as(i16, get_offset(&layer_offset_map_b, layer_index)) };
+  // var dsd_x_coarse = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{R_M_local} -> x_coarse[i]});
+  x_coarse_struct_i = dsd_struct {.base_address = &x_coarse, .stride = @as(i8, 1), .extent = R_M_local_i, .offset = @as(i16, get_offset(&layer_offset_map_x_coarse, layer_index))};
 
   dsd_A_tile = get_runtime_dsd_i(A_tile_struct_i);
   dsd_A_diag = get_runtime_dsd_i(A_diag_struct_i);
@@ -305,6 +311,7 @@ fn init_dsds_for_layer(layer_index: u16) void {
   dsd_P_tile = get_runtime_dsd_i(P_tile_struct_i);
   dsd_x_tile = get_runtime_dsd_i(x_tile_struct_i);
   dsd_b_tile = get_runtime_dsd_i(b_tile_struct_i);
+  dsd_x_coarse = get_runtime_dsd_i(x_coarse_struct_i);
 
   // temporaries
   Ax_struct_i = dsd_struct { .base_address = &Ax, .stride = 1, .extent = M_local_i, .offset = 0 }; // .{ .tensor_access = |i|{M_local} -> Ax[i]}
@@ -397,7 +404,7 @@ fn v_cycle_down() void {
 }
 
 fn print_data() void {
-  // if (pe_id_x == 0 and pe_id_y == 0) {
+  if (pe_id_x == 0 and pe_id_y == 0) {
   //   // print A_tile
   //   simprint.print_string("A_tile\n");
   //   for (A_tile) |val, i| {
@@ -411,10 +418,14 @@ fn print_data() void {
   //   for (x_tile) |val, i| {
   //     simprint.fmt_with_coords("x_tile[{d}] = {f}", .{ i, val });
   //   }
-  //   simprint.print_string("b_tile\n");
-  //   for (b_tile) |val, i| {
-  //     simprint.fmt_with_coords("b_tile[{d}] = {f}", .{ i, val });
-  //   }
+    // simprint2.print_string("b_tile\n");
+    // for (b_tile) |val, i| {
+    //   simprint2.fmt_with_coords("b_tile[{d}] = {f}", .{ i, val });
+    // }
+      simprint2.print_string("x_coarse\n");
+      for (x_coarse) |val, i| {
+        simprint2.fmt_with_coords("x_coarse[{d}] = {f}", .{ i, val });
+      }
 
   //   // 
   //   simprint.print_string("A_tiles_total_size\n");
@@ -423,10 +434,13 @@ fn print_data() void {
   //   simprint.fmt_with_coords("R_tiles_total_size = {d}", .{R_tiles_total_size});
   //   simprint.print_string("x_tiles_total_size\n");
   //   simprint.fmt_with_coords("x_tiles_total_size = {d}", .{x_tiles_total_size});
-  //   simprint.print_string("b_tiles_total_size\n");
-  //   simprint.fmt_with_coords("b_tiles_total_size = {d}", .{b_tiles_total_size});
+    // simprint2.print_string("b_tiles_total_size\n");
+    // simprint2.fmt_with_coords("b_tiles_total_size = {d}", .{b_tiles_total_size});
+    simprint2.print_string("x_coarse_total_size\n");
+    simprint2.fmt_with_coords("x_coarse_total_size = {d}", .{x_coarse_total_size});
 
-  // }
+  }
+  sys_mod.unblock_cmd_stream();
 }
 
 
