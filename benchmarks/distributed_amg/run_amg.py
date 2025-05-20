@@ -536,7 +536,7 @@ class simplerMemcpy:
         self._simulator.memcpy_d2h(result, symbol, px, py, w, h, size, streaming=False,
                             order=self._memcpy_order, data_type=self._memcpy_dtype, nonblock=False)
 
-def perform_coarse_solve(A_coarse, x_coarsest, b_coarse, solver_callable_host):
+def perform_coarse_solve(ml, A_coarse, x_coarsest, b_coarse, solver_callable_host):
     """Handle coarse level solve"""    
     ############################################################
     # Store original dimensions before unpadding - HACK.
@@ -585,11 +585,12 @@ def copy_x_coarse_on_device(simple_memcpy, simulator, symbols, ml, layer_coordin
     coarsest_size = ml.levels[-2].R.shape[0] // w  # R_M of the last level with R (L2)
     chunk_size = total_size // w
 
-    # Get the coarsest x and divide its values by w
-    # x_coarse_last = x_level[-1]
+    # X is not padded to be able to map on WSE.
     R_M_before_last = ml.levels[-2].R.shape[0]
+    # padded and new copy is created.
     x_coarse_last = pad_1d(x_level[-1], R_M_before_last, variable_name=f"x_coarse_last")
     x_coarse_last_chunks = np.split(x_coarse_last, w)
+    
 
     # For each column, build its chunk: zeros for all but last layer, last part is x_coarse_last_div
     x_chunks = []
@@ -919,11 +920,12 @@ def device_calculations_distributed(v_cycle_data):
     ##### COARSE
     # TODO: Perform on device.
     print("Step 6: Coarse Solve")
-    b_coarsest = b_level[-1]
-    x_coarsest = x_level[-1]
-    A_coarsest = ml.levels[-1].A
+    b_coarsest = b_level[-1]    # 2 (unpad)
+    x_coarsest = x_level[-1]    # 1
+    A_coarsest = ml.levels[-1].A    # 1
     # updates x_level
-    x_coarsest[:] = perform_coarse_solve(A_coarsest, x_coarsest, b_coarsest, solver_callable_host)
+    x_coarsest[:] = perform_coarse_solve(ml, A_coarsest, x_coarsest, b_coarsest, solver_callable_host)
+
 
     print("Step 7: Print V-Cycle Down Results")
     amg.debugprint(ml.levels, b_level, x_level)
@@ -942,8 +944,10 @@ def device_calculations_distributed(v_cycle_data):
     # time_ut.analyze_timing_data("reports/timing_data.csv")
     # print("\nTiming analysis complete. Open timing_report.html to view the results.")
         
+    # We only need to unpad b as x is not padded.
     A_solution, b_solution_device, x_solution_device = ml.levels[len(ml.levels)-1].A, b_level[len(ml.levels)-1], x_level[len(ml.levels)-1]
-    residual_device = np.linalg.norm(b_solution_device - A_solution @ x_solution_device)
+    b_solution_device_unpadded = unpad_1d(b_solution_device, A_solution.shape[0])   # Todo: Remove later.
+    residual_device = np.linalg.norm(b_solution_device_unpadded - A_solution @ x_solution_device)
     return b_solution_device, x_solution_device, residual_device
   
 def pad_and_make_dense(layer_coordinates_map, v_cycle_data):
@@ -978,8 +982,8 @@ def main():
   print("############################################################")
   print("# INPUT DATA")
   print("############################################################")
-  N = 7
-  M = 7
+  N = 3
+  M = 3
   eps = 1.e-5
   max_iterations = 1
     
@@ -1046,7 +1050,7 @@ def main():
   print("############################################################")
   b_final_device, x_final_device, residual_device = device_calculations_distributed(v_cycle_data_device) # changed to dataflow
   print("\nDEVICE CALCULATIONS DONE")
-  print(f"\tResidual Device ||AX-b||:", residual_device)
+  print(f"\t Residual Device ||AX-b||:", residual_device)
   print(f"\t b_solution_final Device:", b_final_device)
   print("############################################################")
   print("# COMPARISON")
