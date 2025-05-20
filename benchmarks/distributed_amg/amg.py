@@ -74,6 +74,8 @@ def each_layer_solver_up(level, x_level, b_level, ml, setup_config, level_id, x_
     # Time prolongation
     prolong_start = time.time()
     x += P @ x_lower_level  # Prolongation
+    print("level_id", level_id)
+    print("x+= P @ x_lower_level = ", x.flatten())
     timing.prolongation_time = time.time() - prolong_start
     
     # Time post-smoothing

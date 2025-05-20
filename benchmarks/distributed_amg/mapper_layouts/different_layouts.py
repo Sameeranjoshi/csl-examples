@@ -259,6 +259,7 @@ layout {{
     @export_name("x_coarse", [*]f32, true);
     @export_name("b", [*]f32, true);
     @export_name("v_cycle_down", fn()void);
+    @export_name("v_cycle_up", fn()void);
     @export_name("b_next", [*]f32, true);
     @export_name("omega", [*]f32, true);
     @export_name("iterations", [*]u32, true);

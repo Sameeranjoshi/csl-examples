@@ -128,7 +128,7 @@ def pad_1d(vector, padded_size, variable_name="vector"):
         raise ValueError(f"padded_size ({padded_size}) cannot be smaller than the vector size ({vector.shape[0]}) for '{variable_name}'.")
 
     vector_padded = np.pad(vector, (0, pad_size), mode='constant', constant_values=0)
-    print(f"\t{variable_name} padded from {vector.shape[0]} to {vector_padded.shape[0]}")
+    print(f"{variable_name} padded from {vector.shape[0]} to {vector_padded.shape[0]}")
     return vector_padded
 
 # write an unpad function 

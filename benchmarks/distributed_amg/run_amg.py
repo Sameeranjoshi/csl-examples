@@ -448,15 +448,16 @@ def host_calculations(v_cycle_data):
         x_coarsest[:] = solver_callable_host(A_coarsest, b_coarsest)
         
         # # V up
-        # for i in reversed(range(len(ml.levels) - 1)):
-        #     # Set context BEFORE the operation
-        #     hostprofiling.add_other_info(iteration, i, "up")
+        for i in reversed(range(len(ml.levels) - 1)):
+            # Set context BEFORE the operation
+            hostprofiling.add_other_info(iteration, i, "up")
             
-            # level = ml.levels[i]
-            # x_lower_level = x_level[i+1]
-            # x_current_updated, operator_timing = amg.each_layer_solver_up(level, x_level, b_level, ml, setup_config, i, x_lower_level, hostprofiling)
-            # x_level[i] = x_current_updated
+            level = ml.levels[i]
+            x_lower_level = x_level[i+1]
+            x_current_updated, operator_timing = amg.each_layer_solver_up(level, x_level, b_level, ml, setup_config, i, x_lower_level, hostprofiling)
+            x_level[i] = x_current_updated
 
+        ####TODO: Change this to fine layer.
         # Check convergence
         # residual = b_level[0] - ml.levels[0].A @ x_level[0] # after Up cycle
         residual = b_level[len(ml.levels)-1] - ml.levels[len(ml.levels)-1].A @ x_level[len(ml.levels)-1] # after down.
@@ -657,13 +658,14 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
     # Initialize dictionaries to store PE-wise chunks
     pe_chunks_A = {(i, j): [] for i in range(h) for j in range(w)}
     pe_chunks_R = {(i, j): [] for i in range(h) for j in range(w)}
+    pe_chunks_P = {(i, j): [] for i in range(h) for j in range(w)}
     pe_chunks_x = {(i, j): [] for i in range(h) for j in range(w)}
     b_transformed = None
     
     # Transform data for all layers
     for level_index, level in enumerate(ml.levels[:-1]):
         # Get matrices and vectors (already padded from pad_and_make_dense)
-        A, R = level.A, level.R
+        A, R, P = level.A, level.R, level.P
         M, N = A.shape
         R_M, R_N = R.shape
         x = x_level[level_index]
@@ -675,19 +677,22 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
         per_pe_restrict_cols = R_N // w
         
         print(f"\n\tLayer {level_index} sizes (after padding):")
-        print(f"\t  A: {A.shape} | R: {R.shape}")
+        print(f"\t  A: {A.shape} | R: {R.shape} | P: {P.shape}")
         print(f"\t  x: {x.shape}")
         
         # Transform A matrix using stack/split and store PE-wise
         A_transformed = np.stack(np.split(np.stack(np.split(A, h, axis=1)), w, axis=1))
         # Transform R matrix using stack/split and store PE-wise
-        R_transformed = np.stack(np.split(np.stack(np.split(R, h, axis=1)), w, axis=1))        
+        R_transformed = np.stack(np.split(np.stack(np.split(R, h, axis=1)), w, axis=1))  
+        # P is a transpose of R.
+        P_transformed = np.stack(np.split(np.stack(np.split(P, h, axis=1)), w, axis=1))
         # Transform x vector and store PE-wise (x is already padded)
         x_transformed = x.reshape(h, per_pe_rows)        
         for i in range(h):
             for j in range(w):
                 pe_chunks_A[(i,j)].append(A_transformed[i,j].ravel())
                 pe_chunks_R[(i,j)].append(R_transformed[i,j].ravel())
+                pe_chunks_P[(i,j)].append(P_transformed[i,j].ravel())
                 pe_chunks_x[(i,j)].append(x_transformed[i].ravel())
         
         # Handle b vector for first layer only (b is already padded)
@@ -698,6 +703,7 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
     # Concatenate PE-wise chunks and prepare final blobs
     A_final_blob = []
     R_final_blob = []
+    P_final_blob = []
     x_final_blob = []
     
     for i in range(h):
@@ -705,10 +711,12 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
             # Concatenate all layers for each PE
             A_pe_data = np.concatenate(pe_chunks_A[(i,j)])
             R_pe_data = np.concatenate(pe_chunks_R[(i,j)])
+            P_pe_data = np.concatenate(pe_chunks_P[(i,j)])
             x_pe_data = np.concatenate(pe_chunks_x[(i,j)])
                             
             A_final_blob.append(A_pe_data)
             R_final_blob.append(R_pe_data)
+            P_final_blob.append(P_pe_data)
             x_final_blob.append(x_pe_data)
 
             # if (i,j) == (0,0):
@@ -725,6 +733,7 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
     # Flatten the final blobs
     A_blob = np.concatenate(A_final_blob)
     R_blob = np.concatenate(R_final_blob)
+    P_blob = np.concatenate(P_final_blob)
     x_blob = np.concatenate(x_final_blob)
 
     # Setup solver parameters (same as before)
@@ -736,12 +745,14 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
     print("\n\tFinal blob sizes:")
     print(f"\tA blob: {A_blob.shape}")
     print(f"\tR blob: {R_blob.shape}")
+    print(f"\tP blob: {P_blob.shape}")
     print(f"\tx blob: {x_blob.shape}")
 
     # Copy concatenated data to device
     start_time = time.time()
     simple_memcpy.do_memcpy_h2d(symbols['A'], A_blob, px, py, w, h, A_blob.size//(w*h))
     simple_memcpy.do_memcpy_h2d(symbols['R'], R_blob, px, py, w, h, R_blob.size//(w*h))
+    simple_memcpy.do_memcpy_h2d(symbols['P'], P_blob, px, py, w, h, P_blob.size//(w*h))
     simple_memcpy.do_memcpy_h2d_bcast(symbols['x'], x_blob, px, py, w, h, x_blob.size//(w*h), is_rowbcast=False)
     
     if b_transformed is not None:
@@ -933,7 +944,7 @@ def device_calculations_distributed(v_cycle_data):
     print("Step 8: Copy x_coarse on device")
     copy_x_coarse_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer=None)
     print("Step 9: Print V-Cycle Up")
-    simulator.launch("print_data", nonblock=False)
+    simulator.launch("v_cycle_up", nonblock=False)
     ############################################################
     # Cleanup simulator
     ############################################################
