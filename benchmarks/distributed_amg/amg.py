@@ -73,10 +73,8 @@ def each_layer_solver_up(level, x_level, b_level, ml, setup_config, level_id, x_
 
     # Time prolongation
     prolong_start = time.time()
-    x += P @ x_lower_level  # Prolongation
-    print("level_id", level_id)
-    print("x_lower_level", x_lower_level.flatten()) # x_coarse
-    # print("x+= P @ x_lower_level = ", x.flatten())  # x_tile
+    px = P @ x_lower_level
+    x += px  # Prolongation
     timing.prolongation_time = time.time() - prolong_start
     
     # Time post-smoothing
@@ -84,7 +82,6 @@ def each_layer_solver_up(level, x_level, b_level, ml, setup_config, level_id, x_
     ut.jacobi_csr(A, x, b,
                  omega=get_omega_from_postsmoother(setup_config),
                  iterations=get_iterations_from_postsmoother(setup_config))
-    print("postsmoothing(x)", x.flatten())
     timing.smoothing_time = time.time() - smooth_start
     
     timing.total_time = time.time() - level_start

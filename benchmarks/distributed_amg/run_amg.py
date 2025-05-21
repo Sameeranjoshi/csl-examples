@@ -457,10 +457,8 @@ def host_calculations(v_cycle_data):
             x_current_updated, operator_timing = amg.each_layer_solver_up(level, x_level, b_level, ml, setup_config, i, x_lower_level, hostprofiling)
             x_level[i] = x_current_updated
 
-        ####TODO: Change this to fine layer.
         # Check convergence
-        # residual = b_level[0] - ml.levels[0].A @ x_level[0] # after Up cycle
-        residual = b_level[len(ml.levels)-1] - ml.levels[len(ml.levels)-1].A @ x_level[len(ml.levels)-1] # after down.
+        residual = b_level[0] - ml.levels[0].A @ x_level[0] # after Up cycle
         residual_norm = np.linalg.norm(residual)
         print(f"Residual: {residual_norm:.6e}, tol: {tol:.6e}, iteration: {iteration}")
         if residual_norm <= tol:
@@ -472,7 +470,7 @@ def host_calculations(v_cycle_data):
     amg.debugprint(ml.levels, b_level, x_level)
     # hostprofiling.print_timing_summary()
     # Checks
-    b_solution, x_solution, A_solution = b_level[len(ml.levels)-1], x_level[len(ml.levels)-1], ml.levels[len(ml.levels)-1].A  # last one
+    b_solution, x_solution, A_solution = b_level[0], x_level[0], ml.levels[0].A  # last one
     residual_host = b_solution - A_solution @ x_solution
     residual_host_norm = np.linalg.norm(residual_host)
     return b_solution, x_solution, residual_host_norm
@@ -599,8 +597,14 @@ def copy_x_coarse_on_device(simple_memcpy, simulator, symbols, ml, layer_coordin
         chunk = np.zeros(chunk_size, dtype=np.float32)
         # Place the coarsest x values at the end of the chunk
         chunk[-coarsest_size:] = x_coarse_last_chunks[j]
-        print(f"\tx_coarse_host chunk {j} shape: {chunk.shape}, last {coarsest_size} values set to: {x_coarse_last_chunks[j]}")
+        # print(f"\tx_coarse_host chunk {j} shape: {chunk.shape}, last {coarsest_size} values set to: {x_coarse_last_chunks[j]}")
         x_chunks.append(chunk)
+        # if j == 0:
+        #     print(f"PE({j}) x_coarse_host sizes:")
+        #     print(f"  x_coarse_host chunk {j} shape: {chunk.shape}")
+        #     print(f"  x_coarse_host chunk {j} data: {chunk}")
+            
+
 
     x_blob = np.concatenate(x_chunks)
 
@@ -723,12 +727,14 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
             #     print(f"PE({i},{j}) concatenated sizes:")
             #     print(f"  A: {A_pe_data.shape}")
             #     print(f"  R: {R_pe_data.shape}")
+            #     print(f"  P: {P_pe_data.shape}")
             #     print(f"  x: {x_pe_data.shape}")
                               
-            #     # print("PE(0,0) data:")
-            #     # print(f"A_pe_data: {A_pe_data}")
-            #     # print(f"R_pe_data: {R_pe_data}")
-            #     # print(f"x_pe_data: {x_pe_data}")
+            #     print("PE(0,0) data:")
+            #     print(f"A_pe_data: {A_pe_data}")
+            #     print(f"R_pe_data: {R_pe_data}")
+            #     print(f"P_pe_data: {P_pe_data}")
+            #     print(f"x_pe_data: {x_pe_data}")
 
     # Flatten the final blobs
     A_blob = np.concatenate(A_final_blob)
@@ -938,22 +944,22 @@ def device_calculations_distributed(v_cycle_data):
     x_coarsest[:] = perform_coarse_solve(ml, A_coarsest, x_coarsest, b_coarsest, solver_callable_host)
 
 
-    print("Step 7: Print V-Cycle Down Results")
-    amg.debugprint(ml.levels, b_level, x_level)
+    # print("Step 7: Print V-Cycle Down Results")
+    # amg.debugprint(ml.levels, b_level, x_level)
     
-    print("Step 8: Copy x_coarse on device")
+    print("Step 7: Copy x_coarse on device")
     copy_x_coarse_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer=None)
     
-    print("Step 9: Print V-Cycle Up")
+    print("Step 8: V-Cycle Up")
+    # simulator.launch("print_data", nonblock=False)
     simulator.launch("v_cycle_up", nonblock=False)
     
     # # D2H transfers
-    print("Step 10: D2H Transfers x_smoothed and b_next")
+    print("Step 9: D2H Transfers x_smoothed and b_next")
     x_level = copy_all_layers_from_device(simple_memcpy, symbols, ml, total_pe_rows, total_pe_cols, x_level, 'x', is_b_level=False)
-    print(f"x_level: {x_level}")
     
     # debugprint up cycle
-    print("Step 11: Debugprint Up Cycle")
+    print("Step 10: Debugprint Up Cycle")
     amg.debugprint(ml.levels, b_level, x_level)
     
     ############################################################
@@ -967,7 +973,7 @@ def device_calculations_distributed(v_cycle_data):
     # print("\nTiming analysis complete. Open timing_report.html to view the results.")
         
     # We only need to unpad b as x is not padded.
-    A_solution, b_solution_device, x_solution_device = ml.levels[len(ml.levels)-1].A, b_level[len(ml.levels)-1], x_level[len(ml.levels)-1]
+    A_solution, b_solution_device, x_solution_device = ml.levels[0].A, b_level[0], x_level[0]
     b_solution_device_unpadded = unpad_1d(b_solution_device, A_solution.shape[0])   # Todo: Remove later.
     residual_device = np.linalg.norm(b_solution_device_unpadded - A_solution @ x_solution_device)
     return b_solution_device, x_solution_device, residual_device
@@ -1004,8 +1010,8 @@ def main():
   print("############################################################")
   print("# INPUT DATA")
   print("############################################################")
-  N = 4
-  M = 4
+  N = 3
+  M = 3
   eps = 1.e-5
   max_iterations = 1
     

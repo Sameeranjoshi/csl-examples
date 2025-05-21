@@ -29,8 +29,6 @@ const STATE_CHECK_JACOBI_ITERATION: u16 = 5;
 const STATE_COMPUTE_RESIDUAL: u16 = 6;
 const STATE_BCAST_RESIDUAL: u16 = 7;
 const STATE_COMPUTE_RESTRICTION: u16 = 8;
-const STATE_PROLONGATION: u16 = 9;
-const STATE_BCAST_PROLONGATION: u16 = 10;
 const STATE_BCAST_B_TILE_RIGHT: u16 = 11;
 const STATE_NEXT_LAYER_CHECK: u16 = 12;
 const STATE_MOVE_B_NEXT_TO_B_TILE: u16 = 13;
@@ -68,7 +66,8 @@ const mpi_y = @import_module("<collectives_2d/pe>", .{
     .src1_dsr_ids = [1]u16{2}
     });
 const simprint = @import_module("<simprint>", .{ .enable = false });
-const simprint2 = @import_module("<simprint>", .{ .enable = true });
+const simprint2 = @import_module("<simprint>", .{ .enable = false });
+const simprint3 = @import_module("<simprint>", .{ .enable = true });
 // const broadcast_diagonal = @import_module("broadcast.csl", .{
 //     .color_1 = @get_color(19),
 //     .pe_id = pe_id_x,
@@ -228,7 +227,6 @@ var layer_index_i: u16;
 var px: u16;
 var py: u16;
 var is_v_cycle_up: bool = false;
-var v_cycle_iteration: i32 = 0;
 var cur_state: u16 = 0;// State tracking variables
 var next_state: u16 = 0;
 var current_active_layer_index: u16 = 0;
@@ -239,21 +237,17 @@ var buf = @zeros([1]f32);
 // Tasks
 // ##############################################
 fn state_exit() void {
-  simprint2.fmt_with_coords("STATE_EXIT layer_index={d}", .{current_active_layer_index });
-  // // if (pe_id_x == 1) {
-  //   for (b_next) |val, i| {
-  //     simprint2.fmt_with_coords("b_next_final[{d}] = {f}", .{ i, val });
-  //   }
-  // // }
-
-  // x_tile
-  if (pe_id_y == 0) {
+  simprint3.fmt_with_coords("STATE_EXIT layer_index={d}", .{current_active_layer_index });
+  if (pe_id_y == 0 and pe_id_x == 0) {
     for (x_tile) |val, i| {
-      simprint2.fmt_with_coords("x_tile[{d}] = {f}", .{ i, val });
+      simprint3.fmt_with_coords("x_tile[{d}] = {f}", .{ i, val });
+    }
+    for (b_next) |val, i| {
+      simprint3.fmt_with_coords("b_next[{d}] = {f}", .{ i, val });
     }
   }
 
-  simprint2.print_string("\n");
+  simprint3.print_string("\n");
   sys_mod.unblock_cmd_stream();
 }
 
@@ -270,8 +264,6 @@ task f_state() void {
       STATE_COMPUTE_RESTRICTION => state_compute_restriction(),
       STATE_NEXT_LAYER_CHECK => state_next_layer_check(),
       STATE_MOVE_B_NEXT_TO_B_TILE => state_move_b_next_to_b_tile(),
-      STATE_PROLONGATION => state_prolongation(),
-      STATE_BCAST_PROLONGATION => state_bcast_prolongation(),
       STATE_EXIT => state_exit(),
       STATE_BCAST_X_COARSE => state_bcast_x_coarse(),
       STATE_COMPUTE_PROLONGATION_UP => state_compute_prolongation_up(),
@@ -359,31 +351,15 @@ fn init_dsds_for_layer(layer_index: u16) void {
   b_next_struct_i = dsd_struct { .base_address = &b_next, .stride = 1, .extent = R_M_local_i, .offset = @as(i16, get_offset(&layer_offset_map_b_next, layer_index)) };
   dsd_b_next = get_runtime_dsd_i(b_next_struct_i);
 
+  // Debug: print DSD offsets and extents for key temporaries
   // if (pe_id_x == 0 and pe_id_y == 0) {
-  //   simprint.fmt_with_coords("layer_index={d}\n", .{layer_index_i});
-  //   // print all sizes.
-  //   simprint.fmt_with_coords("M_i={d}, N_i={d}, M_local_i={d}, N_local_i={d}, R_M_local_i={d}, R_N_local_i={d}, layer_index_i={d}\n", .{M_i, N_i, M_local_i, N_local_i, R_M_local_i, R_N_local_i, layer_index_i});
-  //   simprint.print_string("A_tile\n");
-  //   @map(print_dsd_layer, dsd_A_tile);
-  //   simprint.print_string("A_diag\n");
-  //   @map(print_dsd_layer, dsd_A_diag);
-  //   simprint.print_string("R_tile\n");
-  //   @map(print_dsd_layer, dsd_R_tile);
-  //   simprint.print_string("P_tile\n");
-  //   @map(print_dsd_layer, dsd_P_tile);
-  //   simprint.print_string("x_tile\n");
-  //   @map(print_dsd_layer, dsd_x_tile);
-  //   simprint.print_string("b_tile\n");
-  //   @map(print_dsd_layer, dsd_b_tile);
-  //   simprint.print_string("b_next\n");
-  //   @map(print_dsd_layer, dsd_b_next);
+  //   simprint3.fmt_with_coords("M_i={d}, N_i={d}, M_local_i={d}, N_local_i={d}, R_M_local_i={d}, R_N_local_i={d}, layer_index_i={d}\n", .{M_i, N_i, M_local_i, N_local_i, R_M_local_i, R_N_local_i, layer_index_i});
   // }
-
 }
 
-// fn print_b_next_final(value: f32) void {
-//   simprint.fmt_with_coords("b_next_final[] = {f}", .{value});
-// }
+fn print_dsd_layer(value: f32) void {
+  simprint3.fmt_with_coords("value[] = {f}", .{value});
+}
 
 fn print_x_coarse_dsd(value: f32) void {
   simprint2.fmt_with_coords("x_coarse_dsd[] = {f}", .{value});
@@ -428,18 +404,22 @@ fn print_data() void {
   //   for (R_tile) |val, i| {
   //     simprint.fmt_with_coords("R_tile[{d}] = {f}", .{ i, val });
   //   }
-  //   simprint.print_string("x_tile\n");
-  //   for (x_tile) |val, i| {
-  //     simprint.fmt_with_coords("x_tile[{d}] = {f}", .{ i, val });
-  //   }
+      // simprint3.print_string("x_tile\n");
+      // for (x_tile) |val, i| {
+      //   simprint3.fmt_with_coords("x_tile[{d}] = {f}", .{ i, val });
+      // }
+      // simprint3.print_string("P_tile\n");
+      // for(P_tile) |val, i| {
+      //   simprint3.fmt_with_coords("P_tile[{d}] = {f}", .{ i, val });
+      // }
     // simprint2.print_string("b_tile\n");
     // for (b_tile) |val, i| {
     //   simprint2.fmt_with_coords("b_tile[{d}] = {f}", .{ i, val });
     // }
-      simprint2.print_string("x_coarse\n");
-      for (x_coarse) |val, i| {
-        simprint2.fmt_with_coords("x_coarse[{d}] = {f}", .{ i, val });
-      }
+      // simprint3.print_string("x_coarse\n");
+      // for (x_coarse) |val, i| {
+      //   simprint3.fmt_with_coords("x_coarse[{d}] = {f}", .{ i, val });
+      // }
 
   //   // 
   //   simprint.print_string("A_tiles_total_size\n");
@@ -450,8 +430,8 @@ fn print_data() void {
   //   simprint.fmt_with_coords("x_tiles_total_size = {d}", .{x_tiles_total_size});
     // simprint2.print_string("b_tiles_total_size\n");
     // simprint2.fmt_with_coords("b_tiles_total_size = {d}", .{b_tiles_total_size});
-    simprint2.print_string("x_coarse_total_size\n");
-    simprint2.fmt_with_coords("x_coarse_total_size = {d}", .{x_coarse_total_size});
+    // simprint2.print_string("x_coarse_total_size\n");
+    // simprint2.fmt_with_coords("x_coarse_total_size = {d}", .{x_coarse_total_size});
 
   }
   sys_mod.unblock_cmd_stream();
@@ -494,13 +474,13 @@ fn state_bcast_b_tile_right() void {
 
 // State machine tasks
 fn state_init() void {
-  simprint.fmt_with_coords("STATE_INIT, layer_index={d}", .{ @as(u32, current_active_layer_index) });
+  simprint3.fmt_with_coords("STATE_INIT, layer_index={d}", .{ @as(u32, current_active_layer_index) });
   next_state = STATE_COMPUTE_JACOBI;
   initialize();
 }
 
 fn state_compute_jacobi() void {
-  simprint2.fmt_with_coords("JACOBI(iter_count={d}), layer_index={d}", .{ iter_count, @as(u32, current_active_layer_index) });
+  simprint3.fmt_with_coords("JACOBI(iter_count={d}), layer_index={d}", .{ iter_count, @as(u32, current_active_layer_index) });
   iter_count += 1;
   next_state = STATE_BCAST_JACOBI;
   compute_jacobi();
@@ -584,24 +564,12 @@ fn state_move_b_next_to_b_tile() void {
   f_trigger_state_machine();
 }
 
-fn state_prolongation() void {
-  next_state = STATE_BCAST_PROLONGATION;
-  compute_prolongation();
-}
-
-fn state_bcast_prolongation() void {
-  next_state = STATE_CHECK_JACOBI_ITERATION;
-  bcast_prolongation();
-}
-
 /////////////////////////////////////////////////////////
 /// Functions
 /////////////////////////////////////////////////////////
 
 fn initialize() void {
-
-  v_cycle_iteration += 1;
-  is_v_cycle_up = false;
+  // is_v_cycle_up = false;
   iter_count = 0;
   cur_state = next_state;
 
@@ -934,13 +902,13 @@ fn v_cycle_up() void {
 fn state_v_cycle_up() void {
   // Decrement layer and re-init DSDs, or exit if done
   current_active_layer_index = current_active_layer_index - 1;
-  simprint2.fmt_with_coords("v_cycle_up layer_index={d}", .{current_active_layer_index});
+  simprint3.fmt_with_coords("v_cycle_up layer_index={d}", .{current_active_layer_index});
   if (current_active_layer_index >= 0) {
     init_dsds_for_layer(current_active_layer_index);
     cur_state = STATE_BCAST_X_COARSE;
     @activate(STATE_MACHINE);
   } else {
-    simprint2.fmt_with_coords("Exitting v_cycle_up as current_active_layer_index={d}", .{current_active_layer_index});
+    simprint3.fmt_with_coords("Exitting v_cycle_up as current_active_layer_index={d}", .{current_active_layer_index});
     cur_state = STATE_EXIT;
     @activate(STATE_MACHINE);
   }
@@ -948,7 +916,6 @@ fn state_v_cycle_up() void {
 
 // 1. Broadcast x_coarse along columns (mpi_y)
 fn state_bcast_x_coarse() void {
-  simprint2.print_string("state_bcast_x_coarse\n");
   cur_state = STATE_COMPUTE_PROLONGATION_UP;
   if (pe_id_y == 0) {
     var send_buf = @ptrcast([*]u32, &x_coarse_struct_i.base_address[x_coarse_struct_i.offset]);
@@ -964,7 +931,6 @@ fn state_bcast_x_coarse() void {
 
 // 2. Local matvec: Px = P_tile @ x_coarse
 fn state_compute_prolongation_up() void {
-  simprint2.print_string("state_compute_prolongation_up\n");
   next_state = STATE_REDUCE_PX_UP;
   const x_coarse_vector: [*]const f32 = @ptrcast([*]const f32, &x_coarse_struct_i.base_address[x_coarse_struct_i.offset]); // summedinto
   const vectorsize = x_coarse_struct_i.extent;
@@ -974,7 +940,6 @@ fn state_compute_prolongation_up() void {
 
 // 3. Reduce Px to px_sum_tile along rows towards diagonal (mpi_x)
 fn state_reduce_px_up() void {
-  simprint.print_string("state_reduce_px_up\n");
   cur_state = STATE_UPDATE_X_TILE_UP;
   var send_buf = @ptrcast([*]f32, &Px_struct_i.base_address[Px_struct_i.offset]);
   var sizetosend = Px_struct_i.extent;
@@ -984,7 +949,6 @@ fn state_reduce_px_up() void {
 
 // 4. x_tile = x_tile + px_sum_tile (only on diagonal PEs)
 fn state_update_x_tile_up() void {
-  simprint.print_string("state_update_x_tile_up\n");
   next_state = STATE_BCAST_X_TILE_UP;
   @fadds(dsd_x_tile, dsd_x_tile, dsd_px_sum_tile);
   f_trigger_state_machine();
@@ -992,10 +956,8 @@ fn state_update_x_tile_up() void {
 
 // 5. Broadcast x_tile along columns (from diagonal PEs)
 fn state_bcast_x_tile_up() void {
-  simprint.print_string("state_bcast_x_tile_up\n");
-  is_v_cycle_up = true;
-  iter_count = 0;
-  cur_state = STATE_COMPUTE_JACOBI;
+  is_v_cycle_up = true; // This is must to change the cycle direction.
+  cur_state = STATE_INIT;
   if (px == py) {
     var send_buf = @ptrcast([*]u32, &x_tile_struct_i.base_address[x_tile_struct_i.offset]);
     var sizetosend = x_tile_struct_i.extent;
@@ -1010,8 +972,7 @@ fn state_bcast_x_tile_up() void {
 // Move x_tile to x_coarse for the previous layer (up-cycle)
 // Copy x_tile (current layer) to x_coarse (previous layer)
 fn state_move_x_tile_to_previous_x_coarse() void {
-  simprint2.print_string("state_move_x_tile_to_previous_x_coarse\n");
-
+  simprint3.print_string("state_move_x_tile_to_previous_x_coarse\n");
   if (current_active_layer_index > 0) {
     const prev_layer_index = current_active_layer_index - 1;
     const x_coarse_size = @as(i16, get_size(&layer_size_map_x_coarse, prev_layer_index));
@@ -1021,7 +982,7 @@ fn state_move_x_tile_to_previous_x_coarse() void {
     next_state = STATE_V_CYCLE_UP;
     f_trigger_state_machine();
   } else {
-    simprint2.print_string("Exiting v_cycle_up at finest level (no more levels)\n");
+    simprint3.print_string("Exiting v_cycle_up at finest level (no more levels)\n");
     next_state = STATE_EXIT;
     f_trigger_state_machine();
   }
