@@ -1010,8 +1010,8 @@ def main():
   print("############################################################")
   print("# INPUT DATA")
   print("############################################################")
-  N = 3
-  M = 3
+  N = 15
+  M = 15
   eps = 1.e-5
   max_iterations = 1
     
@@ -1078,16 +1078,16 @@ def main():
   print("############################################################")
   b_final_device, x_final_device, residual_device = device_calculations_distributed(v_cycle_data_device) # changed to dataflow
   print("\nDEVICE CALCULATIONS DONE")
-  print(f"\t Residual Device ||AX-b||:", residual_device)
-  print(f"\t b_solution_final Device:", b_final_device)
+#   print(f"\t Residual Device ||AX-b||:", residual_device)
+#   print(f"\t b_solution_final Device:", b_final_device)
   print("############################################################")
   print("# COMPARISON")
   print("############################################################")
   
   x_final_device = unpad_1d(x_final_device, x_final_host.shape[0])
   b_final_device = unpad_1d(b_final_device, b_final_host.shape[0])  # HACK remove later.
-  print(f"x_final_device(unpadded): {x_final_device}")
-  print(f"b_final_device(unpadded): {b_final_device}")
+#   print(f"x_final_device(unpadded): {x_final_device}")
+#   print(f"b_final_device(unpadded): {b_final_device}")
   assert np.allclose(residual_host, residual_device, atol=1e-6), "Residual do not match!"
   assert np.allclose(x_final_host, x_final_device, atol=1e-6), "x_final of host and device do not match!"
   assert np.allclose(b_final_host, b_final_device, atol=1e-6), "b_final of host and device do not match!"

@@ -132,7 +132,7 @@ amg_paper_layout = {
 }
 
 amg_2_layers = {
-    0: {"layer_start_x": 0, "layer_start_y": 0, "layer_pe_cols": 2, "layer_pe_rows":2}
+    0: {"layer_start_x": 0, "layer_start_y": 0, "layer_pe_cols": 8, "layer_pe_rows":8}
 }
 
 
