@@ -39,7 +39,8 @@ const STATE_COMPUTE_PROLONGATION_UP: u16 = 15;
 const STATE_REDUCE_PX_UP: u16 = 16;
 const STATE_UPDATE_X_TILE_UP: u16 = 17;
 const STATE_BCAST_X_TILE_UP: u16 = 18;
-const STATE_MOVE_X_TILE_TO_X_COARSE: u16 = 19;
+const STATE_MOVE_X_TILE_TO_PREVIOUS_X_COARSE: u16 = 19;
+const STATE_V_CYCLE_UP: u16 = 20;
 
 // ##############################################
 // TASKS, COLORS, QUEUES
@@ -277,7 +278,8 @@ task f_state() void {
       STATE_REDUCE_PX_UP => state_reduce_px_up(),
       STATE_UPDATE_X_TILE_UP => state_update_x_tile_up(),
       STATE_BCAST_X_TILE_UP => state_bcast_x_tile_up(),
-      STATE_MOVE_X_TILE_TO_X_COARSE => state_move_x_tile_to_x_coarse(),
+      STATE_MOVE_X_TILE_TO_PREVIOUS_X_COARSE => state_move_x_tile_to_previous_x_coarse(),
+      STATE_V_CYCLE_UP => state_v_cycle_up(),
       else => {
           simprint.print_string("Error: unknown state\n");
           @assert(false);
@@ -378,17 +380,6 @@ fn init_dsds_for_layer(layer_index: u16) void {
   // }
 
 }
-// fn print_restriction_dsd(value: f32) void {
-//   simprint.fmt_with_coords("DSD_restriction_after[] = {f}", .{value});
-// }
-
-// fn print_dsd(value: f32) void {
-//   simprint.fmt_with_coords("DSD_residual_after[] = {f}", .{value});
-// }
-
-// fn print_dsd_layer(value: f32) void {
-//   simprint.fmt_with_coords("DSD_layer[] = {f}", .{value});
-// }
 
 // fn print_b_next_final(value: f32) void {
 //   simprint.fmt_with_coords("b_next_final[] = {f}", .{value});
@@ -396,14 +387,6 @@ fn init_dsds_for_layer(layer_index: u16) void {
 
 fn print_x_coarse_dsd(value: f32) void {
   simprint2.fmt_with_coords("x_coarse_dsd[] = {f}", .{value});
-}
-
-fn print_P_tile_dsd(value: f32) void {
-  simprint2.fmt_with_coords("P_tile_dsd[] = {f}", .{value});
-}
-
-fn print_R_tile_dsd(value: f32) void {
-  simprint2.fmt_with_coords("R_tile_dsd[] = {f}", .{value});
 }
 
 fn print_total_data_size() void {
@@ -482,7 +465,6 @@ fn print_data() void {
 comptime {
   // Bind all state tasks
   @bind_local_task(f_state, STATE_MACHINE);
-  // @bind_local_task(state_exit, state_exit_id);
   @bind_local_task(no_op, no_op_id);
 
   @export_symbol(ptr_A, "A");
@@ -538,7 +520,7 @@ fn state_check_jacobi() void {
       next_state = STATE_COMPUTE_JACOBI;
   } else {
       if (is_v_cycle_up) {
-          next_state = STATE_MOVE_X_TILE_TO_X_COARSE;
+          next_state = STATE_MOVE_X_TILE_TO_PREVIOUS_X_COARSE;
       } else {
           next_state = STATE_COMPUTE_RESIDUAL;
       }
@@ -945,16 +927,20 @@ fn get_offset(layer_offset_map: *const [total_levels_count] u16, index: u16) u16
 
 // v_cycle_up entrypoint
 fn v_cycle_up() void {
-  // Start at the current active layer
-  current_active_layer_index = current_active_layer_index - 1;  // The down cycle has moved 1 extra layer during check.
+  cur_state = STATE_V_CYCLE_UP;
+  @activate(STATE_MACHINE);
+}
+
+fn state_v_cycle_up() void {
+  // Decrement layer and re-init DSDs, or exit if done
+  current_active_layer_index = current_active_layer_index - 1;
   simprint2.fmt_with_coords("v_cycle_up layer_index={d}", .{current_active_layer_index});
   if (current_active_layer_index >= 0) {
     init_dsds_for_layer(current_active_layer_index);
     cur_state = STATE_BCAST_X_COARSE;
     @activate(STATE_MACHINE);
   } else {
-    // Done with v_cycle_up, can transition to next phase or exit
-    simprint2.print_string("Exitting v_cycle_up as current_active_layer_index is 0\n");
+    simprint2.fmt_with_coords("Exitting v_cycle_up as current_active_layer_index={d}", .{current_active_layer_index});
     cur_state = STATE_EXIT;
     @activate(STATE_MACHINE);
   }
@@ -988,7 +974,7 @@ fn state_compute_prolongation_up() void {
 
 // 3. Reduce Px to px_sum_tile along rows towards diagonal (mpi_x)
 fn state_reduce_px_up() void {
-  simprint2.print_string("state_reduce_px_up\n");
+  simprint.print_string("state_reduce_px_up\n");
   cur_state = STATE_UPDATE_X_TILE_UP;
   var send_buf = @ptrcast([*]f32, &Px_struct_i.base_address[Px_struct_i.offset]);
   var sizetosend = Px_struct_i.extent;
@@ -998,7 +984,7 @@ fn state_reduce_px_up() void {
 
 // 4. x_tile = x_tile + px_sum_tile (only on diagonal PEs)
 fn state_update_x_tile_up() void {
-  simprint2.print_string("state_update_x_tile_up\n");
+  simprint.print_string("state_update_x_tile_up\n");
   next_state = STATE_BCAST_X_TILE_UP;
   @fadds(dsd_x_tile, dsd_x_tile, dsd_px_sum_tile);
   f_trigger_state_machine();
@@ -1006,7 +992,7 @@ fn state_update_x_tile_up() void {
 
 // 5. Broadcast x_tile along columns (from diagonal PEs)
 fn state_bcast_x_tile_up() void {
-  simprint2.print_string("state_bcast_x_tile_up\n");
+  simprint.print_string("state_bcast_x_tile_up\n");
   is_v_cycle_up = true;
   iter_count = 0;
   cur_state = STATE_COMPUTE_JACOBI;
@@ -1022,35 +1008,21 @@ fn state_bcast_x_tile_up() void {
 }
 
 // Move x_tile to x_coarse for the previous layer (up-cycle)
-fn state_move_x_tile_to_x_coarse() void {
-  simprint2.print_string("state_move_x_tile_to_x_coarse\n");
-  // print x_coarse before
-  // if (pe_id_x == 0 and pe_id_y == 0) {
-  //   for (x_coarse) |val, i| {
-  //     simprint2.fmt_with_coords("x_coarse_before[{d}] = {f}", .{ i, val });
-  //   }
-  // }
+// Copy x_tile (current layer) to x_coarse (previous layer)
+fn state_move_x_tile_to_previous_x_coarse() void {
+  simprint2.print_string("state_move_x_tile_to_previous_x_coarse\n");
 
-  const prev_layer_index = current_active_layer_index - 1;
-  if (prev_layer_index >= 0) {
-    
+  if (current_active_layer_index > 0) {
+    const prev_layer_index = current_active_layer_index - 1;
     const x_coarse_size = @as(i16, get_size(&layer_size_map_x_coarse, prev_layer_index));
     var dsd_x_coarse_prev = @increment_dsd_offset(dsd_x_coarse, -x_coarse_size, f32);
-    // Copy x_tile (current layer) to x_coarse (previous layer)
     @fmovs(dsd_x_coarse_prev, dsd_x_tile);
-
-    // if (pe_id_x == 0 and pe_id_y == 0) {
-    //   for (x_coarse) |val, i| {
-    //     simprint2.fmt_with_coords("x_coarse_final[{d}] = {f}", .{ i, val });
-    //   }
-    // }
-    next_state = STATE_EXIT;
+    // Instead of recursion, go to STATE_V_CYCLE_UP
+    next_state = STATE_V_CYCLE_UP;
     f_trigger_state_machine();
   } else {
-    // Done with v_cycle_up, can transition to next phase or exit
-    simprint2.print_string("Exitting v_cycle_up as current_active_layer_index is 0\n");
+    simprint2.print_string("Exiting v_cycle_up at finest level (no more levels)\n");
     next_state = STATE_EXIT;
     f_trigger_state_machine();
   }
-
 }

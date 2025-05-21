@@ -943,8 +943,19 @@ def device_calculations_distributed(v_cycle_data):
     
     print("Step 8: Copy x_coarse on device")
     copy_x_coarse_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer=None)
+    
     print("Step 9: Print V-Cycle Up")
     simulator.launch("v_cycle_up", nonblock=False)
+    
+    # # D2H transfers
+    print("Step 10: D2H Transfers x_smoothed and b_next")
+    x_level = copy_all_layers_from_device(simple_memcpy, symbols, ml, total_pe_rows, total_pe_cols, x_level, 'x', is_b_level=False)
+    print(f"x_level: {x_level}")
+    
+    # debugprint up cycle
+    print("Step 11: Debugprint Up Cycle")
+    amg.debugprint(ml.levels, b_level, x_level)
+    
     ############################################################
     # Cleanup simulator
     ############################################################
@@ -993,8 +1004,8 @@ def main():
   print("############################################################")
   print("# INPUT DATA")
   print("############################################################")
-  N = 3
-  M = 3
+  N = 4
+  M = 4
   eps = 1.e-5
   max_iterations = 1
     
