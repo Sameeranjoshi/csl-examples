@@ -124,7 +124,9 @@ def generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_col
     cslc, layout_file, arch = "cslc", generated_layout_file , "wse2"
 
     # Can Change based on problem size.
-    channels, width_west_buf, width_east_buf = 1, 0, 0
+    channels = 16 if total_pe_rows > 16 else total_pe_rows
+    width_west_buf = 0
+    width_east_buf = 0
     assert channels <= 16, "only support up to 16 I/O channels"
     assert channels >= 1, "number of I/O channels must be at least 1"    
     fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y = calculate_fabric_dimensions(total_pe_cols, total_pe_rows, width_west_buf, width_east_buf)
