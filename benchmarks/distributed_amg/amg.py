@@ -1,4 +1,3 @@
-
 import warnings
 from matplotlib import pyplot as plt
 from tabulate import tabulate
@@ -144,7 +143,7 @@ def AMG_test(ml, setup_config, x_level, b_level, solver, max_level=10, max_coars
     
 # solve a linear system A * x = b
 # where A is a symmetric positive definite matrix
-# The AMG algorithm is from pyamg, https://github.com/pyamg/pyamg
+# The AMG algorithm understood from pyamg, https://github.com/pyamg/pyamg
 
 # only V cycle, iterative version
 def AMG_only_solve(A_csr, b0, x0, tol, max_ite, max_levels, max_coarse, solver):
@@ -241,11 +240,6 @@ def print_table_shapes(levels):
         else:
             level_info['A_shape'] = "N/A"
 
-        # # Handle B
-        # if hasattr(level, 'B') and level.B is not None:
-        #     format_str = level.B.format if hasattr(level.B, 'format') else 'dense'
-        #     level_info[f'B_shape({level.B.dtype},{format_str})'] = f"{level.B.shape}"
-
         # Handle R
         if hasattr(level, 'R') and level.R is not None:
             format_str = level.R.format if hasattr(level.R, 'format') else 'dense'
@@ -273,27 +267,6 @@ def print_table_shapes(levels):
     # Print table
     print(tabulate(level_data, headers="keys", tablefmt="grid"))
 
-def print_table_data(levels):
-    level_data = []
-    
-    for idx, level in enumerate(levels):
-        A, b = level.A, level.B
-
-        # Convert first row of A to a readable format
-        A_str = np.array2string(A.toarray()[0, 0:5], separator=', ')
-
-        # Convert first 5 elements of B to a readable format
-        B_str = np.array2string(b[0:5].flatten(), separator=', ')
-
-
-        level_data.append({
-            "Level": idx,
-            "A[0:5]": A_str,
-            "B[0:5]": B_str,
-        })
-
-    print(tabulate(level_data, headers="keys", tablefmt="grid"))
-
 def debugprint(levels, b_level, x_level):
     level_data_clone = []
     for i, level in enumerate(levels):
@@ -308,42 +281,6 @@ def debugprint(levels, b_level, x_level):
         })
     print(tabulate(level_data_clone, headers="keys", tablefmt="grid"))  
 
-def visualize(ml):
-    # Determine the number of levels
-    num_levels = len(ml.levels)
-    
-    # Calculate the number of rows and columns for the grid
-    grid_size = math.ceil(math.sqrt(num_levels))  # Calculate grid size (square-like)
-    fig, axes = plt.subplots(grid_size, grid_size, figsize=(5 * grid_size, 5 * grid_size))
-    
-    # Flatten the axes array in case it's a 2D array (for easy indexing)
-    axes = axes.flatten()
-
-    for i, level in enumerate(ml.levels):
-        A_viz = level.A
-        R_viz = level.R if hasattr(level, 'R') else None
-        P_viz = level.P if hasattr(level, 'P') else None
-        # Plot sparsity pattern for A
-        axes[i].spy(A_viz.toarray(), markersize=2)
-        axes[i].set_title(f"Level {i+1} - A")
-        # Plot sparsity pattern for R
-        if R_viz is not None and i+1 < len(axes):
-            axes[i+1].spy(R_viz.toarray(), markersize=2)
-            axes[i+1].set_title(f"Level {i+1} - R")
-        # Plot sparsity pattern for P
-        if P_viz is not None and i+2 < len(axes):
-            axes[i+2].spy(P_viz.toarray(), markersize=2)
-            axes[i+2].set_title(f"Level {i+1} - P")
-    
-    # Hide any unused subplots (if num_levels is less than grid_size^2)
-    for j in range(num_levels, len(axes)):
-        axes[j].axis('off')
-
-    # Adjust layout and save the figure
-    plt.tight_layout()
-    plt.savefig("sparse_matrix_visualization.png", dpi=300)
-    plt.show()
-    
 def get_omega_from_postsmoother(smoothed_aggregation_solver_config):
     # Extract omega from postsmoother configuration
     postsmoother_config = smoothed_aggregation_solver_config.get('postsmoother', None)

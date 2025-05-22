@@ -42,32 +42,6 @@ def calculate_fabric_dimensions(width, height, width_west_buf, width_east_buf):
   assert fabric_height >= min_fabric_height
 
   return fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y
- 
-def logs(run_args, logs_dir):
-
-  if run_args.cmaddr is None:
-    # move simulation log and core dump to the given folder
-    dst_log = Path(f"{logs_dir}/sim.log")
-    src_log = Path("sim.log")
-    if src_log.exists():
-      shutil.move(src_log, dst_log)
-
-    dst_trace = Path(f"{logs_dir}/simfab_traces")
-    src_trace = Path("simfab_traces")
-    if dst_trace.exists():
-      shutil.rmtree(dst_trace)
-    if src_trace.exists():
-      shutil.move(src_trace, dst_trace)
-    
-    # Move all files and directories starting with "sim" to the logs_dir
-    for item in Path().glob('sim*'):
-        dest = Path(logs_dir) / item.name
-        if dest.exists():
-            if dest.is_dir():
-                shutil.rmtree(dest)
-            else:
-                dest.unlink()
-        shutil.move(str(item), str(logs_dir))
 
 # New time logs.
 def time_logs_new(h, w, hardware_timing, h2d_time, d2h_time, is_downward, level_index, iteration, filename="./reports/v_cycle_up_down.csv", deviceprofiling=None):
@@ -98,59 +72,7 @@ def time_logs_new(h, w, hardware_timing, h2d_time, d2h_time, is_downward, level_
     )
     deviceprofiling.add_timing(level_index, timing, direction)
     return df
-  
-  # 1. memory usage per pe.
-  # Calculate memory usage per PE based on array sizes
 
-# The shapes or the data stored on PE might change, this is just a rough estimate.
-def find_max_memory_usage(layer_param_map, layer_coordinates_map):
-    print("\nMemory allocation(max static) per PE:")
-    for level_index in layer_param_map:
-        shapes = layer_param_map[level_index]["layer_data_shapes"]
-        M = shapes["layer_M"]
-        N = shapes["layer_N"] 
-        R_M = shapes["layer_R_M"]
-        R_N = shapes["layer_R_N"]
-        
-        mem_A = M*N*4  # A matrix (float32 = 4 bytes)
-        mem_R = R_M*R_N*4  # R matrix
-        mem_P = R_N*R_M*4  # P matrix
-        mem_x = N*4  # x vector
-        mem_b = M*4  # b vector
-        mem_residual = M*4  # residual vector
-        mem_b_coarse = R_M*4  # b_coarse vector
-        mem_x_coarse = R_M*4  # x_coarse vector
-        
-        total_mem_per_pe = mem_A + mem_R + mem_P + mem_x + mem_b + mem_residual + mem_b_coarse + mem_x_coarse
-        # Used hypersparse memory usage example, 48KB total per WSE-2, 2KB maybe for instructions.
-        assert total_mem_per_pe < 46*1024, "exceed maximum memory capacity (46KB), increase the core rectangle"
-        print(f"Level {level_index}:")
-        print(f"  Per PE max memory: {total_mem_per_pe/1024:.2f} KB")
-        # 2. memory usage per layer.
-        coords = layer_coordinates_map[0]
-        num_pes = coords["layer_pe_cols"] * coords["layer_pe_rows"]
-        print(f"  Total memory(wxh): {total_mem_per_pe*num_pes/1024:.2f} KB({coords['layer_pe_cols']}x{coords['layer_pe_rows']})")
-    
-            
-def find_total_pes_used(layer_coordinates_map):
-    """
-    Selects the best total PE column and row calculation method 
-    with the simplest logic.
-    """
-
-    # Compute max and sum of layer PE counts
-    sum_pe_cols = sum(layer['layer_pe_cols'] for layer in layer_coordinates_map.values())
-    sum_pe_rows = sum(layer['layer_pe_rows'] for layer in layer_coordinates_map.values())
-    max_pe_cols = max(layer['layer_start_x'] + layer['layer_pe_cols'] for layer in layer_coordinates_map.values())  
-    max_pe_rows = max(layer['layer_start_y'] + layer['layer_pe_rows'] for layer in layer_coordinates_map.values())  
-
-    if abs(sum_pe_cols - max_pe_cols) < abs(sum_pe_rows - max_pe_rows):
-        return sum_pe_cols, max_pe_rows  # sum, max (Row-wise stacking)
-    elif abs(sum_pe_rows - max_pe_rows) < abs(sum_pe_cols - max_pe_cols):
-        return max_pe_cols, sum_pe_rows  # max, sum (Column-wise stacking)
-    else:
-        return sum_pe_cols, sum_pe_rows  # Safe fallback
-      
 def run_command(command):
     try:
         result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -302,7 +224,7 @@ def create_layer_param_map(ml, layer_coordinates_input=None):
     
   return layer_params_map, layer_coordinates_map
 
-def generate_dynamic_layout(run_args, ml, layer_coordinates_map:Optional[dict]=None, filename="images/layer_mapping.png"):
+def generate_dynamic_layout(run_args, ml, layer_coordinates_map:Optional[dict]=None):
   # This is a function to generate dynamic layout based on the problem size.
   
   # global data regardless of layers.
@@ -310,15 +232,11 @@ def generate_dynamic_layout(run_args, ml, layer_coordinates_map:Optional[dict]=N
   
   # This is problem specific.
   layer_param_map, layer_coordinates_map = create_layer_param_map(ml, layer_coordinates_map)
-  total_pe_cols, total_pe_rows = find_total_pes_used(layer_coordinates_map)
-  # print("############################################################")
-  # find_max_memory_usage(layer_param_map, layer_coordinates_map)
-  # print("############################################################")
+  total_pe_cols, total_pe_rows = layer_coordinates_map[0]['layer_pe_cols'], layer_coordinates_map[0]['layer_pe_rows']
     
   generated_layout_file = "./src/auto_layout_amg.csl"
   print("Precompile disabled, compiling based on problem size.")
   layout_command, fabric_dimensions = generate_layout_compile_command(layer_param_map, total_pe_rows, total_pe_cols, tot_level_minus_one, generated_layout_file, run_args)
-  # ut.visualize_layout_with_empty_plotly(fabric_dimensions, layer_coordinates_map, layer_param_map, total_pe_cols, total_pe_rows, filename)
   print("############################################################")
   print("Generating blueprint layout with :\n")
   print("\nStep 1: Autogenerating layout file...")
@@ -401,7 +319,7 @@ def checkinput(A0, b0, x0, relative_tol, max_iterations):
   print(f"Residual setup-custom=solve-custom ||Ax - b||: {residual_otheramg}")
   print(f"Residual scipy.cg ||Ax - b||: {residual_cg}, Iterations: {cg_iter}")
 
-def generate_input2(M, N, type=np.float32):  
+def generate_input(M, N, type=np.float32):  
     A = pyamg.gallery.poisson((M, N), dtype=type, format='csr')  # 2D
     b = np.ones((A.shape[0]))                      # RHS
     x = np.zeros((A.shape[1]))                      # initial guess
@@ -597,13 +515,7 @@ def copy_x_coarse_on_device(simple_memcpy, simulator, symbols, ml, layer_coordin
         chunk = np.zeros(chunk_size, dtype=np.float32)
         # Place the coarsest x values at the end of the chunk
         chunk[-coarsest_size:] = x_coarse_last_chunks[j]
-        # print(f"\tx_coarse_host chunk {j} shape: {chunk.shape}, last {coarsest_size} values set to: {x_coarse_last_chunks[j]}")
         x_chunks.append(chunk)
-        # if j == 0:
-        #     print(f"PE({j}) x_coarse_host sizes:")
-        #     print(f"  x_coarse_host chunk {j} shape: {chunk.shape}")
-        #     print(f"  x_coarse_host chunk {j} data: {chunk}")
-            
 
 
     x_blob = np.concatenate(x_chunks)
@@ -613,7 +525,6 @@ def copy_x_coarse_on_device(simple_memcpy, simulator, symbols, ml, layer_coordin
     simple_memcpy.do_memcpy_h2d(symbols['x_coarse'], x_blob, px, py, w, 1, chunk_size)
     h2d_time = time.time() - start_time
     print(f"\tH2D transfer time: {h2d_time:.4f}s")
-
 
 def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer):
     """Copy all layers data as concatenated blobs to device
@@ -863,6 +774,8 @@ def device_calculations_distributed(v_cycle_data):
     # Get the layout for AMG layers given by user.
     ############################################################
     layer_coordinates_map = amg_2_layers
+    if layer_coordinates_map is None:
+        raise ValueError("Layer coordinates map is not provided.")
     ############################################################
     # TODO: When doing sparse remove this.
     # Pad the data and make it dense.
@@ -875,15 +788,15 @@ def device_calculations_distributed(v_cycle_data):
     # unpack the input data
     ml = v_cycle_data["ml"] # Changed to dense and padded.
     setup_config = v_cycle_data["setup_config"]
-    x_level = v_cycle_data["x_level"] # Changed to dense and padded.
-    b_level = v_cycle_data["b_level"] # Changed to dense and padded.
+    x_level = v_cycle_data["x_level"]
+    b_level = v_cycle_data["b_level"]
     max_iterations = v_cycle_data["max_iterations"]
     tol = v_cycle_data["tol"]
     
     ############################################################
     # CREATE DYNAMIC LAYOUT
     ############################################################
-    layer_param_map, layer_coordinates_map, total_pe_cols, total_pe_rows = generate_dynamic_layout(run_args, ml, layer_coordinates_map, filename="images/amg_2_layers.png")
+    layer_param_map, layer_coordinates_map, total_pe_cols, total_pe_rows = generate_dynamic_layout(run_args, ml, layer_coordinates_map)
     ############################################################
     # Setup simulator
     ############################################################
@@ -1010,25 +923,23 @@ def main():
   print("############################################################")
   print("# INPUT DATA")
   print("############################################################")
-  N = 15
-  M = 15
+  N = 3
+  M = 3
   eps = 1.e-5
   max_iterations = 1
     
-  A0, x0, b0 = generate_input2(M, N, type=np.float32)
+  A0, x0, b0 = generate_input(M, N, type=np.float32)
   nrm_b = np.linalg.norm(b0, 2)
   relative_tol = eps * nrm_b # relative tolerance
   
   checkinput(A0, b0, x0, relative_tol, max_iterations)  # Runs solvers from pyamg and scipy.
-  # print("A0: ", A0.toarray())
-  # print data
+
   print("Input problem size:", M, N)
   print("Input Matrix Shape:", A0.shape)
   print("Input b_1d Shape:", b0.shape)
   print("Input x_1d Shape:", x0.shape)
   print("Norm of b:", nrm_b)
   print("Relative Tolerance:", relative_tol)
-  # ut.visualize_matrix(A0, title="A Matrix", filename="images/A.png")
   
   # wrap into a dictionary
   input_data = {
@@ -1045,7 +956,6 @@ def main():
   solver_callable_host = amg.scipy_direct_solver
   ml, setup_config = amg.smooth_aggregate_setup_only(input_data["A0"], x=input_data["x0"], b=input_data["b0"], 
                                                      solver=solver_callable_host, max_level=10, max_coarse=2)
-  # print(ml)
   print(amg.print_table_shapes(ml.levels))
   
   V_levels = len(ml.levels)
@@ -1071,8 +981,8 @@ def main():
   print("############################################################")
   b_final_host, x_final_host, residual_host = host_calculations(v_cycle_data_host)
   print("HOST CALCULATIONS DONE")
-  print(f"\tResidual Host ||AX-b||:", residual_host)
-  print(f"\t b_solution_final Host:", b_final_host)
+#   print(f"\tResidual Host ||AX-b||:", residual_host)
+#   print(f"\t b_solution_final Host:", b_final_host)
   print("############################################################")
   print("# DEVICE CALCULATIONS")
   print("############################################################")
@@ -1096,3 +1006,31 @@ def main():
 
 if __name__ == "__main__":
   main()
+
+
+## Extra
+# def logs(run_args, logs_dir):
+
+#   if run_args.cmaddr is None:
+#     # move simulation log and core dump to the given folder
+#     dst_log = Path(f"{logs_dir}/sim.log")
+#     src_log = Path("sim.log")
+#     if src_log.exists():
+#       shutil.move(src_log, dst_log)
+
+#     dst_trace = Path(f"{logs_dir}/simfab_traces")
+#     src_trace = Path("simfab_traces")
+#     if dst_trace.exists():
+#       shutil.rmtree(dst_trace)
+#     if src_trace.exists():
+#       shutil.move(src_trace, dst_trace)
+    
+#     # Move all files and directories starting with "sim" to the logs_dir
+#     for item in Path().glob('sim*'):
+#         dest = Path(logs_dir) / item.name
+#         if dest.exists():
+#             if dest.is_dir():
+#                 shutil.rmtree(dest)
+#             else:
+#                 dest.unlink()
+#         shutil.move(str(item), str(logs_dir))
