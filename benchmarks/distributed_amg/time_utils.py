@@ -397,42 +397,82 @@ def analyze_and_plot_timings(df, output_path):
     }
     return summary
 
+# Collect: H2D, D2H, V-cycle down, V-cycle up, Memory used
 @dataclass 
 class DeviceOperatorTiming:
     """Timing data for AMG device operators"""
-    h2d_time: float = 0.0    # Host to device transfer time in seconds
-    d2h_time: float = 0.0    # Device to host transfer time in seconds
-    cycles: float = 0.0      # Hardware cycles
-    kernel_time_us: float = 0.0     # Time in microseconds
+    h2d_data_size: int  # H2D data size in bytes
+    d2h_data_size: int  # D2H data size in bytes    
+    h2d_time: float     # Host to device transfer time in seconds
+    d2h_time: float     # Device to host transfer time in seconds
+    kernel_vcycle_down_time: float  # V-cycle down time from hardware timer (seconds)
+    kernel_coarse_solve_time: float  # Coarse solve time from CPU as of now
+    kernel_vcycle_up_time: float    # V-cycle up time from hardware timer (seconds)
+    memory_used: int    # Memory used on device (kilobytes)
+    # other information
+    total_PEs: Tuple[int, int] = (0, 0)
+    problem_size: Tuple[int, int] = (0, 0)
+
+    def __init__(self):
+        self.h2d_data_size = 0
+        self.d2h_data_size = 0
+        self.h2d_time = 0.0
+        self.d2h_time = 0.0
+        self.kernel_vcycle_down_time = 0.0
+        self.kernel_coarse_solve_time = 0.0
+        self.kernel_vcycle_up_time = 0.0
+        self.memory_used = 0
+        self.total_PEs = (0, 0)
+        self.problem_size = (0, 0)
+    
+    # Setters
+    def set_h2d_data_size(self, size: int):
+        self.h2d_data_size += size
+
+    def set_d2h_data_size(self, size: int):
+        self.d2h_data_size += size
+
+    def set_h2d_time(self, time: float):
+        self.h2d_time += time
+
+    def set_d2h_time(self, time: float):
+        self.d2h_time += time
+
+    def set_kernel_vcycle_down_time(self, time: float):
+        self.kernel_vcycle_down_time += time
+    
+    def set_kernel_coarse_solve_time(self, time: float):
+        self.kernel_coarse_solve_time += time
+
+    def set_kernel_vcycle_up_time(self, time: float):
+        self.kernel_vcycle_up_time += time
+
+    def set_memory_used(self, memory: int):
+        self.memory_used += memory
+
+    def set_total_PEs(self, PEs: Tuple[int, int]):
+        self.total_PEs = PEs
+    
+    def set_problem_size(self, size: Tuple[int, int]):
+        self.problem_size = size
+    
+    # For getters directly access the attributes
 
 @dataclass
 class DeviceProfiling:
     """Class to track device-side timing information"""
-    # Structure: iteration -> level -> direction -> timing
-    timings: Dict[int, Dict[int, Dict[str, DeviceOperatorTiming]]] = None
+    # Structure: iteration -> timing
+    timings: Dict[int, DeviceOperatorTiming] = None
     current_iteration: int = 0
-    current_level: int = 0
-    current_direction: str = ""
 
     def __init__(self):
         self.timings = {}
         
-    def add_timing(self, level_index: int, timing: DeviceOperatorTiming, direction: str):
-        """Add timing data for current iteration, level and direction"""
-        if self.current_iteration not in self.timings:
-            self.timings[self.current_iteration] = {}
-            
-        if level_index not in self.timings[self.current_iteration]:
-            self.timings[self.current_iteration][level_index] = {}
-            
-        self.timings[self.current_iteration][level_index][direction] = timing
-
-    def add_other_info(self, iteration: int, level_index: int, level_direction: str):
-        """Update current iteration, level and direction context"""
+    def add_timing_object(self, iteration: int, timing: DeviceOperatorTiming):
+        """Add timing data for current iteration"""
         self.current_iteration = iteration
-        self.current_level = level_index
-        self.current_direction = level_direction
-        
+        self.timings[self.current_iteration] = timing
+
     def print_timing_summary(self):
         """Print a summary of timing information and save to CSV for plotting"""
         from tabulate import tabulate
@@ -442,45 +482,33 @@ class DeviceProfiling:
         # Convert timing data to list of dictionaries for DataFrame
         timing_records = []
         for iteration in sorted(self.timings.keys()):
-            for level in sorted(self.timings[iteration].keys()):
-                level_timings = self.timings[iteration][level]
-                
-                record = {
-                    'iteration': iteration,
-                    'level': level
-                }
-
-                if "down" in level_timings:
-                    down = level_timings["down"]
-                    record.update({
-                        'down_h2d': down.h2d_time,
-                        'down_d2h': down.d2h_time,
-                        'down_cycles': down.cycles,
-                        'down_kernel_time_us': down.kernel_time_us
-                    })
-
-                if "up" in level_timings:
-                    up = level_timings["up"]
-                    record.update({
-                        'up_h2d': up.h2d_time,
-                        'up_d2h': up.d2h_time,
-                        'up_cycles': up.cycles,
-                        'up_kernel_time_us': up.kernel_time_us
-                    })
-
-                timing_records.append(record)
+            timing = self.timings[iteration]
+            record = {
+                'iteration': iteration,
+                'problem_size': timing.problem_size,
+                'total_PEs': timing.total_PEs,
+                'memory_used': timing.memory_used,                
+                'h2d_time': timing.h2d_time,
+                'd2h_time': timing.d2h_time,
+                'h2d_data_size': timing.h2d_data_size,
+                'd2h_data_size': timing.d2h_data_size,
+                'h2d_bandwidth': timing.h2d_data_size / timing.h2d_time,
+                'd2h_bandwidth': timing.d2h_data_size / timing.d2h_time,
+                'v_cycle_down': timing.kernel_vcycle_down_time,
+                'v_cycle_up': timing.kernel_vcycle_up_time,
+            }
+            timing_records.append(record)
 
         # Create DataFrame
         df = pd.DataFrame(timing_records)
 
         # Generate analysis and plots
         device_output_path = "timing_results/device/plots"
-        summary = analyze_and_plot_device_timings(df, output_path=device_output_path)
+        # summary = analyze_and_plot_device_timings(df, output_path=device_output_path)
         
         # Print formatted table
         print("\nAMG Device Timing Summary:")
-        headers = ['Iteration', 'Level', 'Down H2D', 'Down D2H', 'Down Cycles', 'Down Kernel Time(us)',
-                  'Up H2D', 'Up D2H', 'Up Cycles', 'Up Kernel Time(us)']
+        headers = ['Iteration', 'I/P Problem Size', 'Total PEs', 'Memory per PE(kB)', 'H2D(s)', 'D2H(s)', 'H2D Data Size(B)', 'D2H Data Size(B)', 'H2D Bandwidth(B/s)', 'D2H Bandwidth(B/s)', 'V-Cycle Down(s)', 'V-Cycle Up(s)']
         if len(df) > 10:
             print(tabulate(df.head(10), headers=headers, floatfmt='.6f', tablefmt='grid'))
             print("...")
@@ -491,77 +519,67 @@ class DeviceProfiling:
         output_dir = Path(device_output_path)
         output_dir.mkdir(parents=True, exist_ok=True)
         csv_path = output_dir / 'device_timing_data.csv'
-        df.to_csv(csv_path, index=False)
-        print(f"\nDevice timing data saved to {csv_path}")
-        
-        print(f"\nDetailed analysis and plots saved in {device_output_path}/")
+        file_exists = csv_path.exists()
+        with open(csv_path, 'a' if file_exists else 'w') as f:
+            df.to_csv(f, index=False, header=not file_exists)
+        print(f"\nDevice timing data {'appended to' if file_exists else 'saved to'} {csv_path}")
+        print(f"Detailed analysis and plots saved in {device_output_path}/")
 
-def analyze_and_plot_device_timings(df, output_path):
-    """Generate device timing analysis plots using Plotly"""
-    import plotly.graph_objects as go
-    from pathlib import Path
+# def analyze_and_plot_device_timings(df, output_path):
+#     """Generate device timing analysis plots using Plotly"""
+#     import plotly.graph_objects as go
+#     from pathlib import Path
     
-    output_dir = Path(output_path)
-    output_dir.mkdir(parents=True, exist_ok=True)
+#     output_dir = Path(output_path)
+#     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Group by level and sum over iterations
-    df_level = df.groupby('level').sum().reset_index()
+#     # Sum over all iterations
+#     df_total = df.sum(numeric_only=True)
 
-    # Calculate total transfer time (H2D + D2H) for all directions
-    df_level['total_transfer'] = (df_level['down_h2d'] + df_level['down_d2h'] + 
-                                 df_level['up_h2d'] + df_level['up_d2h'])
+#     # Create transfer time plot
+#     fig_transfer = go.Figure()
+#     fig_transfer.add_trace(go.Bar(
+#         x=['Total'],
+#         y=[df_total['h2d_time'] + df_total['d2h_time']],
+#         name='Total Transfer Time'
+#     ))
+#     fig_transfer.update_layout(
+#         title='Total Memcpy Time (Summed over Iterations)',
+#         xaxis_title='Total',
+#         yaxis_title='Time (seconds)',
+#         showlegend=False,
+#         xaxis=dict(
+#             tickmode='linear',
+#             tick0=0,
+#             dtick=1,
+#             tickformat='d'
+#         )
+#     )
+    
+#     fig_transfer.write_html(output_dir / 'device_transfer_times.html')
 
-    # Calculate total kernel time
-    df_level['total_kernel'] = (df_level['down_kernel_time_us'] + df_level['up_kernel_time_us'])
+#     # Create kernel time plot
+#     fig_kernel = go.Figure()
+#     fig_kernel.add_trace(go.Bar(
+#         x=['Total'],
+#         y=[df_total['kernel_time_us']],
+#         name='Total Kernel Time'
+#     ))
+#     fig_kernel.update_layout(
+#         title='Total Kernel Time (Summed over Iterations)',
+#         xaxis_title='Total',
+#         yaxis_title='Time (us)',
+#         showlegend=False,
+#         xaxis=dict(
+#             tickmode='linear',
+#             tick0=0,
+#             dtick=1,
+#             tickformat='d'
+#         )
+#     )
+    
+#     fig_kernel.write_html(output_dir / 'device_kernel_times.html')
 
-    # Create transfer time plot
-    fig_transfer = go.Figure()
-    
-    fig_transfer.add_trace(go.Bar(
-        x=df_level['level'],
-        y=df_level['total_transfer'],
-        name='Total Transfer Time'
-    ))
-    
-    fig_transfer.update_layout(
-        title='Total Memcpy Time per Level (Summed over Iterations)',
-        xaxis_title='Level',
-        yaxis_title='Time (seconds)',
-        showlegend=False,
-        xaxis=dict(
-            tickmode='linear',
-            tick0=0,
-            dtick=1,
-            tickformat='d'
-        )
-    )
-    
-    fig_transfer.write_html(output_dir / 'device_transfer_times.html')
-
-    # Create kernel time plot
-    fig_kernel = go.Figure()
-    
-    fig_kernel.add_trace(go.Bar(
-        x=df_level['level'],
-        y=df_level['total_kernel'],
-        name='Total Kernel Time'
-    ))
-    
-    fig_kernel.update_layout(
-        title='Total Kernel Time per Level (Summed over Iterations)',
-        xaxis_title='Level',
-        yaxis_title='Time (us)',
-        showlegend=False,
-        xaxis=dict(
-            tickmode='linear',
-            tick0=0,
-            dtick=1,
-            tickformat='d'
-        )
-    )
-    
-    fig_kernel.write_html(output_dir / 'device_kernel_times.html')
-
-    return {
-        'per_level': df_level[['total_transfer', 'total_kernel']].round(6)
-    }
+#     return {
+#         'total': df_total[['h2d_time', 'd2h_time', 'kernel_time_us']].round(6)
+#     }

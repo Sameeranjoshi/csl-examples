@@ -211,6 +211,8 @@ var dsd_b_next = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> b_next[i] });
 var b_next_struct_i: dsd_struct;
 var ptr_b_next : [*]f32 = &b_next;
 
+var memory_used_per_pe: [1]f32 = @zeros([1]f32);
+var ptr_memory_used_per_pe: [*]f32 = &memory_used_per_pe;
 
 // ##############################################
 // Local variables on each PE.
@@ -377,6 +379,7 @@ fn print_total_data_size() void {
     simprint3.fmt_with_coords("total_data_size_per_pe = {d} in bytes", .{total_data_size_per_pe});
     simprint3.fmt_with_coords("Total data size = {f}kB", .{total_data_size_per_pe_kb});
     simprint3.print_string("Total memory per PE = 48kB\n");
+    memory_used_per_pe[0] = total_data_size_per_pe_kb;
   }
 }
 
@@ -456,6 +459,7 @@ comptime {
   @export_symbol(ptr_b_next, "b_next");
   @export_symbol(ptr_omega, "omega");
   @export_symbol(ptr_iter, "iterations");
+  @export_symbol(ptr_memory_used_per_pe, "memory_used_per_pe");
   @export_symbol(v_cycle_down);
   @export_symbol(v_cycle_up);
   @export_symbol(print_data);

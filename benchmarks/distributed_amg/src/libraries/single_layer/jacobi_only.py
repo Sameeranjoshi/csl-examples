@@ -105,7 +105,7 @@ def pad_A(A, kernel_rows, kernel_cols, variable_name):
         pad_rows = kernel_rows - A.shape[0] % kernel_rows if A.shape[0] % kernel_rows != 0 else 0
         pad_cols = kernel_cols - A.shape[1] % kernel_cols if A.shape[1] % kernel_cols != 0 else 0
         A_padded = np.pad(A, ((0, pad_rows), (0, pad_cols)), mode='constant', constant_values=0)
-    print(f"{variable_name} padded from {A.shape[0]}x{A.shape[1]} to {A_padded.shape[0]}x{A_padded.shape[1]}")
+    print(f"\t{variable_name} padded from {A.shape[0]}x{A.shape[1]} to {A_padded.shape[0]}x{A_padded.shape[1]}")
     return A_padded
 
 def pad_1d(vector, padded_size, variable_name="vector"):

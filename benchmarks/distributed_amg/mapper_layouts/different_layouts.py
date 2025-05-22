@@ -131,7 +131,7 @@ layout {{
     @export_name("omega", [*]f32, true);
     @export_name("iterations", [*]u32, true);
     @export_name("print_data", fn()void);
-
+    @export_name("memory_used_per_pe", [*]f32, true);
 }}  // end layout
 """)
 

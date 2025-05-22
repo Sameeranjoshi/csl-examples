@@ -243,7 +243,10 @@ def generate_dynamic_layout(run_args, ml, layer_coordinates_map:Optional[dict]=N
   autogenerate_amg_layout(layer_param_map, total_pe_rows, total_pe_cols, tot_level_minus_one, generated_layout_file)
   print("\nStep 2: Compiling layout file...")
   print("\t" + layout_command)
+  start_compile = time.time()
   run_command(layout_command)
+  end_compile = time.time()
+  print(f"\tCompilation time = {end_compile-start_compile}s")
   if (run_args.compile_only):
     print("Compilation complete, check the layout. exiting.")
     exit(0)
@@ -453,7 +456,7 @@ class simplerMemcpy:
         self._simulator.memcpy_d2h(result, symbol, px, py, w, h, size, streaming=False,
                             order=self._memcpy_order, data_type=self._memcpy_dtype, nonblock=False)
 
-def perform_coarse_solve(ml, A_coarse, x_coarsest, b_coarse, solver_callable_host):
+def perform_coarse_solve(ml, A_coarse, x_coarsest, b_coarse, solver_callable_host, deviceoperator):
     """Handle coarse level solve"""    
     ############################################################
     # Store original dimensions before unpadding - HACK.
@@ -477,7 +480,10 @@ def perform_coarse_solve(ml, A_coarse, x_coarsest, b_coarse, solver_callable_hos
     print("\t" + f"  A: {A_coarse.shape}")
     print("\t" + f"  x: {x_coarsest.shape} | b: {b_coarse.shape}")
     
+    start_time = time.time()
     x_coarsest[:] = solver_callable_host(A_coarse, b_coarse)
+    end_time = time.time()
+    deviceoperator.set_kernel_coarse_solve_time(end_time - start_time)
     
     ############################################################
     # Pad x_coarsest to its original dimensions. HACK
@@ -487,7 +493,7 @@ def perform_coarse_solve(ml, A_coarse, x_coarsest, b_coarse, solver_callable_hos
     
     return x_coarsest
 
-def copy_x_coarse_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer):
+def copy_x_coarse_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceoperator):
     print("\n" + "\t" + "-"*40)
     print("\t" + "│ COPYING X_COARSE TO DEVICE (column bcast down)")
     print("\t" + "-"*40)
@@ -524,9 +530,12 @@ def copy_x_coarse_on_device(simple_memcpy, simulator, symbols, ml, layer_coordin
     start_time = time.time()
     simple_memcpy.do_memcpy_h2d(symbols['x_coarse'], x_blob, px, py, w, 1, chunk_size)
     h2d_time = time.time() - start_time
-    print(f"\tH2D transfer time: {h2d_time:.4f}s")
+    print(f"\tH2D transfer time: {h2d_time:.6f}s")
+    print(f"\tH2D data size: {x_blob.nbytes} bytes")
+    deviceoperator.set_h2d_time(h2d_time)
+    deviceoperator.set_h2d_data_size(x_blob.nbytes)
 
-def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer):
+def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceoperator):
     """Copy all layers data as concatenated blobs to device
     
     Example for 4x4 matrices on 2x2 PE grid with 2 layers:
@@ -663,7 +672,7 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
     print(f"\tA blob: {A_blob.shape}")
     print(f"\tR blob: {R_blob.shape}")
     print(f"\tP blob: {P_blob.shape}")
-    print(f"\tx blob: {x_blob.shape}")
+    print(f"\tx blob(h2d_bcast()): {x_blob.shape}")
 
     # Copy concatenated data to device
     start_time = time.time()
@@ -678,9 +687,13 @@ def copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coord
     simple_memcpy.do_memcpy_h2d(symbols['omega'], omega, px, py, w, h, 1)
     simple_memcpy.do_memcpy_h2d(symbols['iterations'], iterations, px, py, w, h, 1)
     h2d_time = time.time() - start_time
+    total_h2d_data = A_blob.nbytes + R_blob.nbytes + P_blob.nbytes + x_blob.nbytes + (b_transformed.nbytes if b_transformed is not None else 0) + omega.nbytes + iterations.nbytes
     print(f"\tH2D transfer time: {h2d_time:.4f}s")
+    print(f"\tH2D data size: {total_h2d_data} bytes")
+    deviceoperator.set_h2d_time(h2d_time)
+    deviceoperator.set_h2d_data_size(total_h2d_data)
 
-def copy_all_layers_from_device(simple_memcpy, symbols, ml, total_pe_rows, total_pe_cols, level_data, symbol_name, is_b_level=False):
+def copy_all_layers_from_device(simple_memcpy, symbols, ml, total_pe_rows, total_pe_cols, level_data, symbol_name, deviceoperator, is_b_level=False):
     """Copy data from device and reconstruct layer-wise data
     
     Args:
@@ -712,6 +725,7 @@ def copy_all_layers_from_device(simple_memcpy, symbols, ml, total_pe_rows, total
     # Create buffer for entire blob
     data_blob = np.zeros(total_size, dtype=np.float32)
     
+    d2h_time = time.time()
     # Copy entire blob from device
     if is_b_level:
         # For b_level, read from last column
@@ -719,7 +733,11 @@ def copy_all_layers_from_device(simple_memcpy, symbols, ml, total_pe_rows, total
     else:
         # For x_level, read from first row
         simple_memcpy.do_memcpy_d2h(data_blob, symbols[symbol_name], 0, 0, total_pe_cols, 1, total_size//total_pe_cols)
-    
+    d2h_time = time.time() - d2h_time
+    print(f"\tD2H transfer time: {d2h_time:.4f}s")
+    print(f"\tD2H data size: {data_blob.nbytes} bytes")
+    deviceoperator.set_d2h_time(d2h_time)
+    deviceoperator.set_d2h_data_size(data_blob.nbytes)
     # First divide blob into PE chunks
     if is_b_level:
         # For b_level, divide by rows
@@ -801,11 +819,7 @@ def device_calculations_distributed(v_cycle_data):
     # Setup simulator
     ############################################################
     simulator = SdkRuntime(run_args.elffolder, cmaddr=run_args.cmaddr)
-    start = time.time()
     simulator.load()
-    end = time.time()
-    print(f"\t*** Layout Load done in {end-start}s")
-
     simulator.run()
      
     ############################################################
@@ -821,7 +835,8 @@ def device_calculations_distributed(v_cycle_data):
         'b_next': simulator.get_id("b_next"),
         'x_coarse': simulator.get_id("x_coarse"),
         'omega': simulator.get_id("omega"),
-        'iterations': simulator.get_id("iterations")
+        'iterations': simulator.get_id("iterations"),
+        'memory_used_per_pe': simulator.get_id("memory_used_per_pe")
     }
     iteration = 0
     residual = float('inf')
@@ -834,45 +849,54 @@ def device_calculations_distributed(v_cycle_data):
     # AMG V-CYCLE
     ############################################################    
     # Initialize device profiler
+    deviceoperator = time_ut.DeviceOperatorTiming()
     deviceprofiling = time_ut.DeviceProfiling()
     # hardwareTimer = HardwareTimerManager(simulator) # enable_timer, sync
-    print("Step 3: Copy all layers' data on device")
-    copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer=None)
+    print("\nStep 3: Copy all layers' data on device")
+    copy_all_layers_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceoperator)
     
-    print("Step 4: Compute V-Cycle Down")    
+    print("\nStep 4: Compute V-Cycle Down")
+    v_down_start_time = time.time()
     simulator.launch("v_cycle_down", nonblock=False)        
+    v_down_end_time = time.time()
+    deviceoperator.set_kernel_vcycle_down_time(v_down_end_time - v_down_start_time)
     
     # # D2H transfers
-    print("Step 5: D2H Transfers x_smoothed and b_next")
-    b_level = copy_all_layers_from_device(simple_memcpy, symbols, ml, total_pe_rows, total_pe_cols, b_level, 'b_next', is_b_level=True)
-    x_level = copy_all_layers_from_device(simple_memcpy, symbols, ml, total_pe_rows, total_pe_cols, x_level, 'x', is_b_level=False)
+    print("\nStep 5: D2H b_next")
+    b_level = copy_all_layers_from_device(simple_memcpy, symbols, ml, total_pe_rows, total_pe_cols, b_level, 'b_next', deviceoperator, is_b_level=True)
+    # x_level = copy_all_layers_from_device(simple_memcpy, symbols, ml, total_pe_rows, total_pe_cols, x_level, 'x', deviceoperator, is_b_level=False)
     
     ##### COARSE
     # TODO: Perform on device.
-    print("Step 6: Coarse Solve")
+    print("\nStep 6: Coarse Solve")
     b_coarsest = b_level[-1]    # 2 (unpad)
     x_coarsest = x_level[-1]    # 1
     A_coarsest = ml.levels[-1].A    # 1
     # updates x_level
-    x_coarsest[:] = perform_coarse_solve(ml, A_coarsest, x_coarsest, b_coarsest, solver_callable_host)
+    x_coarsest[:] = perform_coarse_solve(ml, A_coarsest, x_coarsest, b_coarsest, solver_callable_host, deviceoperator)
 
-
-    # print("Step 7: Print V-Cycle Down Results")
-    # amg.debugprint(ml.levels, b_level, x_level)
+    print("\nStep 7: Copy x_coarse on device")
+    copy_x_coarse_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceoperator)
     
-    print("Step 7: Copy x_coarse on device")
-    copy_x_coarse_on_device(simple_memcpy, simulator, symbols, ml, layer_coordinates_map, x_level, b_level, setup_config, iteration, deviceprofiling, hardwareTimer=None)
-    
-    print("Step 8: V-Cycle Up")
-    # simulator.launch("print_data", nonblock=False)
+    print("\nStep 8: V-Cycle Up")
+    v_up_start_time = time.time()
     simulator.launch("v_cycle_up", nonblock=False)
+    v_up_end_time = time.time()
+    deviceoperator.set_kernel_vcycle_up_time(v_up_end_time - v_up_start_time)
     
     # # D2H transfers
-    print("Step 9: D2H Transfers x_smoothed and b_next")
-    x_level = copy_all_layers_from_device(simple_memcpy, symbols, ml, total_pe_rows, total_pe_cols, x_level, 'x', is_b_level=False)
+    print("\nStep 9: D2H x")
+    x_level = copy_all_layers_from_device(simple_memcpy, symbols, ml, total_pe_rows, total_pe_cols, x_level, 'x', deviceoperator, is_b_level=False)
+    
+    # copy D2H memory used variable.
+    memory_used_per_pe = np.zeros(1, dtype=np.float32)
+    simple_memcpy.do_memcpy_d2h(memory_used_per_pe, symbols['memory_used_per_pe'], 0, 0, 1, 1, 1)
+    print(f"\tMemory used per PE: {memory_used_per_pe[0]} kB")
+    print(f"\tTotal memory used on chip: {memory_used_per_pe[0] * total_pe_rows * total_pe_cols} kB")
+    deviceoperator.set_memory_used(memory_used_per_pe[0])
     
     # debugprint up cycle
-    print("Step 10: Debugprint Up Cycle")
+    print("\nStep 10: Debugprint Up Cycle")
     amg.debugprint(ml.levels, b_level, x_level)
     
     ############################################################
@@ -882,6 +906,10 @@ def device_calculations_distributed(v_cycle_data):
     ############################################################
     # Final results
     ############################################################
+    deviceoperator.set_total_PEs((total_pe_rows, total_pe_cols))
+    deviceoperator.set_problem_size(ml.levels[0].A.shape)
+    deviceprofiling.add_timing_object(iteration, deviceoperator)
+    deviceprofiling.print_timing_summary()
     # time_ut.analyze_timing_data("reports/timing_data.csv")
     # print("\nTiming analysis complete. Open timing_report.html to view the results.")
         
