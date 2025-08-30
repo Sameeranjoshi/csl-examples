@@ -101,6 +101,8 @@ from pathlib import Path
 import shutil
 import subprocess
 import random
+import sys
+import os
 
 import numpy as np
 
@@ -108,29 +110,9 @@ from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyDataType, Me
 
 from bw_cmd_parser import parse_args
 
-
-
-def float_to_hex(f):
-  return hex(struct.unpack('<I', struct.pack('<f', f))[0])
-
-def make_u48(words):
-  return words[0] + (words[1] << 16) + (words[2] << 32)
-
-def cast_uint32(x):
-  if isinstance(x, (np.float16, np.int16, np.uint16)):
-    z = x.view(np.uint16)
-    val = np.uint32(z)
-  elif isinstance(x, (np.float32, np.int32, np.uint32)):
-    val = x.view(np.uint32)
-  elif isinstance(x, int):
-    val = np.uint32(x)
-  elif isinstance(x, float):
-    z = np.float32(x)
-    val = z.view(np.uint32)
-  else:
-    raise RuntimeError(f"type of x {type(x)} is not supported")
-
-  return val
+from cerebras.sdk.sdk_utils import calculate_cycles
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from timing_library.python_libs.timeit import TimingCalculator
 
 def csl_compile_core(
     cslc: str,
@@ -396,60 +378,30 @@ def main():
     if src_trace.exists():
       shutil.move(src_trace, dst_trace)
 
-  # time_start = start time of H2D/D2H
-  time_start = np.zeros((height, width)).astype(int)
-  # time_end = end time of H2D/D2H
-  time_end = np.zeros((height, width)).astype(int)
-  word = np.zeros(3).astype(np.uint16)
-  for w in range(width):
-    for h in range(height):
-      hex_t0 = int(float_to_hex(time_memcpy_hwl[(h, w, 0)]), base=16)
-      hex_t1 = int(float_to_hex(time_memcpy_hwl[(h, w, 1)]), base=16)
-      hex_t2 = int(float_to_hex(time_memcpy_hwl[(h, w, 2)]), base=16)
-      word[0] = hex_t0 & 0x0000ffff
-      word[1] = (hex_t0 >> 16) & 0x0000ffff
-      word[2] = hex_t1 & 0x0000ffff
-      time_start[(h, w)] = make_u48(word)
-      word[0] = (hex_t1 >> 16) & 0x0000ffff
-      word[1] = hex_t2 & 0x0000ffff
-      word[2] = (hex_t2 >> 16) & 0x0000ffff
-      time_end[(h, w)] = make_u48(word)
+  print("################################################################################")
+  measure = TimingCalculator(width, height, pe_length, loop_count, 850, isCS2=True)
+  time_start, time_end = measure.get_start_end_time_into_48bit_HMS_format(time_memcpy_hwl)
+  time_ref = measure.convert_ref_time_into_48bit_HMS_format(time_ref_hwl)
 
-  # time_ref = reference clock
-  time_ref = np.zeros((height, width)).astype(int)
-  word = np.zeros(3).astype(np.uint16)
-  for w in range(width):
-    for h in range(height):
-      hex_t0 = int(float_to_hex(time_ref_hwl[(h, w, 0)]), base=16)
-      hex_t1 = int(float_to_hex(time_ref_hwl[(h, w, 1)]), base=16)
-      word[0] = hex_t0 & 0x0000ffff
-      word[1] = (hex_t0 >> 16) & 0x0000ffff
-      word[2] = hex_t1 & 0x0000ffff
-      time_ref[(h, w)] = make_u48(word)
   # adjust the reference clock by the propagation delay
   for py in range(height):
     for px in range(width):
       time_ref[(py, px)] = time_ref[(py, px)] - (px + py)
 
-  # shift time_start and time_end by time_ref
-  time_start = time_start - time_ref
-  time_end = time_end - time_ref
-
-  # cycles_send = time_end[(h,w)] - time_start[(h,w)]
-  # 850MHz --> 1 cycle = (1/0.85) ns = (1/0.85)*1.e-3 us
-  # time_send = (cycles_send / 0.85) *1.e-3 us
-  # bandwidth = (((wvlts-1) * 4)/time_send) MBS
-  wvlts = height*width*pe_length
-  min_time_start = time_start.min()
-  max_time_end = time_end.max()
-  cycles_send = max_time_end - min_time_start
-  time_send = (cycles_send / 0.85) *1.e-3
-  bandwidth = ((wvlts * 4)/time_send)*loop_count
-  print(f"wvlts = {wvlts}, loop_count = {loop_count}")
-  print(f"cycles_send = {cycles_send} cycles")
-  print(f"time_send = {time_send} us")
-  print(f"bandwidth = {bandwidth} MB/S ")
-
+  time_start = measure.shift_wrt_reference_clock(time_start, time_ref)
+  time_end = measure.shift_wrt_reference_clock(time_end, time_ref)
+  # after shift
+  print("time_start(after shift):")
+  measure.pretty_print_2D_PE_values(time_start)
+  print("time_end(after shift):")
+  measure.pretty_print_2D_PE_values(time_end)
+  if args.d2h:
+    print("D2H transfer:")
+  else:
+    print("H2D transfer:")
+  measure.calculate_time_bw_cycles(time_start, time_end)
+  measure.generate_csv()
+  print("################################################################################")
 
 if __name__ == "__main__":
   main()
