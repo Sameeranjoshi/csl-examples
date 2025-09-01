@@ -126,7 +126,7 @@ class TimingCalculator:
                 time_ref[(h, w)] = self.__make_u48(word)
         return time_ref
 
-    def get_start_end_time_into_48bit_HMS_format(self, time_memcpy_hwl):
+    def convert_start_end_time_into_48bit_HMS_format(self, time_memcpy_hwl):
         """
         Convert as above except that the time_start and time_end are returned.
 

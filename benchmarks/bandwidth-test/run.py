@@ -380,7 +380,7 @@ def main():
 
   print("################################################################################")
   measure = TimingCalculator(width, height, pe_length, loop_count, 850, isCS2=True)
-  time_start, time_end = measure.get_start_end_time_into_48bit_HMS_format(time_memcpy_hwl)
+  time_start, time_end = measure.convert_start_end_time_into_48bit_HMS_format(time_memcpy_hwl)
   time_ref = measure.convert_ref_time_into_48bit_HMS_format(time_ref_hwl)
 
   # adjust the reference clock by the propagation delay
