@@ -312,6 +312,8 @@ def main():
 
   memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
   runner = SdkRuntime(dirname, cmaddr=args.cmaddr)
+  # 1. Create object
+  measure = TimingCalculator(runner, width, height, pe_length, loop_count, 850, isCS2=True)
 
   symbol_A = runner.get_id("A")
   symbol_time_memcpy = runner.get_id("time_memcpy")
@@ -321,10 +323,10 @@ def main():
   runner.run()
 
   print("step 1: sync() synchronizes all PEs and records reference clock")
-  runner.call("f_sync", [], nonblock=True)
+  measure.sync_all_PEs()
 
   print("step 2: tic() records time_start")
-  runner.call("f_tic", [], nonblock=True)
+  measure.tic()
 
   if args.d2h:
     for j in range(loop_count):
@@ -338,31 +340,39 @@ def main():
           streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
   print("step 4: toc() records time_end")
-  runner.call("f_toc", [], nonblock=False)
-
-  print("step 5: prepare (time_start, time_end)")
-  runner.call("f_memcpy_timestamps", [], nonblock=False)
-
-  print("step 6: D2H (time_start, time_end)")
+  measure.toc()
   # time_start/time_end is of type u16[3]
   # {time_start, time_end} is packed into three f32
-  time_memcpy_1d_f32 = np.zeros(height*width*3, np.float32)
-  runner.memcpy_d2h(time_memcpy_1d_f32, symbol_time_memcpy, 0, 0, width, height, 3,\
-    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.ROW_MAJOR, nonblock=False)
-  time_memcpy_hwl = np.reshape(time_memcpy_1d_f32, (height, width, 3), order='C')
-
-  print("step 7: prepare reference clock")
-  runner.call("f_reference_timestamps", [], nonblock=False)
-
-  print("step 8: D2H reference clock")
-  # time_ref is of type u16[3], packed into two f32
-  time_ref_1d_f32 = np.zeros(height*width*2, np.float32)
-  runner.memcpy_d2h(time_ref_1d_f32, symbol_time_ref, 0, 0, width, height, 2,\
-    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.ROW_MAJOR, nonblock=False)
-  time_ref_hwl = np.reshape(time_ref_1d_f32, (height, width, 2), order='C')
+  print("step 5: copy back (time_start, time_end)")
+  time_start, time_end = measure.copy_back_start_end_time(symbol_time_memcpy, width, height, MemcpyDataType.MEMCPY_32BIT, MemcpyOrder.ROW_MAJOR)
+  print("step 6: copy back reference clock")
+  time_ref = measure.copy_back_reference_time(symbol_time_ref, width, height, MemcpyDataType.MEMCPY_32BIT, MemcpyOrder.ROW_MAJOR)
 
   #runner.stop(core_path)
   runner.stop()
+
+  # 4. Adjust reference clock by propagation delay. 
+  # adjust the reference clock by the propagation delay
+  for py in range(height):
+    for px in range(width):
+      time_ref[(py, px)] = time_ref[(py, px)] - (px + py)
+
+  # 5. Shift wrt baseline reference clock
+  time_start = measure.shift_wrt_reference_clock(time_start, time_ref)
+  time_end = measure.shift_wrt_reference_clock(time_end, time_ref)
+  # after shift
+  print("time_start(after shift):")
+  measure.pretty_print_2D_PE_values(time_start)
+  print("time_end(after shift):")
+  measure.pretty_print_2D_PE_values(time_end)
+  if args.d2h:
+    print("D2H transfer:")
+  else:
+    print("H2D transfer:")
+  # 6. Calculate time and bandwidth and cycles
+  measure.calculate_H2D_D2H_time_bw_cycles(time_start, time_end)
+  # 7. Generate CSV file if needed
+  measure.generate_csv()
 
   if args.simulator:
     # move simulation log and core dump to the given folder
@@ -378,29 +388,6 @@ def main():
     if src_trace.exists():
       shutil.move(src_trace, dst_trace)
 
-  print("################################################################################")
-  measure = TimingCalculator(width, height, pe_length, loop_count, 850, isCS2=True)
-  time_start, time_end = measure.convert_start_end_time_into_48bit_HMS_format(time_memcpy_hwl)
-  time_ref = measure.convert_ref_time_into_48bit_HMS_format(time_ref_hwl)
-
-  # adjust the reference clock by the propagation delay
-  for py in range(height):
-    for px in range(width):
-      time_ref[(py, px)] = time_ref[(py, px)] - (px + py)
-
-  time_start = measure.shift_wrt_reference_clock(time_start, time_ref)
-  time_end = measure.shift_wrt_reference_clock(time_end, time_ref)
-  # after shift
-  print("time_start(after shift):")
-  measure.pretty_print_2D_PE_values(time_start)
-  print("time_end(after shift):")
-  measure.pretty_print_2D_PE_values(time_end)
-  if args.d2h:
-    print("D2H transfer:")
-  else:
-    print("H2D transfer:")
-  measure.calculate_time_bw_cycles(time_start, time_end)
-  measure.generate_csv()
   print("################################################################################")
 
 if __name__ == "__main__":

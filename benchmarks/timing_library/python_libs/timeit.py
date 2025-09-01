@@ -6,7 +6,8 @@ class TimingCalculator:
     """
     A class for timing calculations and profile data generation.
     """
-    def __init__(self, width, height, pe_length, loop_count, frequency, isCS2):
+    def __init__(self, runner, width, height, pe_length, loop_count, frequency, isCS2):
+        self.runner = runner
         self.width = width
         self.height = height
         self.pe_length = pe_length
@@ -43,56 +44,8 @@ class TimingCalculator:
         return val
 
     # Public methods
-    # printers
-    def print_profile_data(self):
-        # print all the above data in a table format
-        print(f"Width: {self.width}")
-        print(f"Height: {self.height}")
-        print(f"PE Length: {self.pe_length}")
-        print(f"Loop Count: {self.loop_count}")
-        print(f"Frequency: {self.frequency}")
-        print(f"WSE: {self.WSE}")
- 
-    def pretty_print_2D_PE_values(self, two_d_array):
-        """
-        Print the 2D array in a readable table format.
-        """
-        height, width = two_d_array.shape
-        print(f"2D array of size {height}x{width}:")
-        for row in range(height):
-            for col in range(width):
-                print("{:10d}".format(two_d_array[row, col]), end=" ")
-            print()
 
-    def generate_csv(self):
-        # generate a csv file with the above data
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        with open(f"profile_data_{self.WSE}_{self.height}x{self.width}_{timestamp}.csv", "w") as f:
-            f.write(f"WSE,Width,Height,PE Length,Loop Count,Frequency, cycles_send(cycles), time_send(us), bandwidth(MB/S)\n")
-            f.write(f"{self.WSE},{self.width},{self.height},{self.pe_length},{self.loop_count},{self.frequency}, {self.cycles_send}, {self.time_send}, {self.bandwidth}\n")
-
-    def calculate_time_bw_cycles(self, time_start, time_end):
-        # cycles_send = time_end[(h,w)] - time_start[(h,w)]
-        # 850MHz --> 1 cycle = (1/0.85) ns = (1/0.85)*1.e-3 us
-        # time_send = (cycles_send / 0.85) *1.e-3 us
-        # bandwidth = (((wvlts-1) * 4)/time_send) MBS
-        wvlts = self.height*self.width*self.pe_length
-        min_time_start = time_start.min()
-        print(f"min_time_start = {min_time_start}")
-        max_time_end = time_end.max()
-        print(f"max_time_end = {max_time_end}")
-        cycles_send = max_time_end - min_time_start
-        time_send = (cycles_send / 0.85) *1.e-3
-        bandwidth = ((wvlts * 4)/time_send)*self.loop_count
-        print(f"wvlts = {wvlts}, loop_count = {self.loop_count}")
-        print(f"cycles_send = {cycles_send} cycles")
-        print(f"time_send = {time_send} us")
-        print(f"bandwidth = {bandwidth} MB/S ")
-        self.cycles_send = cycles_send
-        self.time_send = time_send
-        self.bandwidth = bandwidth
-
-    def convert_ref_time_into_48bit_HMS_format(self, time_ref_hwl):
+    def _convert_ref_time_into_48bit_HMS_format(self, time_ref_hwl):
         """
         Convert the time_ref_hwl into 48-bit HMS format.
         HMS = Hr:Min:Sec
@@ -126,7 +79,7 @@ class TimingCalculator:
                 time_ref[(h, w)] = self.__make_u48(word)
         return time_ref
 
-    def convert_start_end_time_into_48bit_HMS_format(self, time_memcpy_hwl):
+    def _convert_start_end_time_into_48bit_HMS_format(self, time_memcpy_hwl):
         """
         Convert as above except that the time_start and time_end are returned.
 
@@ -160,6 +113,115 @@ class TimingCalculator:
                 time_end[(h, w)] = self.__make_u48(word)
         return time_start, time_end
 
+    def _copy_back_start_end_clock(self, symbol_time, width, height, data_type, layout):
+        """
+        Copy back timestamps from device.
+        Note: The timestamp is u16[3] elements
+
+        Args:
+            runner: runner object
+            symbol_time: symbol of time
+            width: width of the array
+            height: height of the array
+            data_type: data type of the array
+            layout: layout of the array
+
+        Returns:
+            time_hwl: 3D array of time_hwl
+        """
+        data = np.zeros((width*height*3, 1), dtype=np.uint32)
+        self.runner.memcpy_d2h(data, symbol_time, 0, 0, width, height, 3,
+            streaming=False, data_type=data_type, order=layout, nonblock=False)
+        time_hwl = data.view(np.float32).reshape((height, width, 3), order='C')
+        return time_hwl
+
+    def _copy_back_reference_clock(self, symbol_time, width, height, data_type, layout):
+        f"""
+        Copy back reference clock from device.
+        Note: The reference clock is only single HMS clock and not (start, end).
+
+        Args:
+            runner: runner object
+            symbol_time: symbol of time
+            width: width of the array
+            height: height of the array
+            data_type: data type of the array
+            layout: layout of the array
+
+        Returns:
+            time_hwl: 3D array of time_hwl
+        """
+        data = np.zeros((width*height*2, 1), dtype=np.uint32)
+        self.runner.memcpy_d2h(data, symbol_time, 0, 0, width, height, 2,
+            streaming=False, data_type=data_type, order=layout, nonblock=False)
+        time_hwl = data.view(np.float32).reshape((height, width, 2), order='C')
+        return time_hwl
+
+    def _prepare_start_end_clock(self):
+        f"""
+        Prepare start and end timestamps in (start, end) format.
+        Converts the 48bit HMS format into 32bit f32 format as D2H can't handle 48bit.
+        """
+        self.runner.call("f_memcpy_timestamps", [], nonblock=False)
+
+    def _prepare_reference_clock(self):
+        """
+        Prepare reference clock.
+        """
+        self.runner.call("f_reference_timestamps", [], nonblock=False)
+
+    ############################################################
+    # tic, toc, and sync utilities userfacing methods
+    def sync_all_PEs(self):
+        """
+        Synchronize all PEs.
+        """
+        self.runner.call("f_sync", [], nonblock=True)
+
+    def tic(self):
+        """
+        Start timer.
+        """
+        self.runner.call("f_tic", [], nonblock=True)
+
+    def toc(self):
+        """
+        Stop timer.
+        """
+        self.runner.call("f_toc", [], nonblock=True)
+
+    def copy_back_start_end_time(self, symbol_time, width, height, data_type, layout):
+        """
+        Copy back start and end timestamps from device.
+        """
+        # 1. On device: 48bit HMS format --> 32bit format
+        print("\tstep *: prepare (time_start, time_end)")
+        self._prepare_start_end_clock()
+        # 2. Copy back: D2H --> 32bit format
+        print("\tstep *: D2H (time_start, time_end)")
+        time_memcpy_hwl = self._copy_back_start_end_clock(symbol_time, width, height, data_type, layout)
+        print("\tstep *: convert (time_start, time_end) into 48-bit HMS format")
+        # 3. On Host: 32bit format --> 48bit HMS format
+        time_start, time_end = self._convert_start_end_time_into_48bit_HMS_format(time_memcpy_hwl)
+        # 4.Return the 48bit HMS format(start, end)
+        return time_start, time_end
+
+    def copy_back_reference_time(self, symbol_time, width, height, data_type, layout):
+        """
+        Copy back reference clock from device.
+        """
+        # 1. On device: 48bit HMS format --> 32bit format
+        print("\tstep *: prepare reference clock")
+        self._prepare_reference_clock()
+        print("\tstep *: D2H reference clock")
+        # 2. Copy back: D2H --> 32bit format
+        time_ref_hwl = self._copy_back_reference_clock(symbol_time, width, height, data_type, layout)
+        # 3. On Host: 32bit format --> 48bit HMS format
+        print("\tstep *: convert reference clock into 48-bit HMS format")
+        time_ref = self._convert_ref_time_into_48bit_HMS_format(time_ref_hwl)
+        # 4.Return the 48bit HMS format
+        return time_ref
+
     def shift_wrt_reference_clock(self, original_time, time_ref):
         """
         Shift the original_time by the time_ref.
@@ -167,3 +229,58 @@ class TimingCalculator:
         """
         shifted_time = original_time - time_ref
         return shifted_time
+
+    # printers
+    def print_profile_data(self):
+        # print all the above data in a table format
+        print(f"Width: {self.width}")
+        print(f"Height: {self.height}")
+        print(f"PE Length: {self.pe_length}")
+        print(f"Loop Count: {self.loop_count}")
+        print(f"Frequency: {self.frequency}")
+        print(f"WSE: {self.WSE}")
+ 
+    def pretty_print_2D_PE_values(self, two_d_array):
+        """
+        Print the 2D array in a readable table format.
+        """
+        height, width = two_d_array.shape
+        print(f"2D array of size {height}x{width}:")
+        for row in range(height):
+            for col in range(width):
+                print("{:10d}".format(two_d_array[row, col]), end=" ")
+            print()
+
+    def generate_csv(self):
+        # generate a csv file with the above data
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        with open(f"profile_data_{self.WSE}_{self.height}x{self.width}_{timestamp}.csv", "w") as f:
+            f.write(f"WSE,Width,Height,PE Length,Loop Count,Frequency, cycles_send(cycles), time_send(us), bandwidth(MB/S)\n")
+            f.write(f"{self.WSE},{self.width},{self.height},{self.pe_length},{self.loop_count},{self.frequency}, {self.cycles_send}, {self.time_send}, {self.bandwidth}\n")
+
+    def calculate_H2D_D2H_time_bw_cycles(self, time_start, time_end):
+        """
+        Calculate the time to send/recv(H2D/D2H), bandwidth between H2D/D2H, 
+        and cycles to send/recv across H2D/D2H.
+        """
+        # cycles_send = time_end[(h,w)] - time_start[(h,w)]
+        # 850MHz --> 1 cycle = (1/0.85) ns = (1/0.85)*1.e-3 us
+        # time_send = (cycles_send / 0.85) *1.e-3 us
+        # bandwidth = (((wvlts-1) * 4)/time_send) MBS
+        wvlts = self.height*self.width*self.pe_length
+        min_time_start = time_start.min()
+        print(f"min_time_start = {min_time_start}")
+        max_time_end = time_end.max()
+        print(f"max_time_end = {max_time_end}")
+        cycles_send = max_time_end - min_time_start
+        time_send = (cycles_send / 0.85) *1.e-3
+        bandwidth = ((wvlts * 4)/time_send)*self.loop_count
+        print(f"wvlts = {wvlts}, loop_count = {self.loop_count}")
+        print(f"cycles_send/recv = {cycles_send} cycles")
+        print(f"time_send/recv = {time_send} us")
+        print(f"bandwidth_send/recv = {bandwidth} MB/S ")
+        self.cycles_send = cycles_send
+        self.time_send = time_send
+        self.bandwidth = bandwidth
+
+    ############################################################

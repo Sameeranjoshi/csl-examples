@@ -23,9 +23,13 @@ import math
 import csv
 import json
 import numpy as np
+import os
+import sys
 
 from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime # pylint: disable=no-name-in-module
 from cerebras.sdk.runtime.sdkruntimepybind import MemcpyDataType, MemcpyOrder # pylint: disable=no-name-in-module
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from timing_library.python_libs.timeit import TimingCalculator
 
 def parse_args():
   """ parse the command line """
@@ -89,6 +93,7 @@ def main():
 
   # Instantiate runner
   runner = SdkRuntime(name, cmaddr=cmaddr)
+  measure = TimingCalculator(runner, width, height, nb, iters, 850, isCS2=True)
 
   # Device symbols for memcpy
   A_symbol = runner.get_id("A")
@@ -133,11 +138,7 @@ def main():
   runner.call("compute", [], nonblock=False)
 
   # Copy back timestamps from device
-  data = np.zeros((width*height*3, 1), dtype=np.uint32)
-  runner.memcpy_d2h(data, symbol_maxmin_time, 0, 0, width, height, 3,
-    streaming=False, data_type=MemcpyDataType.MEMCPY_32BIT, order=MemcpyOrder.ROW_MAJOR, nonblock=False)
-  maxmin_time_hwl = data.view(np.float32).reshape((height, width, 3))
-  print("Copied back timestamps.")
+  maxmin_time_hwl = measure._copy_back_start_end_clock(symbol_maxmin_time, width, height, MemcpyDataType.MEMCPY_32BIT, MemcpyOrder.ROW_MAJOR)
 
   # Copy back data array from device
   if verify:
