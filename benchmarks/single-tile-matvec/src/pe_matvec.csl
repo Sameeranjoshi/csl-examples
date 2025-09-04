@@ -29,10 +29,9 @@ const padded_nb:   u16 = if ((nb / align_ratio) * align_ratio == nb) nb
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
 const timestamp = @import_module("<time>");
-var tsc_end_buf = @zeros([timestamp.tsc_size_words]u16);
-var tsc_start_buf = @zeros([timestamp.tsc_size_words]u16);
+const timer = @import_module("<timer>", .{ .timerCount = 1 });
 
-var timer_buf = @zeros([3]f32);
+var timer_buf = @zeros([2]f32); // total = 64 bytes
 var ptr_timer_buf: [*]f32 = &timer_buf;
 
 var A_array: [nb*padded_nb+1]f32 align(16) = @zeros([nb*padded_nb+1]f32);
@@ -74,31 +73,16 @@ fn gemv_map() void {
 
 fn compute() void {
 
-  timestamp.enable_tsc();
-  timestamp.get_timestamp(&tsc_start_buf);
+  timer.enable();
+  timer.start(0);
 
   for (@range(u16, iters)) |iter| {
     gemv_map();
   }
 
-  timestamp.get_timestamp(&tsc_end_buf);
-  timestamp.disable_tsc();
-
-  var lo_: u16 = 0;
-  var hi_: u16 = 0;
-  var word: u32 = 0;
-
-  lo_ = tsc_start_buf[0];
-  hi_ = tsc_start_buf[1];
-  timer_buf[0] = @bitcast(f32, (@as(u32,hi_) << @as(u16,16)) | @as(u32, lo_) );
-
-  lo_ = tsc_start_buf[2];
-  hi_ = tsc_end_buf[0];
-  timer_buf[1] = @bitcast(f32, (@as(u32,hi_) << @as(u16,16)) | @as(u32, lo_) );
-
-  lo_ = tsc_end_buf[1];
-  hi_ = tsc_end_buf[2];
-  timer_buf[2] = @bitcast(f32, (@as(u32,hi_) << @as(u16,16)) | @as(u32, lo_) );
+  timer.stop(0);
+  timer.disable();
+  timer.elapsed(0, @ptrcast(*[timer.timestamp_size]u16, &timer_buf));
 
   @activate(EXIT);
 }

@@ -206,6 +206,7 @@ class TimingCalculator:
         # 4.Return the 48bit HMS format(start, end)
         return time_start, time_end
 
+    # Use for reference clock when doing H2D bandwidth test
     def copy_back_reference_time(self, symbol_time, width, height, data_type, layout):
         """
         Copy back reference clock from device.
@@ -214,6 +215,24 @@ class TimingCalculator:
         print("\tstep *: prepare reference clock")
         self._prepare_reference_clock()
         print("\tstep *: D2H reference clock")
+        # 2. Copy back: D2H --> 32bit format
+        time_ref_hwl = self._copy_back_reference_clock(symbol_time, width, height, data_type, layout)
+        # 3. On Host: 32bit format --> 48bit HMS format
+        print("\tstep *: convert reference clock into 48-bit HMS format")
+        time_ref = self._convert_ref_time_into_48bit_HMS_format(time_ref_hwl)
+        # 4.Return the 48bit HMS format
+        return time_ref
+
+    # Use mostly for copying the time in the tile or communication time in fabric.
+    # For H2D use reference clock
+    def copy_back_compute_time(self, symbol_time, width, height, data_type, layout):
+        """
+        Copy back compute time from device.
+        """
+        # 1. On device: Using <timer> library we already have calculated elapsed time(start-end)
+        # This time is already in HMS(16 +  16 + 16) + padding(16) = 64 bits(typically)
+        # Because 48 bits can't be memcpy, 64 can be broken into 4 elements of 16bit.
+        print("\tstep *: D2H compute clock")
         # 2. Copy back: D2H --> 32bit format
         time_ref_hwl = self._copy_back_reference_clock(symbol_time, width, height, data_type, layout)
         # 3. On Host: 32bit format --> 48bit HMS format
@@ -283,4 +302,13 @@ class TimingCalculator:
         self.time_send = time_send
         self.bandwidth = bandwidth
 
+    def get_min_max(self, u48cycles_array):
+      """
+      Get the min and max cycles from the u48cycles_array.
+      """
+      max_cycles = u48cycles_array.max()
+      max_h, max_w = np.unravel_index(u48cycles_array.argmax(), u48cycles_array.shape)
+      min_cycles = u48cycles_array.min()
+      min_h, min_w = np.unravel_index(u48cycles_array.argmin(), u48cycles_array.shape)
+      return min_cycles, min_h, min_w, max_cycles, max_h, max_w
     ############################################################

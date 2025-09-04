@@ -28,8 +28,9 @@ import sys
 
 from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime # pylint: disable=no-name-in-module
 from cerebras.sdk.runtime.sdkruntimepybind import MemcpyDataType, MemcpyOrder # pylint: disable=no-name-in-module
+
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from timing_library.python_libs.timeit import TimingCalculator
+from timing_library.python_libs.my_timeit import TimingCalculator
 
 def parse_args():
   """ parse the command line """
@@ -138,8 +139,9 @@ def main():
   runner.call("compute", [], nonblock=False)
 
   # Copy back timestamps from device
-  maxmin_time_hwl = measure._copy_back_start_end_clock(symbol_maxmin_time, width, height, MemcpyDataType.MEMCPY_32BIT, MemcpyOrder.ROW_MAJOR)
-
+  u48cycles_array = measure.copy_back_compute_time(symbol_maxmin_time, width, height, MemcpyDataType.MEMCPY_32BIT, MemcpyOrder.ROW_MAJOR)
+  print(f"maxmin_time_hwl = {u48cycles_array}")
+  
   # Copy back data array from device
   if verify:
     data = np.zeros((width*height*padded_nb, 1), dtype=np.uint32)
@@ -203,33 +205,9 @@ def main():
   # Calculate cycle count
   #######################
 
-  tsc_tensor_d2h = np.zeros(6).astype(np.uint16)
-  min_cycles = math.inf
-  max_cycles = 0
-
-  for w in range(width):
-    for h in range(height):
-      hex_t0 = int(float_to_hex(maxmin_time_hwl[(h, w, 0)]), base=16)
-      hex_t1 = int(float_to_hex(maxmin_time_hwl[(h, w, 1)]), base=16)
-      hex_t2 = int(float_to_hex(maxmin_time_hwl[(h, w, 2)]), base=16)
-      tsc_tensor_d2h[0] = hex_t0 & 0x0000ffff
-      tsc_tensor_d2h[1] = (hex_t0 >> 16) & 0x0000ffff
-      tsc_tensor_d2h[2] = hex_t1 & 0x0000ffff
-      tsc_tensor_d2h[3] = (hex_t1 >> 16) & 0x0000ffff
-      tsc_tensor_d2h[4] = hex_t2 & 0x0000ffff
-      tsc_tensor_d2h[5] = (hex_t2 >> 16) & 0x0000ffff
-
-      cycles = sub_ts(tsc_tensor_d2h)
-      if cycles < min_cycles:
-        min_cycles = cycles
-        min_w = w
-        min_h = h
-      if cycles > max_cycles:
-        max_cycles = cycles
-        max_w = w
-        max_h = h
-
-
+  # tsc_tensor_d2h = np.zeros(6).astype(np.uint16)
+  # Returns (Min, H, W, Max, H, W)
+  min_cycles, min_h, min_w, max_cycles, max_h, max_w = measure.get_min_max(u48cycles_array)
   #####################
   # Calculate bandwidth
   #####################
