@@ -302,6 +302,15 @@ class TimingCalculator:
         self.time_send = time_send
         self.bandwidth = bandwidth
 
+    def calculate_in_tile_FLOPS_BW(self, time_start, time_end):
+      """
+      Calculate the FLOPS and BW in the tile.
+      """
+      cycles_send = time_end - time_start
+      time_send = (cycles_send / 0.85) *1.e-3
+      bandwidth = ((wvlts * 4)/time_send)*self.loop_count
+      return cycles_send, time_send, bandwidth
+
     def get_min_max(self, u48cycles_array):
       """
       Get the min and max cycles from the u48cycles_array.
