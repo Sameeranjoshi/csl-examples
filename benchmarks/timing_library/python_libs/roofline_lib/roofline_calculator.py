@@ -8,7 +8,11 @@ by calculating FLOPS, memory accesses, and performance metrics.
 import numpy as np
 import pandas as pd
 import datetime
+import sys
+import os
+import matplotlib.pyplot as plt
 from typing import Dict, List, Tuple, Optional
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from my_timeit import TimingCalculator
 
 
@@ -238,59 +242,217 @@ class RooflineCalculator(TimingCalculator):
         print(f"Performance: {self.total_flops/(self.avg_cycles*self.width*self.height):.6f} flops/cycle")
         print("="*60)
 
+    def plot_roofline_from_csv(self,
+                               csv_path: str,
+                               savefile: str):
+        """
+        Plot a roofline using a single CSV input, following the reference style.
+        Thanks to https://github.com/pr0f3ss/SpMM_Cerebras/blob/main/plots/roofline_plot.py !!
 
-def create_roofline_csv_from_multiple_runs(runs_data: List[Dict], output_filename: str):
-    """
-    Create a consolidated roofline CSV from multiple benchmark runs.
-    
-    Args:
-        runs_data: List of dictionaries containing run data
-        output_filename: Output CSV filename
-    """
-    df = pd.DataFrame(runs_data)
-    df.to_csv(output_filename, index=False)
-    print(f"Consolidated roofline data saved to: {output_filename}")
-    return df
+        Args:
+            csv_path: Path to the CSV containing columns: width,height,density,avg_cycles,total_absolute_accesses,total_flops.
+        """
+        if not os.path.exists(csv_path):
+            raise FileNotFoundError(f"CSV not found: {csv_path}")
+        
+        figtext = "Cerebras WSE-" + self.WSE
+        xlabel = "I(n) [flops/byte]"
+        ylabel = "P(n) [flops/cycle]"
+        title = f"Performance of {self.operation_type} implementations with {100 - self.density}% sparsity."
+        ax = plt.gca()
 
+        # initialize plot
+        plt.xlabel(xlabel, loc="center")
+        plt.ylabel(ylabel, rotation="horizontal", labelpad=0, alpha=0.75, loc="top")
+        ax.yaxis.set_label_coords(0.1, 1.015)
+        plt.figtext(0.73, 0.895, figtext, alpha=0.75)
+        plt.title(title, y=1.06, loc="center")
+
+        # retrieve dataset
+        df = pd.read_csv(csv_path)
+        # check if this is correct entry
+        df = df[df["density"] == self.density]
+
+        # Plot data
+        gemm_flops = df["total_flops"]
+        gemm_bytes = df["total_absolute_accesses"]
+        gemm_cycles = df["avg_cycles"]*df["width"]*df["height"]
+        # Operational Intensity
+        x1 = gemm_flops / gemm_bytes
+        # Performance
+        y1 = gemm_flops / gemm_cycles
+        
+        # Plot
+        fmt1 = "-v"
+        plt.plot(x1, y1, fmt1, color="orangered", label=f"{self.matrix_format}")
+
+        # Other plot settings, labels, Memory bound line, legend etc...
+        plt.axhline(y=2, color='k', ls=':')
+        plt.axvline(x=2/12, color='k', ls='--', alpha=0.6)
+        plt.text(0.05, 0.95,'Peak Performance', color='k', fontdict={'size': 'smaller'},  transform=ax.transAxes)
+        plt.text(0.1, 0.8,'Memory Bandwidth', color='k', fontdict={'size': 'smaller'},  transform=ax.transAxes, rotation=6.0)
+        plt.text(0.835, 0.35,'Memory/Compute Bound', color='k', fontdict={'size': 'smaller'},  transform=ax.transAxes, rotation=270.0)
+        # Draw mem line
+        mem_x = np.linspace(0.15, 0.17, 200)
+        mem_y = 12.0*mem_x
+        plt.plot(mem_x, mem_y, color='k', alpha=0.6)
+        # Draw legend
+        plt.legend(loc=(1.04, 0.65))
+        plt.grid()
+        # Set limits
+        plt.xlim([0.15, 0.17])
+        plt.ylim([0.425, 2.1])
+        # save
+        plt.savefig(savefile, bbox_inches='tight', format='png')
 
 # Example usage functions
-def example_spmm_benchmark():
+def example_usage_function():
     """
-    Example of how to use RooflineCalculator for SpMM benchmarking.
+    Create a template for modifying your existing benchmark scripts.
     """
-    # This would be called from your actual benchmark code
-    print("Example SpMM Roofline Benchmark:")
-    print("1. Initialize RooflineCalculator")
-    print("2. Set matrix dimensions")
-    print("3. Calculate FLOPS and memory accesses")
-    print("4. Run timing measurements")
-    print("5. Calculate performance metrics")
-    print("6. Save to CSV")
     
-    # Example code structure:
+    template = '''
+        # TEMPLATE FOR INTEGRATING ROOFLINE CALCULATOR
+        # Add this to your existing benchmark scripts
+
+        from roofline_calculator import RooflineCalculator
+
+        # 1. Initialize calculator (add after your existing TimingCalculator setup)
+        calc = RooflineCalculator(runner, width, height, pe_length, loop_count, frequency, isCS2,
+                                matrix_format="CSR", operation_type="SpMM")
+
+        # 2. Set matrix dimensions (add after you know your matrix size)
+        calc.set_matrix_dimensions(N=1024, K=1024, M=64, density=20)  # 80% sparse
+
+        # 3. Calculate theoretical metrics (add before running kernel)
+        flops = calc.calculate_flops()
+        rel_acc, abs_acc = calc.calculate_memory_accesses("csr")
+
+        # 4. Replace your existing timing code with:
+        calc.tic()
+        # ... your kernel execution ...
+        calc.toc()
+        cycles_array = calc.copy_back_compute_time(symbol_time, width, height, data_type, layout)
+
+        # 5. Calculate performance metrics (add after timing)
+        metrics = calc.calculate_performance_metrics(cycles_array)
+
+        # 6. Save results (add at the end of your benchmark)
+        calc.save_roofline_csv("CSR_benchmark.csv")
+        calc.print_roofline_summary()
+        calc.plot_roofline_from_csv("CSR_benchmark.csv", savefile="CSR_benchmark.png")
+    '''
+    
+    print("="*80)
+    print("BENCHMARK INTEGRATION TEMPLATE")
+    print("="*80)
+    print(template)
+
+def integrate_roofline_with_existing_benchmark():    
     """
-    # In your benchmark script:
-    calc = RooflineCalculator(runner, width, height, pe_length, loop_count, frequency, isCS2, 
-                             matrix_format="CSR", operation_type="SpMM")
+    Example of how to integrate RooflineCalculator with your existing benchmark code.
     
-    # Set matrix dimensions
-    calc.set_matrix_dimensions(N=768, K=768, M=64, density=20)  # 80% sparse
+    This function shows the pattern you should follow in your actual benchmark scripts.
+    """
     
-    # Calculate theoretical metrics
+    # Example parameters (replace with your actual values)
+    width, height = 64, 32
+    pe_length = 1
+    loop_count = 100
+    frequency = 0.85  # GHz
+    isCS2 = False  # True for CS2, False for CS3
+    
+    # Matrix dimensions for your benchmark
+    N, K, M = 1024, 1024, 64
+    density = 20  # 80% sparse
+    
+    # Matrix format being tested
+    matrix_format = "CSR"  # or "COO", "CSC", "ELLPACK", "GEMM"
+    operation_type = "SpMM"  # or "GeMM"
+    
+    print("="*80)
+    print("ROOFLINE INTEGRATION EXAMPLE")
+    print("="*80)
+    
+    # Step 1: Initialize RooflineCalculator
+    print("Step 1: Initialize RooflineCalculator")
+    # Note: You'll need to pass your actual runner object here
+    # calc = RooflineCalculator(runner, width, height, pe_length, loop_count, frequency, isCS2,
+    #                          matrix_format, operation_type)
+    
+    # For this example, we'll create a mock calculator
+    calc = RooflineCalculator(None, width, height, pe_length, loop_count, frequency, isCS2,
+                             matrix_format, operation_type)
+    
+    # Step 2: Set matrix dimensions
+    print("Step 2: Set matrix dimensions")
+    calc.set_matrix_dimensions(N, K, M, density)
+    print(f"  Matrix: {N}x{K} x {K}x{M} = {N}x{M}, Density: {density}%")
+    
+    # Step 3: Calculate theoretical metrics
+    print("Step 3: Calculate theoretical metrics")
     flops = calc.calculate_flops()
-    rel_acc, abs_acc = calc.calculate_memory_accesses("csr")
+    rel_acc, abs_acc = calc.calculate_memory_accesses(matrix_format.lower())
     
-    # Run your timing code here...
-    # cycles_array = your_timing_measurements()
+    print(f"  FLOPS: {flops:,}")
+    print(f"  Memory Accesses: {abs_acc:,} bytes")
+    print(f"  Intensity: {flops/abs_acc:.6f} flops/byte")
     
-    # Calculate performance
-    # metrics = calc.calculate_performance_metrics(cycles_array)
+    # Step 4: Simulate timing measurements (replace with your actual timing code)
+    print("Step 4: Simulate timing measurements")
+    # In your actual code, you would do:
+    # calc.tic()
+    # # ... run your kernel ...
+    # calc.toc()
+    # cycles_array = calc.copy_back_compute_time(symbol_time, width, height, data_type, layout)
     
-    # Save results
-    # calc.save_roofline_csv("CSR_benchmark.csv")
-    # calc.print_roofline_summary()
-    """
+    # For this example, simulate some cycle measurements
+    np.random.seed(42)  # For reproducible results
+    base_cycles = 15000 if matrix_format == "GEMM" else 20000
+    cycles_array = np.random.normal(base_cycles, base_cycles * 0.1, (height, width))
+    
+    # Step 5: Calculate performance metrics
+    print("Step 5: Calculate performance metrics")
+    metrics = calc.calculate_performance_metrics(cycles_array)
+    
+    print(f"  Avg Cycles: {metrics['avg_cycles']:.0f}")
+    print(f"  Performance: {metrics['performance']:.6f} flops/cycle")
+    
+    # Step 6: Generate CSV data
+    print("Step 6: Generate CSV data")
+    csv_row = calc.generate_roofline_csv_row()
+    print("  CSV Row generated with fields:")
+    for key, value in csv_row.items():
+        print(f"    {key}: {value}")
+    
+    # Step 7: Save to CSV
+    print("Step 7: Save to CSV")
+    calc.save_roofline_csv(f"{matrix_format}_benchmark.csv")
+    
+    # Step 8: Print summary
+    print("Step 8: Print summary")
+    calc.print_roofline_summary()
+
+    # Step 9: Plot roofline
+    print("Step 9: Plot roofline")
+    calc.plot_roofline_from_csv(f"{matrix_format}_benchmark.csv", savefile=f"{matrix_format}_benchmark.png")
+    print(f"Roofline plot saved to: {matrix_format}_benchmark.png")
+    
+    return calc, csv_row
 
 
 if __name__ == "__main__":
-    example_spmm_benchmark()
+    example_usage_function()
+    # Integrated example
+    calc, csv_row = integrate_roofline_with_existing_benchmark()
+    print("\n")
+    
+    print("\n" + "="*80)
+    print("INTEGRATION COMPLETE!")
+    print("="*80)
+    print("Next steps:")
+    print("1. Import roofline_calculator.py to your timing library")
+    print("2. Modify your existing benchmark scripts using the template/example above")
+    print("3. Run your benchmarks to generate CSV data")
+    print("4. Use the generated CSV files to plot the roofline")
+    print("="*80)
