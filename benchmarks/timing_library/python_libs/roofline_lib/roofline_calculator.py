@@ -5,6 +5,7 @@ This module extends the TimingCalculator to generate roofline plot data
 by calculating FLOPS, memory accesses, and performance metrics.
 """
 
+import time
 import numpy as np
 import pandas as pd
 import datetime
@@ -30,65 +31,154 @@ class RooflineCalculator(TimingCalculator):
                  matrix_format="unknown", operation_type="unknown"):
         super().__init__(runner, width, height, pe_length, loop_count, frequency, isCS2)
         
-        # Matrix and operation metadata
-        self.matrix_format = matrix_format  # "GEMM", "COO", "CSR", "CSC", "ELLPACK"
-        self.operation_type = operation_type  # "SpMM", "GeMM", etc.
+        # Roofline-specific metrics(actual)
+        # self.total_flops = 0
+        # self.total_relative_accesses = 0
+        # self.total_absolute_accesses = 0
+        self.emperical_avg_cycles = 0
+        self.emperical_min_cycles = 0
+        self.emperical_max_cycles = 0
+
+        self.emperical_flops = 0  # FLOPs
+        self.emperical_accesses = 0  # Bytes
+        self.emperical_cycles = 0 # Cycles  # need to decide what type it is
+        self.emperical_time = 0 # Seconds
+        self.emperical_bw = 0 # Bytes/Second
+        self.emperical_performance = 0    # FLOPs/Second = FLOPS
+        self.emperical_AI = 0  # FLOPs/Bytes
+
+
+        # Theoretical performance - modeling metrics
+        # FLOPs = count 
+        # FLOPS = FLOPs / time
+        self.theoretical_flops = 0  # FLOPs
+        self.theoretical_accesses = 0  # Bytes
+        self.theoretical_cycles = 0 # Cycles
+        self.theoretical_time = 0 # Seconds
+        self.theoretical_bw = 0 # Bytes/Second
+        self.theoretical_performance = 0    # FLOPs/Second = FLOPS
+        self.theoretical_AI = 0  # FLOPs/Bytes
         
-        # Roofline-specific metrics
-        self.total_flops = 0
-        self.total_relative_accesses = 0
-        self.total_absolute_accesses = 0
-        self.avg_cycles = 0
-        self.min_cycles = 0
-        self.max_cycles = 0
-        
+        # Input problem
         # Matrix dimensions for FLOPS calculation
-        self.N = 0  # Matrix A rows
+        self.M = 0  # Matrix A rows
         self.K = 0  # Matrix A cols / Matrix B rows  
-        self.M = 0  # Matrix B cols
+        self.N = 0  # Matrix B cols
         self.density = 100  # Sparsity percentage (100 = dense)
-        
-    def set_matrix_dimensions(self, N: int, K: int, M: int, density: int = 100):
+        self.matrix_format = matrix_format  # "DENSE", "COO", "CSR", "CSC", "ELLPACK"
+        self.operation_type = operation_type  # "SpMM", "GeMV", etc.
+
+    def get_theoretical_metrics(self):
+        """
+        Getter for all theoretical values as a dictionary.
+        Returns:
+            dict: Dictionary containing all theoretical performance metrics.
+        """
+        return {
+            "theoretical_flops": self.theoretical_flops,
+            "theoretical_accesses": self.theoretical_accesses,
+            "theoretical_cycles": self.theoretical_cycles,
+            "theoretical_time": self.theoretical_time,
+            "theoretical_bw": self.theoretical_bw,
+            "theoretical_performance": self.theoretical_performance,
+            "theoretical_AI": self.theoretical_AI
+        }
+
+    def get_emperical_metrics(self):
+        """
+        Getter for all emperical values as a dictionary.
+        Returns:
+            dict: Dictionary containing all emperical performance metrics.
+        """
+        return {
+            "emperical_flops": self.emperical_flops,
+            "emperical_accesses": self.emperical_accesses,
+            "emperical_cycles": self.emperical_cycles,
+            "emperical_min_cycles": self.emperical_min_cycles,
+            "emperical_max_cycles": self.emperical_max_cycles,
+            "emperical_avg_cycles": self.emperical_avg_cycles,
+            "emperical_time": self.emperical_time,
+            "emperical_bw": self.emperical_bw,
+            "emperical_performance": self.emperical_performance,
+            "emperical_AI": self.emperical_AI
+        }
+
+    def get_problem_dimensions(self):
+        """
+        Getter for all problem dimensions as a dictionary.
+        Returns:
+            dict: Dictionary containing all problem dimensions.
+        """
+        return {
+            "M": self.M,
+            "K": self.K,
+            "N": self.N,
+            "density": self.density,
+            "matrix_format": self.matrix_format,
+            "operation_type": self.operation_type
+        }
+
+    def get_hardware_configuration(self):
+        """
+        Getter for all hardware configuration as a dictionary.
+        Returns:
+            dict: Dictionary containing all hardware configuration.
+        """
+        return {
+            "width": self.width,
+            "height": self.height,
+            "pe_length": self.pe_length,
+            "loop_count": self.loop_count,
+            "frequency": self.frequency,
+            "WSE": self.WSE
+        }
+
+    def set_matrix_dimensions(self, M: int, K: int, N: int, density: int = 100):
         """
         Set matrix dimensions for FLOPS calculation.
         
         Args:
-            N: Number of rows in matrix A
+            M: Number of rows in matrix A
             K: Number of columns in matrix A (and rows in matrix B)
-            M: Number of columns in matrix B
+            N: Number of columns in matrix B
             density: Sparsity percentage (100 = dense, 20 = 80% sparse)
         """
-        self.N = N
-        self.K = K
         self.M = M
+        self.K = K
+        self.N = N
         self.density = density
-        
-    def calculate_flops(self) -> int:
+    
+    # Theoretical
+    def calculate_theoretical_flops(self):
         """
         Calculate total FLOPS for the operation.
         
-        For SpMM/GeMM: FLOPS = 2 * N * K * M * (density/100)
-        (2 because each multiply-add counts as 2 operations)
-        
+        For GeMV: FLOPS = M*(2*K-1) * (density/100)
+        Per row: K multiply + (K-1) adds
+        Total: Total rows * Per row
+        Total: M*(K + (K-1))
+        Total FLOPS : M*(2*K-1) * (density/100)
         Returns:
             Total number of floating point operations
         """
         if self.N == 0 or self.K == 0 or self.M == 0:
             raise ValueError("Matrix dimensions not set. Call set_matrix_dimensions() first.")
             
-        # Base FLOPS for dense matrix multiplication
-        base_flops = 2 * self.N * self.K * self.M
+        # Base FLOPS for dense matrix vector multiplication
+        base_flops = self.M * (2 * self.K - 1)/(self.height*self.width)
         
         # Adjust for sparsity
-        self.total_flops = int(base_flops * (self.density / 100.0))
-        return self.total_flops
+        self.theoretical_flops = int(base_flops * (self.density / 100.0))
+
+        # scale to program rectangle
+        self.theoretical_flops = self.theoretical_flops * (self.width * self.height)
         
-    def calculate_memory_accesses(self, sparse_format: str = "dense") -> Tuple[int, int]:
+    def calculate_theoretical_memory_accesses(self, sparse_format: str = "dense"):
         """
         Calculate memory accesses for different sparse formats.
         
         Args:
-            sparse_format: "dense", "coo", "csr", "csc", "ellpack"
+            sparse_format: "dense", "csr"
             
         Returns:
             Tuple of (relative_accesses, absolute_accesses)
@@ -98,50 +188,54 @@ class RooflineCalculator(TimingCalculator):
             
         # Dense matrix memory accesses
         if sparse_format.lower() == "dense":
-            # A: N*K, B: K*M, C: N*M (read A, read B, write C)
-            relative_accesses = self.N * self.K + self.K * self.M + self.N * self.M
-            absolute_accesses = relative_accesses * 4  # 4 bytes per float32
+            # A: M*K, B: K*N, C: M*N (read A, read B, write C)
+            self.theoretical_accesses = self.M * self.K + self.K * self.N + self.M * self.N
+            self.theoretical_accesses = self.theoretical_accesses * 4  # 4 bytes per float32
             
-        # COO (Coordinate) format
-        elif sparse_format.lower() == "coo":
-            # Only access non-zero elements
-            nnz = int(self.N * self.K * (self.density / 100.0))
-            # COO: (row, col, val) + B matrix + C matrix
-            relative_accesses = nnz * 3 + self.K * self.M + self.N * self.M
-            absolute_accesses = relative_accesses * 4
-            
-        # CSR (Compressed Sparse Row) format  
+        # CSR (Compressed Sparse Row) format
+        # Todo: fixit might be wrong
         elif sparse_format.lower() == "csr":
             nnz = int(self.N * self.K * (self.density / 100.0))
             # CSR: row_ptr (N+1), col_ind (nnz), val (nnz) + B + C
-            relative_accesses = (self.N + 1) + nnz + nnz + self.K * self.M + self.N * self.M
-            absolute_accesses = relative_accesses * 4
-            
-        # CSC (Compressed Sparse Column) format
-        elif sparse_format.lower() == "csc":
-            nnz = int(self.N * self.K * (self.density / 100.0))
-            # CSC: col_ptr (K+1), row_ind (nnz), val (nnz) + B + C
-            relative_accesses = (self.K + 1) + nnz + nnz + self.K * self.M + self.N * self.M
-            absolute_accesses = relative_accesses * 4
-            
-        # ELLPACK format
-        elif sparse_format.lower() == "ellpack":
-            nnz = int(self.N * self.K * (self.density / 100.0))
-            # ELLPACK: col_ind (N*max_nnz_per_row), val (N*max_nnz_per_row) + B + C
-            max_nnz_per_row = int(nnz / self.N) + 1  # Approximate
-            relative_accesses = self.N * max_nnz_per_row * 2 + self.K * self.M + self.N * self.M
-            absolute_accesses = relative_accesses * 4
+            self.theoretical_accesses = (self.N + 1) + nnz + nnz + self.K * self.M + self.N * self.M
+            self.theoretical_accesses = self.theoretical_accesses * 4
             
         else:
             raise ValueError(f"Unknown sparse format: {sparse_format}")
-            
-        self.total_relative_accesses = relative_accesses
-        self.total_absolute_accesses = absolute_accesses
-        return relative_accesses, absolute_accesses
         
-    def calculate_performance_metrics(self, cycles_array: np.ndarray) -> Dict[str, float]:
+        # scale to program rectangle
+        self.theoretical_accesses = self.theoretical_accesses * (self.width * self.height)  
+
+    def calculate_theoretical_metrics(self):
         """
-        Calculate performance metrics from cycles data.
+        Calculate theoretical metrics.
+        """
+        self.calculate_theoretical_flops()
+        self.calculate_theoretical_memory_accesses()
+        # cycles
+        self.theoretical_cycles = 100 # dummy value cycles
+        self.theoretical_time = self.theoretical_cycles / self.frequency # seconds
+        self.theoretical_bw = self.theoretical_accesses / self.theoretical_time # bytes/second
+        self.theoretical_performance = self.theoretical_flops / self.theoretical_time # flops/second
+        self.theoretical_AI = self.theoretical_flops / self.theoretical_accesses # flops/byte
+        return self.get_theoretical_metrics()
+
+    # Empirical
+    def calculate_emperical_flops(self):
+        # Actually should be returned from the device
+        # TODO: Fix this
+        self.emperical_flops = (self.K)*(self.M) + (self.K - 1)*(self.M)
+        return self.emperical_flops
+
+    def calculate_emperical_memory_accesses(self):
+        # Actually should be returned from the device
+        # TODO: Fix this
+        self.emperical_accesses = self.K + self.M * self.K + 2 * self.M * self.M
+        return self.emperical_accesses
+
+    def calculate_emperical_metrics(self, cycles_array: np.ndarray):
+        """
+        Calculate emperical metrics from cycles data.
         
         Args:
             cycles_array: Array of cycle measurements
@@ -149,28 +243,21 @@ class RooflineCalculator(TimingCalculator):
         Returns:
             Dictionary with performance metrics
         """
-        self.avg_cycles = float(np.mean(cycles_array))
-        self.min_cycles = float(np.min(cycles_array))
-        self.max_cycles = float(np.max(cycles_array))
         
         # Calculate roofline metrics
-        total_cycles = self.avg_cycles * self.width * self.height
-        
-        # Intensity = FLOPS / Bytes
-        intensity = self.total_flops / self.total_absolute_accesses if self.total_absolute_accesses > 0 else 0
-        
-        # Performance = FLOPS / Cycles  
-        performance = self.total_flops / total_cycles if total_cycles > 0 else 0
-        
-        return {
-            "intensity": intensity,
-            "performance": performance,
-            "avg_cycles": self.avg_cycles,
-            "min_cycles": self.min_cycles,
-            "max_cycles": self.max_cycles,
-            "total_cycles": total_cycles
-        }
-        
+        self.calculate_emperical_flops()
+        self.calculate_emperical_memory_accesses()
+        self.emperical_avg_cycles = float(np.mean(cycles_array))
+        self.emperical_min_cycles = float(np.min(cycles_array))
+        self.emperical_max_cycles = float(np.max(cycles_array))
+        self.emperical_cycles = self.emperical_max_cycles  
+        self.emperical_time = self.emperical_cycles / self.frequency
+        self.emperical_bw = self.emperical_accesses / self.emperical_time
+        self.emperical_performance = self.emperical_flops / self.emperical_time
+        self.emperical_AI = self.emperical_flops / self.emperical_accesses
+        return self.get_emperical_metrics()
+
+    # Roofline + Plotting + CSV utilities
     def generate_roofline_csv_row(self) -> Dict[str, any]:
         """
         Generate a single row of data for roofline CSV.
@@ -178,24 +265,12 @@ class RooflineCalculator(TimingCalculator):
         Returns:
             Dictionary with all required fields for roofline plotting
         """
-        return {
-            "width": self.width,
-            "height": self.height,
-            "N": self.N,
-            "K": self.K,
-            "M": self.M,
-            "density": self.density,
-            "avg_cycles": self.avg_cycles,
-            "min_cycles": self.min_cycles,
-            "max_cycles": self.max_cycles,
-            "total_relative_accesses": self.total_relative_accesses,
-            "total_absolute_accesses": self.total_absolute_accesses,
-            "total_flops": self.total_flops,
-            "matrix_format": self.matrix_format,
-            "operation_type": self.operation_type,
-            "WSE": self.WSE,
-            "frequency": self.frequency
-        }
+        emperical_metrics = self.get_emperical_metrics()
+        theoretical_metrics = self.get_theoretical_metrics()
+        problem_dimensions = self.get_problem_dimensions()
+        hardware_configuration = self.get_hardware_configuration()
+        metrics = {**emperical_metrics, **theoretical_metrics, **problem_dimensions, **hardware_configuration}
+        return metrics
         
     def save_roofline_csv(self, filename: Optional[str] = None, append: bool = True):
         """
@@ -225,21 +300,48 @@ class RooflineCalculator(TimingCalculator):
         
     def print_roofline_summary(self):
         """Print a summary of roofline metrics."""
+        emperical_metrics = self.get_emperical_metrics()
+        theoretical_metrics = self.get_theoretical_metrics()
+        problem_dimensions = self.get_problem_dimensions()
+        hardware_configuration = self.get_hardware_configuration()
         print("\n" + "="*60)
         print("ROOFLINE PERFORMANCE SUMMARY")
         print("="*60)
-        print(f"Matrix Format: {self.matrix_format}")
-        print(f"Operation: {self.operation_type}")
-        print(f"WSE: {self.WSE}")
-        print(f"Dimensions: {self.N}x{self.K} x {self.K}x{self.M} = {self.N}x{self.M}")
-        print(f"Density: {self.density}%")
-        print(f"Grid Size: {self.width}x{self.height}")
+        print("Emperical Metrics:")
+        print(f"  FLOPS(Emperical): {emperical_metrics['emperical_flops']:,}")
+        print(f"  Memory Accesses(Emperical): {emperical_metrics['emperical_accesses']:,} bytes")
+        print(f"  Min Cycles(Emperical): {emperical_metrics['emperical_min_cycles']:.0f}")
+        print(f"  Max Cycles(Emperical): {emperical_metrics['emperical_max_cycles']:.0f}")
+        print(f"  Avg Cycles(Emperical): {emperical_metrics['emperical_avg_cycles']:.0f}")
+        print(f"  Time(Emperical): {emperical_metrics['emperical_time']:.6f} seconds")
+        print(f"  BW(Emperical): {emperical_metrics['emperical_bw']:.6f} bytes/second")
+        print(f"  Performance(Emperical): {emperical_metrics['emperical_performance']:.6f} flops/cycle")
+        print(f"  Arithmetic Intensity(Emperical): {emperical_metrics['emperical_AI']:.6f} flops/byte")        
         print("-"*60)
-        print(f"Total FLOPS: {self.total_flops:,}")
-        print(f"Memory Accesses: {self.total_absolute_accesses:,} bytes")
-        print(f"Intensity: {self.total_flops/self.total_absolute_accesses:.6f} flops/byte")
-        print(f"Avg Cycles: {self.avg_cycles:.0f}")
-        print(f"Performance: {self.total_flops/(self.avg_cycles*self.width*self.height):.6f} flops/cycle")
+        print("Theoretical Metrics:")
+        print(f"  FLOPS(Theoretical): {theoretical_metrics['theoretical_flops']:,}")
+        print(f"  Memory Accesses(Theoretical): {theoretical_metrics['theoretical_accesses']:,} bytes")
+        print(f"  Arithmetic Intensity(Theoretical): {theoretical_metrics['theoretical_AI']:.6f} flops/byte")
+        print(f"  Cycles(Theoretical): {theoretical_metrics['theoretical_cycles']:.0f}")
+        print(f"  Time(Theoretical): {theoretical_metrics['theoretical_time']:.6f} seconds")
+        print(f"  BW(Theoretical): {theoretical_metrics['theoretical_bw']:.6f} bytes/second")
+        print(f"  Performance(Theoretical): {theoretical_metrics['theoretical_performance']:.6f} flops/second")
+        print("-"*60)
+        print("Input Problem :")
+        print(f"  M: {problem_dimensions['M']}")
+        print(f"  K: {problem_dimensions['K']}")
+        print(f"  N: {problem_dimensions['N']}")
+        print(f"  Density: {problem_dimensions['density']}%")
+        print(f"  Matrix Format: {problem_dimensions['matrix_format']}")
+        print(f"  Operation Type: {problem_dimensions['operation_type']}")
+        print("-"*60)
+        print("Hardware Configuration :")
+        print(f"  PE Width: {hardware_configuration['width']}")
+        print(f"  PE Height: {hardware_configuration['height']}")
+        print(f"  PE Length?: {hardware_configuration['pe_length']}") # Todo: What is this parameter?
+        print(f"  Loop Count: {hardware_configuration['loop_count']}")
+        print(f"  Frequency: {hardware_configuration['frequency']} GHz")
+        print(f"  WSE: {hardware_configuration['WSE']}")
         print("="*60)
 
     def plot_roofline_from_csv(self,
@@ -302,8 +404,74 @@ class RooflineCalculator(TimingCalculator):
         # Set limits
         plt.xlim([0.15, 0.17])
         plt.ylim([0.425, 2.1])
-        # save
+         # save
         plt.savefig(savefile, bbox_inches='tight', format='png')
+
+    def plot_emperical_vs_theoretical(self, csv_path: str, savefile: str):
+        """
+        Plot empirical vs theoretical cycles vs number of PEs used.
+        
+        Args:
+            csv_path: Path to the CSV containing the benchmark data
+            savefile: Output path for the plot
+        """
+        if not os.path.exists(csv_path):
+            raise FileNotFoundError(f"CSV not found: {csv_path}")
+        
+        # Read CSV data
+        df = pd.read_csv(csv_path)
+        
+        # Calculate number of PEs used (width * height)
+        df['num_PEs'] = df['width'] * df['height']
+        
+        # Setup plot
+        plt.figure(figsize=(10, 6))
+        ax = plt.gca()
+        
+        # Plot empirical cycles
+        plt.plot(df['num_PEs'], df['emperical_cycles'], 'o-', color='red', 
+                linewidth=2, markersize=6, label='Empirical Cycles')
+        
+        # Plot theoretical cycles
+        plt.plot(df['num_PEs'], df['theoretical_cycles'], 's--', color='blue', 
+                linewidth=2, markersize=6, label='Theoretical Cycles')
+        
+        # Customize plot
+        plt.xlabel('Number of PEs Used (Width × Height)', fontsize=12)
+        plt.ylabel('Cycles', fontsize=12)
+        plt.title('Empirical vs Theoretical Cycles vs Number of PEs', fontsize=14, fontweight='bold')
+        plt.grid(True, alpha=0.3)
+        
+        # Get metrics from first row for legend
+        first_row = df.iloc[0]
+        density = first_row['density']
+        matrix_format = first_row['matrix_format']
+        operation_type = first_row['operation_type']
+        M = first_row['M']
+        K = first_row['K']
+        N = first_row['N']
+        
+        # Create detailed legend with metrics
+        legend_text = f"""Configuration:
+                        Density: {density}%
+                        Format: {matrix_format}
+                        Operation: {operation_type}
+                        Matrix: {M}×{K} × {K}×{N} = {M}×{N}"""
+        
+        # Add text box with configuration
+        plt.text(0.02, 0.98, legend_text, transform=ax.transAxes, 
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8),
+                fontsize=10, fontfamily='monospace')
+        
+        # Add legend for the lines
+        plt.legend(loc='upper right', fontsize=11)
+        
+        # Adjust layout and save
+        plt.tight_layout()
+        plt.savefig(savefile, bbox_inches='tight', format='png', dpi=300)
+        plt.close()  # Close the figure to free memory
+        
+        print(f"Empirical vs Theoretical plot saved to: {savefile}")
 
 # Example usage functions
 def example_usage_function():
@@ -319,14 +487,14 @@ def example_usage_function():
 
         # 1. Initialize calculator (add after your existing TimingCalculator setup)
         calc = RooflineCalculator(runner, width, height, pe_length, loop_count, frequency, isCS2,
-                                matrix_format="CSR", operation_type="SpMM")
+                                matrix_format="DENSE", operation_type="SpMM")
 
         # 2. Set matrix dimensions (add after you know your matrix size)
         calc.set_matrix_dimensions(N=1024, K=1024, M=64, density=20)  # 80% sparse
 
         # 3. Calculate theoretical metrics (add before running kernel)
         flops = calc.calculate_flops()
-        rel_acc, abs_acc = calc.calculate_memory_accesses("csr")
+        theoretical_accesses = calc.calculate_memory_accesses("dense")
 
         # 4. Replace your existing timing code with:
         calc.tic()
@@ -338,9 +506,9 @@ def example_usage_function():
         metrics = calc.calculate_performance_metrics(cycles_array)
 
         # 6. Save results (add at the end of your benchmark)
-        calc.save_roofline_csv("CSR_benchmark.csv")
+        calc.save_roofline_csv("DENSE_benchmark.csv")
         calc.print_roofline_summary()
-        calc.plot_roofline_from_csv("CSR_benchmark.csv", savefile="CSR_benchmark.png")
+        calc.plot_roofline_from_csv("DENSE_benchmark.csv", savefile="DENSE_benchmark.png")
     '''
     
     print("="*80)
@@ -356,50 +524,37 @@ def integrate_roofline_with_existing_benchmark():
     """
     
     # Example parameters (replace with your actual values)
-    width, height = 64, 32
+    width, height = 16, 16
     pe_length = 1
-    loop_count = 100
-    frequency = 0.85  # GHz
+    loop_count = 1
+    frequency = 0.85  # GHz  # 850MHz = 850000000 Hz = 1/second
     isCS2 = False  # True for CS2, False for CS3
     
     # Matrix dimensions for your benchmark
-    N, K, M = 1024, 1024, 64
-    density = 20  # 80% sparse
+    M, K, N = 64, 64, 1 # 64x64(Matrix) * 64*1(Vector) = 64x1(Result)
+    density = 100
     
     # Matrix format being tested
-    matrix_format = "CSR"  # or "COO", "CSC", "ELLPACK", "GEMM"
-    operation_type = "SpMM"  # or "GeMM"
+    matrix_format = "DENSE"  # or "COO", "CSC", "ELLPACK", "DENSE"
+    operation_type = "GeMV"  # or "SpMM"
     
     print("="*80)
     print("ROOFLINE INTEGRATION EXAMPLE")
     print("="*80)
     
     # Step 1: Initialize RooflineCalculator
-    print("Step 1: Initialize RooflineCalculator")
-    # Note: You'll need to pass your actual runner object here
-    # calc = RooflineCalculator(runner, width, height, pe_length, loop_count, frequency, isCS2,
-    #                          matrix_format, operation_type)
-    
+    print("Step 1: Initialize RooflineCalculator")    
     # For this example, we'll create a mock calculator
     calc = RooflineCalculator(None, width, height, pe_length, loop_count, frequency, isCS2,
                              matrix_format, operation_type)
-    
     # Step 2: Set matrix dimensions
     print("Step 2: Set matrix dimensions")
-    calc.set_matrix_dimensions(N, K, M, density)
-    print(f"  Matrix: {N}x{K} x {K}x{M} = {N}x{M}, Density: {density}%")
-    
+    calc.set_matrix_dimensions(M, K, N, density)
     # Step 3: Calculate theoretical metrics
     print("Step 3: Calculate theoretical metrics")
-    flops = calc.calculate_flops()
-    rel_acc, abs_acc = calc.calculate_memory_accesses(matrix_format.lower())
-    
-    print(f"  FLOPS: {flops:,}")
-    print(f"  Memory Accesses: {abs_acc:,} bytes")
-    print(f"  Intensity: {flops/abs_acc:.6f} flops/byte")
-    
-    # Step 4: Simulate timing measurements (replace with your actual timing code)
-    print("Step 4: Simulate timing measurements")
+    calc.calculate_theoretical_metrics()
+    # Step 4: Empirical measurements
+    print("Step 4: Calculate emperical metrics")
     # In your actual code, you would do:
     # calc.tic()
     # # ... run your kernel ...
@@ -407,44 +562,38 @@ def integrate_roofline_with_existing_benchmark():
     # cycles_array = calc.copy_back_compute_time(symbol_time, width, height, data_type, layout)
     
     # For this example, simulate some cycle measurements
+    # Todo: This is dummy data, not real data
     np.random.seed(42)  # For reproducible results
-    base_cycles = 15000 if matrix_format == "GEMM" else 20000
+    base_cycles = 15000 if matrix_format == "DENSE" else 20000
     cycles_array = np.random.normal(base_cycles, base_cycles * 0.1, (height, width))
-    
-    # Step 5: Calculate performance metrics
-    print("Step 5: Calculate performance metrics")
-    metrics = calc.calculate_performance_metrics(cycles_array)
-    
-    print(f"  Avg Cycles: {metrics['avg_cycles']:.0f}")
-    print(f"  Performance: {metrics['performance']:.6f} flops/cycle")
-    
-    # Step 6: Generate CSV data
-    print("Step 6: Generate CSV data")
-    csv_row = calc.generate_roofline_csv_row()
-    print("  CSV Row generated with fields:")
-    for key, value in csv_row.items():
-        print(f"    {key}: {value}")
-    
-    # Step 7: Save to CSV
-    print("Step 7: Save to CSV")
+
+    # Step 5: Calculate emperical metrics
+    calc.calculate_emperical_metrics(cycles_array)
+
+    # Step 6: Save to CSV
+    print("Step 6: Save to CSV")
     calc.save_roofline_csv(f"{matrix_format}_benchmark.csv")
     
-    # Step 8: Print summary
-    print("Step 8: Print summary")
+    # Step 7: Print summary
+    print("Step 7: Print summary")
     calc.print_roofline_summary()
 
-    # Step 9: Plot roofline
-    print("Step 9: Plot roofline")
-    calc.plot_roofline_from_csv(f"{matrix_format}_benchmark.csv", savefile=f"{matrix_format}_benchmark.png")
-    print(f"Roofline plot saved to: {matrix_format}_benchmark.png")
+    # Step 8: Plot emperical vs theoretical 
+    print("Step 8: Plot emperical vs theoretical")
+    calc.plot_emperical_vs_theoretical(f"{matrix_format}_benchmark.csv", savefile=f"{matrix_format}_benchmark.png")
+
+    # # Step 8: Plot roofline
+    # print("Step 8: Plot roofline")
+    # calc.plot_roofline_from_csv(f"{matrix_format}_benchmark.csv", savefile=f"{matrix_format}_benchmark.png")
+    # print(f"Roofline plot saved to: {matrix_format}_benchmark.png")
     
-    return calc, csv_row
+    return calc
 
 
 if __name__ == "__main__":
     example_usage_function()
     # Integrated example
-    calc, csv_row = integrate_roofline_with_existing_benchmark()
+    calc = integrate_roofline_with_existing_benchmark()
     print("\n")
     
     print("\n" + "="*80)

@@ -21,6 +21,16 @@ class TimingCalculator:
         self.bandwidth = -100
 
     # Private methods
+    def _get_hardware_configuration(self):
+        return {
+            "width": self.width,
+            "height": self.height,
+            "pe_length": self.pe_length,
+            "loop_count": self.loop_count,
+            "frequency": self.frequency,
+            "WSE": self.WSE,
+        }
+    
     def __float_to_hex(self, f):
         return hex(struct.unpack('<I', struct.pack('<f', f))[0])
 
