@@ -438,8 +438,9 @@ class RooflineCalculator(TimingCalculator):
         
         # Customize plot
         plt.xlabel('Number of PEs Used (Width × Height)', fontsize=12)
-        plt.ylabel('Cycles', fontsize=12)
+        plt.ylabel('Cycles (Log Scale)', fontsize=12)
         plt.title('Empirical vs Theoretical Cycles vs Number of PEs', fontsize=14, fontweight='bold')
+        plt.yscale('log')  # Use log scale for y-axis
         plt.grid(True, alpha=0.3)
         
         # Get metrics from first row for legend
@@ -472,6 +473,115 @@ class RooflineCalculator(TimingCalculator):
         plt.close()  # Close the figure to free memory
         
         print(f"Empirical vs Theoretical plot saved to: {savefile}")
+
+    def plot_emperical_vs_theoretical_normalized(self, csv_path: str, savefile: str):
+        """
+        Alternative plotting function with normalized data or dual y-axes.
+        
+        Args:
+            csv_path: Path to the CSV containing the benchmark data
+            savefile: Output path for the plot
+        """
+        if not os.path.exists(csv_path):
+            raise FileNotFoundError(f"CSV not found: {csv_path}")
+        
+        # Read CSV data
+        df = pd.read_csv(csv_path)
+        
+        # Debug: Print data info
+        print(f"CSV loaded: {len(df)} rows")
+        print(f"Empirical cycles: {df['emperical_cycles'].values}")
+        print(f"Theoretical cycles: {df['theoretical_cycles'].values}")
+        print(f"Width x Height: {df['width'].values} x {df['height'].values}")
+        
+        # Calculate number of PEs used (width * height)
+        df['num_PEs'] = df['width'] * df['height']
+        print(f"Number of PEs: {df['num_PEs'].values}")
+        
+        # Setup plot with dual y-axes
+        fig, ax1 = plt.subplots(figsize=(12, 6))
+        
+        # Plot empirical cycles on left y-axis
+        color1 = 'red'
+        ax1.set_xlabel('Number of PEs Used (Width × Height)', fontsize=12)
+        ax1.set_ylabel('Empirical Cycles', color=color1, fontsize=12)
+        
+        # Handle single data point vs multiple data points
+        if len(df) == 1:
+            # Single data point - use scatter plot
+            line1 = ax1.scatter(df['num_PEs'], df['emperical_cycles'], 
+                              color=color1, s=100, marker='o', label='Empirical Cycles')
+        else:
+            # Multiple data points - use line plot
+            line1 = ax1.plot(df['num_PEs'], df['emperical_cycles'], 'o-', color=color1, 
+                            linewidth=2, markersize=6, label='Empirical Cycles')
+        
+        ax1.tick_params(axis='y', labelcolor=color1)
+        ax1.grid(True, alpha=0.3)
+        
+        # Create second y-axis for theoretical cycles
+        ax2 = ax1.twinx()
+        color2 = 'blue'
+        ax2.set_ylabel('Theoretical Cycles', color=color2, fontsize=12)
+        
+        # Handle single data point vs multiple data points
+        if len(df) == 1:
+            # Single data point - use scatter plot
+            line2 = ax2.scatter(df['num_PEs'], df['theoretical_cycles'], 
+                              color=color2, s=100, marker='s', label='Theoretical Cycles')
+        else:
+            # Multiple data points - use line plot
+            line2 = ax2.plot(df['num_PEs'], df['theoretical_cycles'], 's--', color=color2, 
+                            linewidth=2, markersize=6, label='Theoretical Cycles')
+        
+        ax2.tick_params(axis='y', labelcolor=color2)
+        
+        # Get metrics from first row for legend
+        first_row = df.iloc[0]
+        density = first_row['density']
+        matrix_format = first_row['matrix_format']
+        operation_type = first_row['operation_type']
+        M = first_row['M']
+        K = first_row['K']
+        N = first_row['N']
+        
+        # Create detailed legend with metrics
+        legend_text = f"""Configuration:
+                         Density: {density}%
+                         Format: {matrix_format}
+                         Operation: {operation_type}
+                         Matrix: {M}×{K} × {K}×{N} = {M}×{N}"""
+        
+        # Add text box with configuration
+        plt.text(0.02, 0.98, legend_text, transform=ax1.transAxes, 
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8),
+                fontsize=10, fontfamily='monospace')
+        
+        # Combine legends - handle both scatter and line plots
+        if len(df) == 1:
+            # For scatter plots, create legend manually
+            from matplotlib.lines import Line2D
+            legend_elements = [
+                Line2D([0], [0], marker='o', color='red', linestyle='None', 
+                       markersize=8, label='Empirical Cycles'),
+                Line2D([0], [0], marker='s', color='blue', linestyle='None', 
+                       markersize=8, label='Theoretical Cycles')
+            ]
+            ax1.legend(handles=legend_elements, loc='upper right', fontsize=11)
+        else:
+            # For line plots, use existing method
+            lines = line1 + line2
+            labels = [l.get_label() for l in lines]
+            ax1.legend(lines, labels, loc='upper right', fontsize=11)
+        
+        plt.title('Empirical vs Theoretical Cycles vs Number of PEs (Dual Y-Axis)', fontsize=14, fontweight='bold')
+        
+        # Adjust layout and save
+        plt.tight_layout()
+        plt.savefig(savefile, bbox_inches='tight', format='png', dpi=300)
+        plt.close()
+        
+        print(f"Empirical vs Theoretical (dual-axis) plot saved to: {savefile}")
 
 # Example usage functions
 def example_usage_function():
@@ -580,7 +690,7 @@ def integrate_roofline_with_existing_benchmark():
 
     # Step 8: Plot emperical vs theoretical 
     print("Step 8: Plot emperical vs theoretical")
-    calc.plot_emperical_vs_theoretical(f"{matrix_format}_benchmark.csv", savefile=f"{matrix_format}_benchmark.png")
+    calc.plot_emperical_vs_theoretical_normalized(f"{matrix_format}_benchmark.csv", savefile=f"{matrix_format}_benchmark.png")
 
     # # Step 8: Plot roofline
     # print("Step 8: Plot roofline")
