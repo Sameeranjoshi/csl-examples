@@ -317,8 +317,7 @@ class RooflineCalculator(TimingCalculator):
         print(f"  Time(empirical): {empirical_metrics['empirical_time']:.6f} seconds")
         print(f"  BW(empirical): {empirical_metrics['empirical_bw']:.6f} bytes/second")
         print(f"  Performance(empirical): {empirical_metrics['empirical_performance']:.6f} flops/cycle")
-        print(f"  Arithmetic Intensity(empirical): {empirical_metrics['empirical_AI']:.6f} flops/byte")        
-        print("-"*60)
+        print(f"  Arithmetic Intensity(empirical): {empirical_metrics['empirical_AI']:.6f} flops/byte")
         print("Theoretical Metrics:")
         print(f"  FLOPS(Theoretical): {theoretical_metrics['theoretical_flops']:,}")
         print(f"  Memory Accesses(Theoretical): {theoretical_metrics['theoretical_accesses']:,} bytes")
@@ -327,7 +326,6 @@ class RooflineCalculator(TimingCalculator):
         print(f"  Time(Theoretical): {theoretical_metrics['theoretical_time']:.6f} seconds")
         print(f"  BW(Theoretical): {theoretical_metrics['theoretical_bw']:.6f} bytes/second")
         print(f"  Performance(Theoretical): {theoretical_metrics['theoretical_performance']:.6f} flops/second")
-        print("-"*60)
         print("Input Problem :")
         print(f"  M: {problem_dimensions['M']}")
         print(f"  K: {problem_dimensions['K']}")
@@ -335,7 +333,6 @@ class RooflineCalculator(TimingCalculator):
         print(f"  Density: {problem_dimensions['density']}%")
         print(f"  Matrix Format: {problem_dimensions['matrix_format']}")
         print(f"  Operation Type: {problem_dimensions['operation_type']}")
-        print("-"*60)
         print("Hardware Configuration :")
         print(f"  PE Width: {hardware_configuration['width']}")
         print(f"  PE Height: {hardware_configuration['height']}")
@@ -509,41 +506,42 @@ AX+B; A = {first_row['M']}×{first_row['K']}, X = {first_row['K']}×{first_row['
 # Example usage functions
 def example_usage_function():
     """
-    Create a template for modifying your existing benchmark scripts.
+    Template for integrating RooflineCalculator into your benchmark scripts.
+    This template is still correct as of the current version of the codebase.
+    Please ensure that the function and argument names match your local version.
     """
-    
+
     template = '''
-        # TEMPLATE FOR INTEGRATING ROOFLINE CALCULATOR
-        # Add this to your existing benchmark scripts
+# TEMPLATE FOR INTEGRATING ROOFLINE CALCULATOR
+# Add this to your existing benchmark scripts
 
-        from roofline_calculator import RooflineCalculator
+from roofline_calculator import RooflineCalculator
 
-        # 1. Initialize calculator (add after your existing TimingCalculator setup)
-        calc = RooflineCalculator(runner, width, height, pe_length, loop_count, frequency, isCS2,
-                                matrix_format="DENSE", operation_type="SpMM")
+# 1. Initialize calculator (add after your existing TimingCalculator setup)
+calc = RooflineCalculator(runner, width, height, pe_length, loop_count, frequency, isCS2,
+                          matrix_format="DENSE", operation_type="SpMM")
 
-        # 2. Set matrix dimensions (add after you know your matrix size)
-        calc.set_matrix_dimensions(N=1024, K=1024, M=64, density=20)  # 80% sparse
+# 2. Set matrix dimensions (add after you know your matrix size)
+calc.set_matrix_dimensions(N=1024, K=1024, M=64, density=20)  # 80% sparse
 
-        # 3. Calculate theoretical metrics (add before running kernel)
-        flops = calc.calculate_flops()
-        theoretical_accesses = calc.calculate_memory_accesses("dense")
+# 3. Calculate theoretical metrics (add before running kernel)
+calc.calculate_theoretical_metrics()
 
-        # 4. Replace your existing timing code with:
-        calc.tic()
-        # ... your kernel execution ...
-        calc.toc()
-        cycles_array = calc.copy_back_compute_time(symbol_time, width, height, data_type, layout)
+# 4. Replace your existing timing code with:
+calc.tic()
+# ... your kernel execution ...
+calc.toc()
+cycles_array = calc.copy_back_compute_time(symbol_time, width, height, data_type, layout)
 
-        # 5. Calculate performance metrics (add after timing)
-        metrics = calc.calculate_performance_metrics(cycles_array)
+# 5. Calculate performance metrics (add after timing)
+calc.calculate_performance_metrics(cycles_array)
 
-        # 6. Save results (add at the end of your benchmark)
-        calc.save_roofline_csv("DENSE_benchmark.csv")
-        calc.print_roofline_summary()
-        calc.plot_roofline_from_csv("DENSE_benchmark.csv", savefile="DENSE_benchmark.png")
+# 6. Save results (add at the end of your benchmark)
+calc.save_roofline_csv("DENSE_benchmark.csv")
+calc.print_roofline_summary()
+calc.plot_roofline_from_csv("DENSE_benchmark.csv", savefile="DENSE_benchmark.png")
     '''
-    
+
     print("="*80)
     print("BENCHMARK INTEGRATION TEMPLATE")
     print("="*80)
@@ -624,17 +622,7 @@ def integrate_roofline_with_existing_benchmark():
 
 
 if __name__ == "__main__":
-    example_usage_function()
+    # example_usage_function()
     # Integrated example
     calc = integrate_roofline_with_existing_benchmark()
-    print("\n")
-    
     print("\n" + "="*80)
-    print("INTEGRATION COMPLETE!")
-    print("="*80)
-    print("Next steps:")
-    print("1. Import roofline_calculator.py to your timing library")
-    print("2. Modify your existing benchmark scripts using the template/example above")
-    print("3. Run your benchmarks to generate CSV data")
-    print("4. Use the generated CSV files to plot the roofline")
-    print("="*80)
