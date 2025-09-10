@@ -425,7 +425,7 @@ class RooflineCalculator(TimingCalculator):
         print(f"CSV loaded: {len(df)} rows")
         
         # Compute number of PEs
-        df['num_PEs'] = df['width'] * df['height']
+        df['num_PEs'] = df['height'] * df['width']
         
         # Reshape to tidy format (for seaborn plotting)
         df_long = df.melt(
@@ -461,24 +461,41 @@ class RooflineCalculator(TimingCalculator):
         )
         
         # Labels & title
-        plt.xlabel("Number of PEs (Width × Height)", fontsize=12)
+        plt.xlabel("Number of PEs (Height × Width)", fontsize=12)
         plt.ylabel("Cycles", fontsize=12)
         plt.title("Empirical vs Theoretical Cycles vs Number of PEs", fontsize=14, fontweight='bold')
         # plt.yscale('log')
         plt.grid(True, alpha=0.3)
         
+        # Set x-axis to show the PE value but allow natural spread of data points
+        unique_pe_values = df_long['num_PEs'].unique()
+        if len(unique_pe_values) == 1:
+            # If all data points have the same PE count, show that value but allow spread
+            pe_value = unique_pe_values[0]
+            # Set a reasonable range around the PE value to show the data points clearly
+            plt.xlim(pe_value - 20, pe_value + 20)
+            # Show the PE value as a tick mark
+            plt.xticks([pe_value], [f"{pe_value}"])
+        else:
+            # If multiple PE values, set range to show all data with some padding
+            pe_min, pe_max = unique_pe_values.min(), unique_pe_values.max()
+            pe_range = pe_max - pe_min
+            plt.xlim(pe_min - pe_range * 0.1, pe_max + pe_range * 0.1)
+        
         # Add configuration info (from first row)
         first_row = df.iloc[0]
         legend_text = f"""Configuration:
-                        Density: {first_row['density']}%
-                        Format: {first_row['matrix_format']}
-                        Operation: {first_row['operation_type']}
-                        Matrix: {first_row['M']}×{first_row['K']} × {first_row['K']}×{first_row['N']} = {first_row['M']}×{first_row['N']}"""
+Density: {first_row['density']}%
+Format: {first_row['matrix_format']}
+Operation: {first_row['operation_type']}
+AX+B; A = {first_row['M']}×{first_row['K']}, X = {first_row['K']}×{first_row['N']}, B = {first_row['M']}×{first_row['N']}
+{first_row['WSE']}"""
                             
         plt.text(
-            0.02, 0.98, legend_text,
+            1.02, 0.98, legend_text,
             transform=plt.gca().transAxes,
             verticalalignment='top',
+            horizontalalignment='left',
             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8),
             fontsize=10, fontfamily='monospace'
         )
