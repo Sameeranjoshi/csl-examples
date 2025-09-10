@@ -11,6 +11,7 @@ import pandas as pd
 import datetime
 import sys
 import os
+import seaborn as sns
 import matplotlib.pyplot as plt
 from typing import Dict, List, Tuple, Optional
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -35,17 +36,17 @@ class RooflineCalculator(TimingCalculator):
         # self.total_flops = 0
         # self.total_relative_accesses = 0
         # self.total_absolute_accesses = 0
-        self.emperical_avg_cycles = 0
-        self.emperical_min_cycles = 0
-        self.emperical_max_cycles = 0
+        self.empirical_avg_cycles = 0
+        self.empirical_min_cycles = 0
+        self.empirical_max_cycles = 0
 
-        self.emperical_flops = 0  # FLOPs
-        self.emperical_accesses = 0  # Bytes
-        self.emperical_cycles = 0 # Cycles  # need to decide what type it is
-        self.emperical_time = 0 # Seconds
-        self.emperical_bw = 0 # Bytes/Second
-        self.emperical_performance = 0    # FLOPs/Second = FLOPS
-        self.emperical_AI = 0  # FLOPs/Bytes
+        self.empirical_flops = 0  # FLOPs
+        self.empirical_accesses = 0  # Bytes
+        self.empirical_cycles = 0 # Cycles  # need to decide what type it is
+        self.empirical_time = 0 # Seconds
+        self.empirical_bw = 0 # Bytes/Second
+        self.empirical_performance = 0    # FLOPs/Second = FLOPS
+        self.empirical_AI = 0  # FLOPs/Bytes
 
 
         # Theoretical performance - modeling metrics
@@ -84,23 +85,23 @@ class RooflineCalculator(TimingCalculator):
             "theoretical_AI": self.theoretical_AI
         }
 
-    def get_emperical_metrics(self):
+    def get_empirical_metrics(self):
         """
-        Getter for all emperical values as a dictionary.
+        Getter for all empirical values as a dictionary.
         Returns:
-            dict: Dictionary containing all emperical performance metrics.
+            dict: Dictionary containing all empirical performance metrics.
         """
         return {
-            "emperical_flops": self.emperical_flops,
-            "emperical_accesses": self.emperical_accesses,
-            "emperical_cycles": self.emperical_cycles,
-            "emperical_min_cycles": self.emperical_min_cycles,
-            "emperical_max_cycles": self.emperical_max_cycles,
-            "emperical_avg_cycles": self.emperical_avg_cycles,
-            "emperical_time": self.emperical_time,
-            "emperical_bw": self.emperical_bw,
-            "emperical_performance": self.emperical_performance,
-            "emperical_AI": self.emperical_AI
+            "empirical_flops": self.empirical_flops,
+            "empirical_accesses": self.empirical_accesses,
+            "empirical_cycles": self.empirical_cycles,
+            "empirical_min_cycles": self.empirical_min_cycles,
+            "empirical_max_cycles": self.empirical_max_cycles,
+            "empirical_avg_cycles": self.empirical_avg_cycles,
+            "empirical_time": self.empirical_time,
+            "empirical_bw": self.empirical_bw,
+            "empirical_performance": self.empirical_performance,
+            "empirical_AI": self.empirical_AI
         }
 
     def get_problem_dimensions(self):
@@ -221,21 +222,21 @@ class RooflineCalculator(TimingCalculator):
         return self.get_theoretical_metrics()
 
     # Empirical
-    def calculate_emperical_flops(self):
+    def calculate_empirical_flops(self):
         # Actually should be returned from the device
         # TODO: Fix this
-        self.emperical_flops = (self.K)*(self.M) + (self.K - 1)*(self.M)
-        return self.emperical_flops
+        self.empirical_flops = (self.K)*(self.M) + (self.K - 1)*(self.M)
+        return self.empirical_flops
 
-    def calculate_emperical_memory_accesses(self):
+    def calculate_empirical_memory_accesses(self):
         # Actually should be returned from the device
         # TODO: Fix this
-        self.emperical_accesses = self.K + self.M * self.K + 2 * self.M * self.M
-        return self.emperical_accesses
+        self.empirical_accesses = self.K + self.M * self.K + 2 * self.M * self.M
+        return self.empirical_accesses
 
-    def calculate_emperical_metrics(self, cycles_array: np.ndarray):
+    def calculate_empirical_metrics(self, cycles_array: np.ndarray):
         """
-        Calculate emperical metrics from cycles data.
+        Calculate empirical metrics from cycles data.
         
         Args:
             cycles_array: Array of cycle measurements
@@ -245,17 +246,17 @@ class RooflineCalculator(TimingCalculator):
         """
         
         # Calculate roofline metrics
-        self.calculate_emperical_flops()
-        self.calculate_emperical_memory_accesses()
-        self.emperical_avg_cycles = float(np.mean(cycles_array))
-        self.emperical_min_cycles = float(np.min(cycles_array))
-        self.emperical_max_cycles = float(np.max(cycles_array))
-        self.emperical_cycles = self.emperical_max_cycles  
-        self.emperical_time = self.emperical_cycles / self.frequency
-        self.emperical_bw = self.emperical_accesses / self.emperical_time
-        self.emperical_performance = self.emperical_flops / self.emperical_time
-        self.emperical_AI = self.emperical_flops / self.emperical_accesses
-        return self.get_emperical_metrics()
+        self.calculate_empirical_flops()
+        self.calculate_empirical_memory_accesses()
+        self.empirical_avg_cycles = float(np.mean(cycles_array))
+        self.empirical_min_cycles = float(np.min(cycles_array))
+        self.empirical_max_cycles = float(np.max(cycles_array))
+        self.empirical_cycles = self.empirical_max_cycles  
+        self.empirical_time = self.empirical_cycles / self.frequency
+        self.empirical_bw = self.empirical_accesses / self.empirical_time
+        self.empirical_performance = self.empirical_flops / self.empirical_time
+        self.empirical_AI = self.empirical_flops / self.empirical_accesses
+        return self.get_empirical_metrics()
 
     # Roofline + Plotting + CSV utilities
     def generate_roofline_csv_row(self) -> Dict[str, any]:
@@ -265,11 +266,11 @@ class RooflineCalculator(TimingCalculator):
         Returns:
             Dictionary with all required fields for roofline plotting
         """
-        emperical_metrics = self.get_emperical_metrics()
+        empirical_metrics = self.get_empirical_metrics()
         theoretical_metrics = self.get_theoretical_metrics()
         problem_dimensions = self.get_problem_dimensions()
         hardware_configuration = self.get_hardware_configuration()
-        metrics = {**emperical_metrics, **theoretical_metrics, **problem_dimensions, **hardware_configuration}
+        metrics = {**empirical_metrics, **theoretical_metrics, **problem_dimensions, **hardware_configuration}
         return metrics
         
     def save_roofline_csv(self, filename: Optional[str] = None, append: bool = True):
@@ -300,23 +301,23 @@ class RooflineCalculator(TimingCalculator):
         
     def print_roofline_summary(self):
         """Print a summary of roofline metrics."""
-        emperical_metrics = self.get_emperical_metrics()
+        empirical_metrics = self.get_empirical_metrics()
         theoretical_metrics = self.get_theoretical_metrics()
         problem_dimensions = self.get_problem_dimensions()
         hardware_configuration = self.get_hardware_configuration()
         print("\n" + "="*60)
         print("ROOFLINE PERFORMANCE SUMMARY")
         print("="*60)
-        print("Emperical Metrics:")
-        print(f"  FLOPS(Emperical): {emperical_metrics['emperical_flops']:,}")
-        print(f"  Memory Accesses(Emperical): {emperical_metrics['emperical_accesses']:,} bytes")
-        print(f"  Min Cycles(Emperical): {emperical_metrics['emperical_min_cycles']:.0f}")
-        print(f"  Max Cycles(Emperical): {emperical_metrics['emperical_max_cycles']:.0f}")
-        print(f"  Avg Cycles(Emperical): {emperical_metrics['emperical_avg_cycles']:.0f}")
-        print(f"  Time(Emperical): {emperical_metrics['emperical_time']:.6f} seconds")
-        print(f"  BW(Emperical): {emperical_metrics['emperical_bw']:.6f} bytes/second")
-        print(f"  Performance(Emperical): {emperical_metrics['emperical_performance']:.6f} flops/cycle")
-        print(f"  Arithmetic Intensity(Emperical): {emperical_metrics['emperical_AI']:.6f} flops/byte")        
+        print("empirical Metrics:")
+        print(f"  FLOPS(empirical): {empirical_metrics['empirical_flops']:,}")
+        print(f"  Memory Accesses(empirical): {empirical_metrics['empirical_accesses']:,} bytes")
+        print(f"  Min Cycles(empirical): {empirical_metrics['empirical_min_cycles']:.0f}")
+        print(f"  Max Cycles(empirical): {empirical_metrics['empirical_max_cycles']:.0f}")
+        print(f"  Avg Cycles(empirical): {empirical_metrics['empirical_avg_cycles']:.0f}")
+        print(f"  Time(empirical): {empirical_metrics['empirical_time']:.6f} seconds")
+        print(f"  BW(empirical): {empirical_metrics['empirical_bw']:.6f} bytes/second")
+        print(f"  Performance(empirical): {empirical_metrics['empirical_performance']:.6f} flops/cycle")
+        print(f"  Arithmetic Intensity(empirical): {empirical_metrics['empirical_AI']:.6f} flops/byte")        
         print("-"*60)
         print("Theoretical Metrics:")
         print(f"  FLOPS(Theoretical): {theoretical_metrics['theoretical_flops']:,}")
@@ -407,181 +408,86 @@ class RooflineCalculator(TimingCalculator):
          # save
         plt.savefig(savefile, bbox_inches='tight', format='png')
 
-    def plot_emperical_vs_theoretical(self, csv_path: str, savefile: str):
+    def plot_empirical_vs_theoretical_cycles(self, csv_path: str, savefile: str):
         """
-        Plot empirical vs theoretical cycles vs number of PEs used.
+        Plot empirical vs theoretical cycles against number of PEs
+        using a tidy dataframe and single y-axis.
         
         Args:
             csv_path: Path to the CSV containing the benchmark data
-            savefile: Output path for the plot
+            savefile: Output path for the plot (PNG)
         """
         if not os.path.exists(csv_path):
             raise FileNotFoundError(f"CSV not found: {csv_path}")
         
-        # Read CSV data
+        # Read CSV
         df = pd.read_csv(csv_path)
+        print(f"CSV loaded: {len(df)} rows")
         
-        # Calculate number of PEs used (width * height)
+        # Compute number of PEs
         df['num_PEs'] = df['width'] * df['height']
         
-        # Setup plot
-        plt.figure(figsize=(10, 6))
-        ax = plt.gca()
+        # Reshape to tidy format (for seaborn plotting)
+        df_long = df.melt(
+            id_vars=['num_PEs'],
+            value_vars=['empirical_cycles', 'theoretical_cycles'],
+            var_name='Type', value_name='Cycles'
+        )
         
-        # Plot empirical cycles
-        plt.plot(df['num_PEs'], df['emperical_cycles'], 'o-', color='red', 
-                linewidth=2, markersize=6, label='Empirical Cycles')
+        # Debug print
+        print(df_long.head())
         
-        # Plot theoretical cycles
-        plt.plot(df['num_PEs'], df['theoretical_cycles'], 's--', color='blue', 
-                linewidth=2, markersize=6, label='Theoretical Cycles')
+        # Plot
+        plt.figure(figsize=(12, 6))
+        sns.scatterplot(
+            data=df_long,
+            x='num_PEs',
+            y='Cycles',
+            hue='Type',
+            style='Type',
+            s=120
+        )
+        sns.lineplot(
+            data=df_long,
+            x='num_PEs',
+            y='Cycles',
+            hue='Type',
+            style='Type',
+            markers=False,
+            dashes=True,
+            linewidth=1.5,
+            alpha=0.7,
+            legend=False
+        )
         
-        # Customize plot
-        plt.xlabel('Number of PEs Used (Width × Height)', fontsize=12)
-        plt.ylabel('Cycles (Log Scale)', fontsize=12)
-        plt.title('Empirical vs Theoretical Cycles vs Number of PEs', fontsize=14, fontweight='bold')
-        plt.yscale('log')  # Use log scale for y-axis
+        # Labels & title
+        plt.xlabel("Number of PEs (Width × Height)", fontsize=12)
+        plt.ylabel("Cycles", fontsize=12)
+        plt.title("Empirical vs Theoretical Cycles vs Number of PEs", fontsize=14, fontweight='bold')
+        # plt.yscale('log')
         plt.grid(True, alpha=0.3)
         
-        # Get metrics from first row for legend
+        # Add configuration info (from first row)
         first_row = df.iloc[0]
-        density = first_row['density']
-        matrix_format = first_row['matrix_format']
-        operation_type = first_row['operation_type']
-        M = first_row['M']
-        K = first_row['K']
-        N = first_row['N']
-        
-        # Create detailed legend with metrics
         legend_text = f"""Configuration:
-                        Density: {density}%
-                        Format: {matrix_format}
-                        Operation: {operation_type}
-                        Matrix: {M}×{K} × {K}×{N} = {M}×{N}"""
+                        Density: {first_row['density']}%
+                        Format: {first_row['matrix_format']}
+                        Operation: {first_row['operation_type']}
+                        Matrix: {first_row['M']}×{first_row['K']} × {first_row['K']}×{first_row['N']} = {first_row['M']}×{first_row['N']}"""
+                            
+        plt.text(
+            0.02, 0.98, legend_text,
+            transform=plt.gca().transAxes,
+            verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8),
+            fontsize=10, fontfamily='monospace'
+        )
         
-        # Add text box with configuration
-        plt.text(0.02, 0.98, legend_text, transform=ax.transAxes, 
-                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8),
-                fontsize=10, fontfamily='monospace')
-        
-        # Add legend for the lines
-        plt.legend(loc='upper right', fontsize=11)
-        
-        # Adjust layout and save
         plt.tight_layout()
-        plt.savefig(savefile, bbox_inches='tight', format='png', dpi=300)
-        plt.close()  # Close the figure to free memory
-        
-        print(f"Empirical vs Theoretical plot saved to: {savefile}")
-
-    def plot_emperical_vs_theoretical_normalized(self, csv_path: str, savefile: str):
-        """
-        Alternative plotting function with normalized data or dual y-axes.
-        
-        Args:
-            csv_path: Path to the CSV containing the benchmark data
-            savefile: Output path for the plot
-        """
-        if not os.path.exists(csv_path):
-            raise FileNotFoundError(f"CSV not found: {csv_path}")
-        
-        # Read CSV data
-        df = pd.read_csv(csv_path)
-        
-        # Debug: Print data info
-        print(f"CSV loaded: {len(df)} rows")
-        print(f"Empirical cycles: {df['emperical_cycles'].values}")
-        print(f"Theoretical cycles: {df['theoretical_cycles'].values}")
-        print(f"Width x Height: {df['width'].values} x {df['height'].values}")
-        
-        # Calculate number of PEs used (width * height)
-        df['num_PEs'] = df['width'] * df['height']
-        print(f"Number of PEs: {df['num_PEs'].values}")
-        
-        # Setup plot with dual y-axes
-        fig, ax1 = plt.subplots(figsize=(12, 6))
-        
-        # Plot empirical cycles on left y-axis
-        color1 = 'red'
-        ax1.set_xlabel('Number of PEs Used (Width × Height)', fontsize=12)
-        ax1.set_ylabel('Empirical Cycles', color=color1, fontsize=12)
-        
-        # Handle single data point vs multiple data points
-        if len(df) == 1:
-            # Single data point - use scatter plot
-            line1 = ax1.scatter(df['num_PEs'], df['emperical_cycles'], 
-                              color=color1, s=100, marker='o', label='Empirical Cycles')
-        else:
-            # Multiple data points - use line plot
-            line1 = ax1.plot(df['num_PEs'], df['emperical_cycles'], 'o-', color=color1, 
-                            linewidth=2, markersize=6, label='Empirical Cycles')
-        
-        ax1.tick_params(axis='y', labelcolor=color1)
-        ax1.grid(True, alpha=0.3)
-        
-        # Create second y-axis for theoretical cycles
-        ax2 = ax1.twinx()
-        color2 = 'blue'
-        ax2.set_ylabel('Theoretical Cycles', color=color2, fontsize=12)
-        
-        # Handle single data point vs multiple data points
-        if len(df) == 1:
-            # Single data point - use scatter plot
-            line2 = ax2.scatter(df['num_PEs'], df['theoretical_cycles'], 
-                              color=color2, s=100, marker='s', label='Theoretical Cycles')
-        else:
-            # Multiple data points - use line plot
-            line2 = ax2.plot(df['num_PEs'], df['theoretical_cycles'], 's--', color=color2, 
-                            linewidth=2, markersize=6, label='Theoretical Cycles')
-        
-        ax2.tick_params(axis='y', labelcolor=color2)
-        
-        # Get metrics from first row for legend
-        first_row = df.iloc[0]
-        density = first_row['density']
-        matrix_format = first_row['matrix_format']
-        operation_type = first_row['operation_type']
-        M = first_row['M']
-        K = first_row['K']
-        N = first_row['N']
-        
-        # Create detailed legend with metrics
-        legend_text = f"""Configuration:
-                         Density: {density}%
-                         Format: {matrix_format}
-                         Operation: {operation_type}
-                         Matrix: {M}×{K} × {K}×{N} = {M}×{N}"""
-        
-        # Add text box with configuration
-        plt.text(0.02, 0.98, legend_text, transform=ax1.transAxes, 
-                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8),
-                fontsize=10, fontfamily='monospace')
-        
-        # Combine legends - handle both scatter and line plots
-        if len(df) == 1:
-            # For scatter plots, create legend manually
-            from matplotlib.lines import Line2D
-            legend_elements = [
-                Line2D([0], [0], marker='o', color='red', linestyle='None', 
-                       markersize=8, label='Empirical Cycles'),
-                Line2D([0], [0], marker='s', color='blue', linestyle='None', 
-                       markersize=8, label='Theoretical Cycles')
-            ]
-            ax1.legend(handles=legend_elements, loc='upper right', fontsize=11)
-        else:
-            # For line plots, use existing method
-            lines = line1 + line2
-            labels = [l.get_label() for l in lines]
-            ax1.legend(lines, labels, loc='upper right', fontsize=11)
-        
-        plt.title('Empirical vs Theoretical Cycles vs Number of PEs (Dual Y-Axis)', fontsize=14, fontweight='bold')
-        
-        # Adjust layout and save
-        plt.tight_layout()
-        plt.savefig(savefile, bbox_inches='tight', format='png', dpi=300)
+        plt.savefig(savefile, dpi=300, bbox_inches='tight')
         plt.close()
         
-        print(f"Empirical vs Theoretical (dual-axis) plot saved to: {savefile}")
+        print(f"Plot saved to {savefile}")
 
 # Example usage functions
 def example_usage_function():
@@ -664,7 +570,7 @@ def integrate_roofline_with_existing_benchmark():
     print("Step 3: Calculate theoretical metrics")
     calc.calculate_theoretical_metrics()
     # Step 4: Empirical measurements
-    print("Step 4: Calculate emperical metrics")
+    print("Step 4: Calculate empirical metrics")
     # In your actual code, you would do:
     # calc.tic()
     # # ... run your kernel ...
@@ -674,11 +580,11 @@ def integrate_roofline_with_existing_benchmark():
     # For this example, simulate some cycle measurements
     # Todo: This is dummy data, not real data
     np.random.seed(42)  # For reproducible results
-    base_cycles = 15000 if matrix_format == "DENSE" else 20000
+    base_cycles = 1500 if matrix_format == "DENSE" else 2000
     cycles_array = np.random.normal(base_cycles, base_cycles * 0.1, (height, width))
 
-    # Step 5: Calculate emperical metrics
-    calc.calculate_emperical_metrics(cycles_array)
+    # Step 5: Calculate empirical metrics
+    calc.calculate_empirical_metrics(cycles_array)
 
     # Step 6: Save to CSV
     print("Step 6: Save to CSV")
@@ -688,9 +594,9 @@ def integrate_roofline_with_existing_benchmark():
     print("Step 7: Print summary")
     calc.print_roofline_summary()
 
-    # Step 8: Plot emperical vs theoretical 
-    print("Step 8: Plot emperical vs theoretical")
-    calc.plot_emperical_vs_theoretical_normalized(f"{matrix_format}_benchmark.csv", savefile=f"{matrix_format}_benchmark.png")
+    # Step 8: Plot empirical vs theoretical 
+    print("Step 8: Plot empirical vs theoretical")
+    calc.plot_empirical_vs_theoretical_cycles(f"{matrix_format}_benchmark.csv", savefile=f"{matrix_format}_benchmark.png")
 
     # # Step 8: Plot roofline
     # print("Step 8: Plot roofline")
