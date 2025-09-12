@@ -1,20 +1,17 @@
 # CHPC dependencies
 module load cmake cuda gcc zlib openmpi
 
-cd amgx
+cd AMGX
 mkdir -p build
 mkdir -p install
 cd build
-# get current directory
-amgx_source_dir=$(pwd)
-echo "amgx_source_dir: $amgx_source_dir"
 
 # configure
 cmake .. \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCUDA_ARCH="80" \  # A100, A30
+  -DCUDA_ARCH="80" \
   -DCMAKE_NO_MPI=OFF \
-  -DCMAKE_INSTALL_PREFIX=$(amgx_source_dir)/install
+  -DCMAKE_INSTALL_PREFIX=../install
 
 # build
 make -j16 all
