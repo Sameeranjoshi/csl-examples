@@ -1,10 +1,7 @@
 # CHPC dependencies
 module load cmake cuda gcc zlib openmpi
 
-# clone amgx(Branch off at V2.4.0)
-git clone --recursive git@github.com:nvidia/amgx.git
 cd amgx
-git checkout v2.4.0
 mkdir -p build
 mkdir -p install
 cd build
