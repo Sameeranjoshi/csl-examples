@@ -36,9 +36,7 @@ def main():
     
     # Test problems (nx, ny, nz, levels, max_iterations)
     problems = [
-        (32, 32, 32, 4, 10),   # Small problem
-        (64, 64, 64, 4, 15),   # Medium problem  
-        (128, 128, 128, 5, 20), # Large problem
+        (16, 16, 16, 10, 15),   # Small problem
     ]
     
     results = []

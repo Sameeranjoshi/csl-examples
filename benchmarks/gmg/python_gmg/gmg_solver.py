@@ -23,18 +23,20 @@ from typing import Tuple, List, Optional
 class GMGSolver:
     """Geometric Multigrid Solver for 3D Poisson equation"""
     
-    def __init__(self, nx: int, ny: int, nz: int, num_levels: int = 6):
+    def __init__(self, nx: int, ny: int, nz: int, num_levels: int = 6, verbose: bool = False):
         """
         Initialize the GMG solver
         
         Args:
             nx, ny, nz: Grid dimensions
             num_levels: Number of multigrid levels
+            verbose: Whether to print detailed level information
         """
         self.nx = nx
         self.ny = ny
         self.nz = nz
         self.num_levels = num_levels
+        self.verbose = verbose
         
         # Stencil coefficients (same as CUDA implementation)
         self.ALPHA = -6.0  # MPI_ALPHA
@@ -66,20 +68,26 @@ class GMGSolver:
             'total': 0.0
         }
         
+        # Print level information if verbose
+        if self.verbose:
+            self._print_level_info()
+            self._print_initialization_info()
+            self._print_level0_data()
+        
     def _create_grid_hierarchy(self) -> List[dict]:
         """Create the multigrid hierarchy"""
         grids = []
         
         for level in range(self.num_levels):
-            # Calculate dimensions for this level
+            # Calculate dimensions for this level (same as CUDA implementation)
             nx = self.nx // (2 ** level)
             ny = self.ny // (2 ** level)
             nz = self.nz // (2 ** level)
             
-            # Ensure minimum size and that we can do 2:1 coarsening
-            nx = max(nx, 16)  # Need at least 16 to coarsen to 8
-            ny = max(ny, 16)
-            nz = max(nz, 16)
+            # Ensure minimum size of 1 (same as CUDA - no artificial minimum)
+            nx = max(nx, 1)
+            ny = max(ny, 1)
+            nz = max(nz, 1)
             
             
             # Create grid data
@@ -91,12 +99,174 @@ class GMGSolver:
                 'rhs': np.zeros((nz, ny, nx), dtype=np.float64),  # Right-hand side
                 'res': np.zeros((nz, ny, nx), dtype=np.float64),  # Residual
                 'ax': np.zeros((nz, ny, nx), dtype=np.float64),   # A*x
-                'h': 1.0 / (nx - 1)  # Grid spacing
+                'h': 1.0 / max(nx - 1, 1)  # Grid spacing (handle nx=1 case)
             }
-            
             grids.append(grid)
             
         return grids
+    
+    def _print_level_info(self):
+        """Print detailed information about the multigrid hierarchy and data structures"""
+        print("\nMultigrid Level Hierarchy:")
+        print("=" * 50)
+        for level, grid in enumerate(self.grids):
+            print(f"Level {level:2d}: {grid['nx']:3d} x {grid['ny']:3d} x {grid['nz']:3d} "
+                  f"(h = {grid['h']:.6f}, points = {grid['nx']*grid['ny']*grid['nz']:,})")
+        print("=" * 50)
+        
+        print("\nData Structures at Each Level:")
+        print("=" * 120)
+        print(f"{'Level':<6} {'Grid Size':<12} {'x (solution)':<15} {'rhs (RHS)':<15} {'res (residual)':<15} {'Ax (operator)':<15} {'Stencil':<20}")
+        print("-" * 120)
+        
+        for level, grid in enumerate(self.grids):
+            nx, ny, nz = grid['nx'], grid['ny'], grid['nz']
+            grid_size = f"{nx}×{ny}×{nz}"
+            
+            # Data structure shapes
+            x_shape = f"({nz},{ny},{nx})"
+            rhs_shape = f"({nz},{ny},{nx})"
+            res_shape = f"({nz},{ny},{nx})"
+            ax_shape = f"({nz},{ny},{nx})"
+            
+            # Stencil information
+            if level == 0:
+                stencil_info = "7-point Poisson"
+            else:
+                stencil_info = "7-point Poisson"
+            
+            print(f"{level:<6} {grid_size:<12} {x_shape:<15} {rhs_shape:<15} {res_shape:<15} {ax_shape:<15} {stencil_info:<20}")
+        
+        print("-" * 120)
+        print("Legend:")
+        print("  x     = Solution vector (unknown)")
+        print("  rhs   = Right-hand side vector (source term)")
+        print("  res   = Residual vector (rhs - Ax)")
+        print("  Ax    = Operator applied to solution (A*x)")
+        print("  Stencil = Finite difference stencil used")
+        print("=" * 120)
+        
+        print("\nStencil Coefficients:")
+        print("-" * 40)
+        print(f"  α (center) = {self.ALPHA}")
+        print(f"  β (neighbors) = {self.BETA}")
+        print("  7-point stencil: α*x[i,j,k] + β*(x[i±1,j,k] + x[i,j±1,k] + x[i,j,k±1])")
+        print("-" * 40)
+        
+        print("\nMemory Usage Summary:")
+        print("-" * 50)
+        total_points = 0
+        for level, grid in enumerate(self.grids):
+            points = grid['nx'] * grid['ny'] * grid['nz']
+            total_points += points
+            memory_mb = (points * 4 * 8) / (1024 * 1024)  # 4 arrays × 8 bytes per float64
+            print(f"  Level {level}: {points:,} points × 4 arrays = {memory_mb:.2f} MB")
+        total_memory = (total_points * 4 * 8) / (1024 * 1024)
+        print(f"  Total: {total_points:,} points × 4 arrays = {total_memory:.2f} MB")
+        print("-" * 50)
+        print()
+    
+    def _print_level0_data(self):
+        """Print representative data from Level 0 before V-cycle starts"""
+        print("Level 0 Data Samples (before V-cycle):")
+        print("=" * 60)
+        
+        grid = self.grids[0]
+        nx, ny, nz = grid['nx'], grid['ny'], grid['nz']
+        
+        # Print a 3x3x3 sample from the center of the domain
+        center_i, center_j, center_k = nx//2, ny//2, nz//2
+        
+        print(f"Sample from center region (i={center_i-1}:{center_i+2}, j={center_j-1}:{center_j+2}, k={center_k-1}:{center_k+2}):")
+        print()
+        
+        # Print x (solution) - should be all zeros initially
+        print("x (solution) - initial values:")
+        for k in range(max(0, center_k-1), min(nz, center_k+2)):
+            print(f"  k={k}:")
+            for j in range(max(0, center_j-1), min(ny, center_j+2)):
+                row_values = []
+                for i in range(max(0, center_i-1), min(nx, center_i+2)):
+                    row_values.append(f"{grid['x'][k,j,i]:8.4f}")
+                print(f"    j={j}: [{' '.join(row_values)}]")
+        
+        print()
+        
+        # Print rhs (right-hand side) - sin function values
+        print("rhs (right-hand side) - sin function values:")
+        for k in range(max(0, center_k-1), min(nz, center_k+2)):
+            print(f"  k={k}:")
+            for j in range(max(0, center_j-1), min(ny, center_j+2)):
+                row_values = []
+                for i in range(max(0, center_i-1), min(nx, center_i+2)):
+                    row_values.append(f"{grid['rhs'][k,j,i]:8.4f}")
+                print(f"    j={j}: [{' '.join(row_values)}]")
+        
+        print()
+        
+        # Print res (residual) - should be all zeros initially
+        print("res (residual) - initial values:")
+        for k in range(max(0, center_k-1), min(nz, center_k+2)):
+            print(f"  k={k}:")
+            for j in range(max(0, center_j-1), min(ny, center_j+2)):
+                row_values = []
+                for i in range(max(0, center_i-1), min(nx, center_i+2)):
+                    row_values.append(f"{grid['res'][k,j,i]:8.4f}")
+                print(f"    j={j}: [{' '.join(row_values)}]")
+        
+        print()
+        
+        # Print Ax (operator result) - should be all zeros initially
+        print("Ax (operator result) - initial values:")
+        for k in range(max(0, center_k-1), min(nz, center_k+2)):
+            print(f"  k={k}:")
+            for j in range(max(0, center_j-1), min(ny, center_j+2)):
+                row_values = []
+                for i in range(max(0, center_i-1), min(nx, center_i+2)):
+                    row_values.append(f"{grid['ax'][k,j,i]:8.4f}")
+                print(f"    j={j}: [{' '.join(row_values)}]")
+        
+        print("=" * 60)
+        print()
+    
+    def _print_initialization_info(self):
+        """Print all initialization parameters and coefficients"""
+        print("Initialization Parameters:")
+        print("=" * 50)
+        print(f"Grid dimensions: {self.nx} × {self.ny} × {self.nz}")
+        print(f"Number of levels: {self.num_levels}")
+        print(f"Grid spacing (h): {self.grids[0]['h']:.6f}")
+        print()
+        
+        print("Stencil Coefficients:")
+        print(f"  α (center coefficient): {self.ALPHA}")
+        print(f"  β (neighbor coefficient): {self.BETA}")
+        print(f"  7-point stencil: α*x[i,j,k] + β*(x[i±1,j,k] + x[i,j±1,k] + x[i,j,k±1])")
+        print(f"  Grid spacing scaling: h² = {self.grids[0]['h']**2:.6f} (used in residual computation)")
+        print()
+        
+        print("Relaxation Parameters:")
+        print(f"  Jacobi coefficient: {self.JACOBI_COEFF:.6f}")
+        print(f"  Pre-smooth iterations: {self.PRE_SMOOTH_ITER}")
+        print(f"  Post-smooth iterations: {self.POST_SMOOTH_ITER}")
+        print(f"  Bottom solver iterations: {self.BOTTOM_SOLVER_ITER}")
+        print()
+        
+        print("Convergence Parameters:")
+        print(f"  Tolerance: {self.TOLERANCE:.2e}")
+        print()
+        
+        print("Right-hand Side Initialization:")
+        print(f"  Function: sin(2πx) * sin(2πy) * sin(2πz)")
+        print(f"  Domain: [0,1] × [0,1] × [0,1]")
+        print(f"  Grid points: {self.nx} × {self.ny} × {self.nz}")
+        print()
+        
+        print("Boundary Conditions:")
+        print("  Dirichlet boundary conditions (u = 0 on boundary)")
+        print("  Interior points only for stencil application")
+        print("=" * 50)
+        print()
     
     def _initialize_rhs(self):
         """Initialize right-hand side with sin function (same as CUDA implementation)"""
@@ -146,12 +316,15 @@ class GMGSolver:
         
         # Jacobi update: x' = x + ω * (rhs - Ax) / h²
         # where ω = JACOBI_COEFF and h² scaling is handled by dom_len_dev[0] in CUDA
-        if compute_residual:
-            # Compute residual: res = rhs - Ax
-            grid['res'] = rhs - ax / (h * h)
+        # CUDA: dom_len_dev[0] = h², dom_len_dev[1] = 1/h²
+        h2 = h * h
         
-        # Jacobi smoothing: x += JACOBI_COEFF * (Ax - h² * rhs)
-        x += self.JACOBI_COEFF * (ax - (h * h) * rhs)
+        if compute_residual:
+            # Compute residual: res = rhs - Ax/h² (same as CUDA: rhs - Ax*dom_len_dev[1])
+            grid['res'] = rhs - ax / h2
+        
+        # Jacobi smoothing: x += JACOBI_COEFF * (Ax - h² * rhs) (same as CUDA)
+        x += self.JACOBI_COEFF * (ax - h2 * rhs)
     
     def restriction(self, fine_level: int) -> None:
         """Full weighting restriction (same as CUDA restriction_kernel)"""
@@ -235,8 +408,16 @@ class GMGSolver:
     
     def v_cycle(self, start_level: int = 0) -> None:
         """V-cycle multigrid (same as CUDA vcycle_brick)"""
+        if self.verbose:
+            print("  V-Cycle: Going DOWN (pre-smooth + restrict)")
+        
         # Going down: pre-smooth and restrict
         for level in range(start_level, self.num_levels - 1):
+            if self.verbose:
+                grid = self.grids[level]
+                print(f"    Level {level}: {grid['nx']}x{grid['ny']}x{grid['nz']} - "
+                      f"Pre-smooth ({self.PRE_SMOOTH_ITER} iter) + restrict")
+            
             # Pre-smoothing
             for _ in range(self.PRE_SMOOTH_ITER):
                 self.jacobi_smooth(level)
@@ -252,11 +433,24 @@ class GMGSolver:
         
         # Bottom solver
         bottom_level = self.num_levels - 1
+        if self.verbose:
+            grid = self.grids[bottom_level]
+            print(f"    Level {bottom_level}: {grid['nx']}x{grid['ny']}x{grid['nz']} - "
+                  f"Bottom solver ({self.BOTTOM_SOLVER_ITER} iter)")
+        
         for _ in range(self.BOTTOM_SOLVER_ITER):
             self.jacobi_smooth(bottom_level)
         
+        if self.verbose:
+            print("  V-Cycle: Going UP (interpolate + post-smooth)")
+        
         # Going up: interpolate and post-smooth
         for level in range(self.num_levels - 2, start_level - 1, -1):
+            if self.verbose:
+                grid = self.grids[level]
+                print(f"    Level {level}: {grid['nx']}x{grid['ny']}x{grid['nz']} - "
+                      f"Interpolate + post-smooth ({self.POST_SMOOTH_ITER} iter)")
+            
             # Interpolation
             self.interpolation(level)
             
@@ -271,8 +465,9 @@ class GMGSolver:
         # Apply operator
         self.apply_operator(level)
         
-        # Compute residual: res = rhs - Ax
-        grid['res'] = grid['rhs'] - grid['ax'] / (grid['h'] * grid['h'])
+        # Compute residual: res = rhs - Ax/h² (same as CUDA scaling)
+        h2 = grid['h'] * grid['h']
+        grid['res'] = grid['rhs'] - grid['ax'] / h2
         
         # Return maximum absolute residual
         return np.max(np.abs(grid['res']))
@@ -306,6 +501,9 @@ class GMGSolver:
         
         while residual > self.TOLERANCE and iterations < max_iterations:
             # Perform V-cycle
+            if self.verbose:
+                print(f"\nIteration {iterations + 1}:")
+            
             cycle_start = time.time()
             self.v_cycle()
             cycle_time = time.time() - cycle_start
@@ -316,7 +514,10 @@ class GMGSolver:
             
             self.timers['total'] += cycle_time
             
-            print(f"Iteration {iterations:2d}: Residual = {residual:.6e}, Time = {cycle_time:.4f}s")
+            if self.verbose:
+                print(f"  Final residual: {residual:.6e}, Time: {cycle_time:.4f}s")
+            else:
+                print(f"Iteration {iterations:2d}: Residual = {residual:.6e}, Time = {cycle_time:.4f}s")
         
         total_time = time.time() - start_time
         
@@ -334,14 +535,16 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='Geometric Multigrid Solver')
-    parser.add_argument('-s', '--size', default='512,512,512', 
-                       help='Grid size as nx,ny,nz (default: 512,512,512)')
-    parser.add_argument('-l', '--levels', type=int, default=6,
-                       help='Number of multigrid levels (default: 6)')
-    parser.add_argument('-n', '--max_iter', type=int, default=20,
-                       help='Maximum number of iterations (default: 20)')
+    parser.add_argument('-s', '--size', default='16,16,16', 
+                       help='Grid size as nx,ny,nz (default: 16,16,16)')
+    parser.add_argument('-l', '--levels', type=int, default=3,
+                       help='Number of multigrid levels (default: 3)')
+    parser.add_argument('-n', '--max_iter', type=int, default=2,
+                       help='Maximum number of iterations (default: 2)')
     parser.add_argument('-I', '--iterations', type=int, default=1,
                        help='Number of times to run for timing (default: 1)')
+    parser.add_argument('-v', '--verbose', action='store_true',
+                       help='Print detailed level information')
     
     args = parser.parse_args()
     
@@ -363,7 +566,7 @@ def main():
         print(f"\nRun {run + 1}/{args.iterations}")
         print("-" * 30)
         
-        solver = GMGSolver(nx, ny, nz, args.levels)
+        solver = GMGSolver(nx, ny, nz, args.levels, args.verbose)
         residual, iterations, timers = solver.solve(args.max_iter)
         
         times.append(timers['total'])
