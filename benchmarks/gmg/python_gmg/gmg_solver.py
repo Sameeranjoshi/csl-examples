@@ -67,6 +67,13 @@ class GMGSolver:
             'interpolation': 0.0,
             'total': 0.0
         }
+        self.number_of_operations = {
+            'apply_op': 0.0,
+            'smooth': 0.0,
+            'restriction': 0.0,
+            'interpolation': 0.0,
+            'total': 0.0
+        }
         
         # Print level information if verbose
         if self.verbose:
@@ -76,15 +83,19 @@ class GMGSolver:
         
     def _create_grid_hierarchy(self) -> List[dict]:
         """Create the multigrid hierarchy"""
+        # Use a Python list to store the grid dictionaries for each level in the multigrid hierarchy.
         grids = []
         
         for level in range(self.num_levels):
             # Calculate dimensions for this level (same as CUDA implementation)
+            # This is calculating the shapes at each level for the grid
+            # newlevel shape =initial shape / factor^(level)
             nx = self.nx // (2 ** level)
             ny = self.ny // (2 ** level)
             nz = self.nz // (2 ** level)
             
             # Ensure minimum size of 1 (same as CUDA - no artificial minimum)
+            # Having grid size of 1 is that too small?
             nx = max(nx, 1)
             ny = max(ny, 1)
             nz = max(nz, 1)
@@ -124,10 +135,10 @@ class GMGSolver:
             grid_size = f"{nx}×{ny}×{nz}"
             
             # Data structure shapes
-            x_shape = f"({nz},{ny},{nx})"
-            rhs_shape = f"({nz},{ny},{nx})"
-            res_shape = f"({nz},{ny},{nx})"
-            ax_shape = f"({nz},{ny},{nx})"
+            x_shape = f"({nx},{ny},{nz})"
+            rhs_shape = f"({nx},{ny},{nz})"
+            res_shape = f"({nx},{ny},{nz})"
+            ax_shape = f"({nx},{ny},{nz})"
             
             # Stencil information
             if level == 0:
@@ -303,6 +314,7 @@ class GMGSolver:
                                                x[k, j+1, i] + x[k, j-1, i] +
                                                x[k+1, j, i] + x[k-1, j, i]))
     
+    # TODO: check this
     def jacobi_smooth(self, level: int, compute_residual: bool = False) -> None:
         """Jacobi smoother (same as CUDA smooth_kernel/smooth_residual_kernel)"""
         grid = self.grids[level]
@@ -314,7 +326,7 @@ class GMGSolver:
         self.apply_operator(level)
         ax = grid['ax']
         
-        # Jacobi update: x' = x + ω * (rhs - Ax) / h²
+        # Jacobi update: x' = x + ω * (rhs - Ax/ h²)
         # where ω = JACOBI_COEFF and h² scaling is handled by dom_len_dev[0] in CUDA
         # CUDA: dom_len_dev[0] = h², dom_len_dev[1] = 1/h²
         h2 = h * h
@@ -342,9 +354,9 @@ class GMGSolver:
             return
         
         # Full weighting: average 8 fine points to 1 coarse point
-        for k in range(coarse_grid['nz']):
-            for j in range(coarse_grid['ny']):
-                for i in range(coarse_grid['nx']):
+        for k in range(coarse_grid['nz']):  # depth
+            for j in range(coarse_grid['ny']):  # column
+                for i in range(coarse_grid['nx']):  # row
                     # Map coarse indices to fine indices
                     fi = 2 * i
                     fj = 2 * j
@@ -536,7 +548,7 @@ def main():
     
     parser = argparse.ArgumentParser(description='Geometric Multigrid Solver')
     parser.add_argument('-s', '--size', default='16,16,16', 
-                       help='Grid size as nx,ny,nz (default: 16,16,16)')
+                       help='Grid size as nx,ny,nz (nx = number of grid points in x (rows), ny = y (columns), nz = z (depth); default: 16,16,16)')
     parser.add_argument('-l', '--levels', type=int, default=3,
                        help='Number of multigrid levels (default: 3)')
     parser.add_argument('-n', '--max_iter', type=int, default=2,
