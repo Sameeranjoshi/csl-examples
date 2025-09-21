@@ -43,12 +43,12 @@ class GMGSolver:
         self.BETA = 1.0    # MPI_BETA
         
         # Jacobi relaxation coefficient (same as CUDA implementation)
-        self.JACOBI_COEFF = 1.0 / 9.0
+        self.JACOBI_COEFF = 1.0 / 2.0
         
         # Iteration counts (same as CUDA implementation)
-        self.PRE_SMOOTH_ITER = 6
-        self.POST_SMOOTH_ITER = 6
-        self.BOTTOM_SOLVER_ITER = 100
+        self.PRE_SMOOTH_ITER = 6    # 6
+        self.POST_SMOOTH_ITER = 6    # 6
+        self.BOTTOM_SOLVER_ITER = 200    # 100
         
         # Convergence tolerance
         self.TOLERANCE = 1e-10
@@ -302,42 +302,57 @@ class GMGSolver:
         
         nx, ny, nz = grid['nx'], grid['ny'], grid['nz']
         
-        # Apply 7-point stencil: α*x[i,j,k] + β*(x[i±1,j,k] + x[i,j±1,k] + x[i,j,k±1])
+        # Apply 7-point stencil: (1/h²) * [α*x[i,j,k] + β*(x[i±1,j,k] + x[i,j±1,k] + x[i,j,k±1])]
         ax.fill(0.0)
+        h2 = grid['h'] * grid['h']
         
         # Interior points only (same as CUDA with boundary checks)
         for k in range(1, nz-1):
             for j in range(1, ny-1):
                 for i in range(1, nx-1):
+                    # Discrete Laplacian with proper h² scaling
                     ax[k, j, i] = (self.ALPHA * x[k, j, i] +
-                                   self.BETA * (x[k, j, i+1] + x[k, j, i-1] +
-                                               x[k, j+1, i] + x[k, j-1, i] +
-                                               x[k+1, j, i] + x[k-1, j, i]))
+                                               self.BETA * (x[k, j, i+1] + x[k, j, i-1] +
+                                                           x[k, j+1, i] + x[k, j-1, i] +
+                                                           x[k+1, j, i] + x[k-1, j, i]))
+        # Boundry points are == 0.0
+
     
-    # TODO: check this
-    def jacobi_smooth(self, level: int, compute_residual: bool = False) -> None:
-        """Jacobi smoother (same as CUDA smooth_kernel/smooth_residual_kernel)"""
+    def compute_residual(self, level: int) -> None:
+        """Compute residual: res = rhs - Ax (standard GMG residual)"""
+        grid = self.grids[level]
+        x = grid['x']
+        rhs = grid['rhs']
+        
+        # Apply operator (h² scaling already included)
+        self.apply_operator(level)
+        ax = grid['ax']
+        
+        # Standard residual: res = rhs - Ax
+        h2 = grid['h'] * grid['h']
+        grid['res'] = rhs - ax/h2
+    
+    def jacobi_smooth(self, level: int) -> None:
+        """Jacobi smoother: x += ω * D^(-1) * (rhs - Ax)"""
         grid = self.grids[level]
         x = grid['x']
         rhs = grid['rhs']
         h = grid['h']
         
-        # Apply operator
+        # Apply operator (h² scaling already included)
         self.apply_operator(level)
         ax = grid['ax']
         
-        # Jacobi update: x' = x + ω * (rhs - Ax/ h²)
-        # where ω = JACOBI_COEFF and h² scaling is handled by dom_len_dev[0] in CUDA
-        # CUDA: dom_len_dev[0] = h², dom_len_dev[1] = 1/h²
+        # Jacobi iteration: x += ω * D^(-1) * (rhs - Ax)
+        # For our stencil, D = -6/h² * I, so D^(-1) = -h²/6 * I
+        # Combined with ω = 1/2: ω * D^(-1) = (1/2) * (-h²/6) = -h²/12
         h2 = h * h
+        omega_diag_inv = self.JACOBI_COEFF * (-1.0 * h2 / 6.0)  # This is ω * D^(-1)
         
-        if compute_residual:
-            # Compute residual: res = rhs - Ax/h² (same as CUDA: rhs - Ax*dom_len_dev[1])
-            grid['res'] = rhs - ax / h2
-        
-        # Jacobi smoothing: x += JACOBI_COEFF * (Ax - h² * rhs) (same as CUDA)
-        x += self.JACOBI_COEFF * (ax - h2 * rhs)
+        x += omega_diag_inv * (rhs * h2 - ax)
     
+    # Image shows how the grid can restrict.
+    # https://www.researchgate.net/figure/The-cube-of-4-4-4-control-points-that-affect-a-voxel-tile-in-a-3D-control-point-grid_fig1_340617410    
     def restriction(self, fine_level: int) -> None:
         """Full weighting restriction (same as CUDA restriction_kernel)"""
         fine_grid = self.grids[fine_level]
@@ -362,7 +377,7 @@ class GMGSolver:
                     fj = 2 * j
                     fk = 2 * k
                     
-                    # Check bounds
+                    # Check bounds(Interior points only)
                     if (fi+1 < fine_grid['nx'] and fj+1 < fine_grid['ny'] and fk+1 < fine_grid['nz']):
                         # Average 8 fine points (same as CUDA implementation)
                         coarse_rhs[k, j, i] = (
@@ -435,9 +450,12 @@ class GMGSolver:
                 self.jacobi_smooth(level)
             
             # Compute residual for restriction
-            self.jacobi_smooth(level, compute_residual=True)
+            self.compute_residual(level)
+            # print residual at each level 
+            print(f"Residual at level {level} down: {np.max(self.grids[level]['res'])}")
             
             # Restriction
+            # Returns b_next
             self.restriction(level)
             
             # Initialize coarse solution
@@ -449,6 +467,7 @@ class GMGSolver:
             grid = self.grids[bottom_level]
             print(f"    Level {bottom_level}: {grid['nx']}x{grid['ny']}x{grid['nz']} - "
                   f"Bottom solver ({self.BOTTOM_SOLVER_ITER} iter)")
+            # print before and after residual 
         
         for _ in range(self.BOTTOM_SOLVER_ITER):
             self.jacobi_smooth(bottom_level)
@@ -469,20 +488,18 @@ class GMGSolver:
             # Post-smoothing
             for _ in range(self.POST_SMOOTH_ITER):
                 self.jacobi_smooth(level)
+
+            self.compute_residual(level)
+            print(f"Residual at level {level} up: {np.max(self.grids[level]['res'])}")
+
     
     def compute_residual_norm(self, level: int = 0) -> float:
         """Compute maximum residual norm (same as CUDA maxNorm_brick)"""
-        grid = self.grids[level]
-        
-        # Apply operator
-        self.apply_operator(level)
-        
-        # Compute residual: res = rhs - Ax/h² (same as CUDA scaling)
-        h2 = grid['h'] * grid['h']
-        grid['res'] = grid['rhs'] - grid['ax'] / h2
+        # Use the same residual computation as compute_residual for consistency
+        self.compute_residual(level)
         
         # Return maximum absolute residual
-        return np.max(np.abs(grid['res']))
+        return np.max(np.abs(self.grids[level]['res']))
     
     def solve(self, max_iterations: int = 20) -> Tuple[float, int, dict]:
         """
@@ -547,17 +564,17 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='Geometric Multigrid Solver')
-    parser.add_argument('-s', '--size', default='16,16,16', 
+    parser.add_argument('-s', '--size', default='64,64,64', 
                        help='Grid size as nx,ny,nz (nx = number of grid points in x (rows), ny = y (columns), nz = z (depth); default: 16,16,16)')
     parser.add_argument('-l', '--levels', type=int, default=3,
                        help='Number of multigrid levels (default: 3)')
-    parser.add_argument('-n', '--max_iter', type=int, default=2,
-                       help='Maximum number of iterations (default: 2)')
+    parser.add_argument('-n', '--max_iter', type=int, default=20,
+                       help='Maximum number of V cycle iterations (default: 2)')
     parser.add_argument('-I', '--iterations', type=int, default=1,
                        help='Number of times to run for timing (default: 1)')
     parser.add_argument('-v', '--verbose', action='store_true',
                        help='Print detailed level information')
-    
+    # 16, 16, 16, 10, 15
     args = parser.parse_args()
     
     # Parse grid size

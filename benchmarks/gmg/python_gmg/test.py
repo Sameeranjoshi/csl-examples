@@ -4,15 +4,16 @@ Benchmark script for the GMG solver
 Demonstrates the Python implementation with various problem sizes
 """
 
+import argparse
 from gmg_solver import GMGSolver
 import time
 
 
-def benchmark_problem(nx, ny, nz, num_levels, max_iterations):
+def benchmark_problem(nx, ny, nz, num_levels, max_iterations, verbose):
     """Benchmark a single problem size"""
     print(f"\nBenchmarking {nx}x{ny}x{nz} grid with {num_levels} levels...")
     
-    solver = GMGSolver(nx, ny, nz, num_levels)
+    solver = GMGSolver(nx, ny, nz, num_levels, verbose)
     start_time = time.time()
     residual, iterations, timers = solver.solve(max_iterations)
     total_time = time.time() - start_time
@@ -33,17 +34,21 @@ def main():
     print("=" * 70)
     print("Geometric Multigrid Solver - Python Implementation Benchmark")
     print("=" * 70)
+    parser = argparse.ArgumentParser(description='Geometric Multigrid Solver')
+    parser.add_argument('-v', '--verbose', action='store_true',
+                       help='Print detailed level information')
+    args = parser.parse_args()
     
     # Test problems (nx, ny, nz, levels, max_iterations)
     problems = [
-        (16, 16, 16, 10, 15),   # Small problem
+        (64, 64, 64, 4, 1),   # Small problem
     ]
     
     results = []
     
     for nx, ny, nz, levels, max_iter in problems:
         try:
-            residual, iterations, total_time = benchmark_problem(nx, ny, nz, levels, max_iter)
+            residual, iterations, total_time = benchmark_problem(nx, ny, nz, levels, max_iter, args.verbose)
             results.append((nx, ny, nz, residual, iterations, total_time))
         except Exception as e:
             print(f"Failed: {e}")
