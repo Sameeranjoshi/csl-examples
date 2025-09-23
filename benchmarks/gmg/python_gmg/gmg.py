@@ -11,6 +11,8 @@ import numpy as np
 import time
 from typing import Tuple, List
 
+DTYPE = np.float32
+
 class SimpleGMG:
     """Simplest possible GMG solver for 3D Poisson equation"""
     
@@ -72,10 +74,10 @@ class SimpleGMG:
             
             grid = {
                 'nx': nx, 'ny': ny, 'nz': nz, 'h': h,
-                'u': np.zeros((nz, ny, nx)),      # Solution
-                'f': np.zeros((nz, ny, nx)),      # Right-hand side
-                'r': np.zeros((nz, ny, nx)),      # Residual
-                'Au': np.zeros((nz, ny, nx))      # A*u
+                'u': np.zeros((nz, ny, nx), dtype=DTYPE),      # Solution
+                'f': np.zeros((nz, ny, nx), dtype=DTYPE),      # Right-hand side
+                'r': np.zeros((nz, ny, nx), dtype=DTYPE),      # Residual
+                'Au': np.zeros((nz, ny, nx), dtype=DTYPE)      # A*u
             }
             grids.append(grid)
             
@@ -135,9 +137,11 @@ class SimpleGMG:
         for level, grid in enumerate(self.grids):
             points = grid['nx'] * grid['ny'] * grid['nz']
             total_points += points
-            memory_mb = (points * 4 * 8) / (1024 * 1024)  # 4 arrays × 8 bytes per float64
+            bytes_per_elem = self.grids[0]['u'].dtype.itemsize  # f32
+            memory_mb = (points * 4 * bytes_per_elem) / (1024 * 1024)
             print(f"  Level {level}: {points:,} points × 4 arrays = {memory_mb:.2f} MB")
-        total_memory = (total_points * 4 * 8) / (1024 * 1024)
+        total_bytes_per_elem = self.grids[0]['u'].dtype.itemsize
+        total_memory = (total_points * 4 * total_bytes_per_elem) / (1024 * 1024)
         print(f"  Total: {total_points:,} points × 4 arrays = {total_memory:.2f} MB")
         print("-" * 50)
         print()
@@ -196,13 +200,14 @@ class SimpleGMG:
             h = grid['h']
             
             # Create coordinate arrays
-            x = np.linspace(0, 1, nx)
-            y = np.linspace(0, 1, ny)
-            z = np.linspace(0, 1, nz)
+            x = np.linspace(0, 1, nx, dtype=DTYPE)
+            y = np.linspace(0, 1, ny, dtype=DTYPE)
+            z = np.linspace(0, 1, nz, dtype=DTYPE)
             X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
             
             # Simple test function: f = sin(πx)sin(πy)sin(πz)
-            grid['f'] = np.sin(np.pi * X) * np.sin(np.pi * Y) * np.sin(np.pi * Z)
+            pi = DTYPE(np.pi)
+            grid['f'] = np.sin(pi * X) * np.sin(pi * Y) * np.sin(pi * Z)
     
     def apply_operator(self, level: int):
         """Apply 7-point Laplacian operator"""
@@ -211,6 +216,8 @@ class SimpleGMG:
         Au = grid['Au']
         h = grid['h']
         nx, ny, nz = grid['nx'], grid['ny'], grid['nz']
+        alpha = DTYPE(self.ALPHA)
+        beta = DTYPE(self.BETA)
         
         # Clear Au
         Au.fill(0.0)
@@ -219,8 +226,8 @@ class SimpleGMG:
         for k in range(1, nz-1):
             for j in range(1, ny-1):
                 for i in range(1, nx-1):
-                    Au[k, j, i] = (self.ALPHA * u[k, j, i] +
-                                  self.BETA * (u[k, j, i+1] + u[k, j, i-1] +
+                    Au[k, j, i] = (alpha * u[k, j, i] +
+                                  beta * (u[k, j, i+1] + u[k, j, i-1] +
                                   u[k, j+1, i] + u[k, j-1, i] +
                                   u[k+1, j, i] + u[k-1, j, i])) / (h * h)
     
@@ -244,6 +251,7 @@ class SimpleGMG:
         f = grid['f']
         h = grid['h']
         nx, ny, nz = grid['nx'], grid['ny'], grid['nz']
+        omega = DTYPE(self.omega)
         
         for _ in range(num_iter):
             # Apply operator
@@ -252,8 +260,8 @@ class SimpleGMG:
             
             # Jacobi update: u_new = u + ω * (f - Au) / diagonal
             # For 7-point stencil, diagonal is -6/h²
-            diagonal = -6.0 / (h * h)
-            update = self.omega * (f - Au) / diagonal
+            diagonal = DTYPE(-6.0) / (h * h)
+            update = omega * (f - Au) / diagonal
             
             # Update interior points only
             u[1:-1, 1:-1, 1:-1] += update[1:-1, 1:-1, 1:-1]

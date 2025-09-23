@@ -21,8 +21,11 @@ import subprocess
 import random
 import math
 import numpy as np
+import sys
+import copy
 from scipy.sparse import linalg as sparse_LA
-from benchmarks.gmg.python_gmg.gmg import SimpleGMG
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', "python_gmg"))
+from gmg import SimpleGMG
 from cmd_parser import parse_args, print_arguments
 from util import (
     hwl_2_oned_colmajor,
@@ -32,6 +35,8 @@ from util import (
 )
 # Import Cerebras SDK
 from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyOrder, MemcpyDataType
+DTYPE = np.float32
+
 
 def csl_compile_core(
     cslc: str, width: int, height: int, pe_length: int, blockSize: int, file_config: str, elf_dir: str, levels: int,
@@ -181,64 +186,73 @@ def main():
     # Input problem-specific parameters
     height = args.m
     width = args.n
-    pe_length = args.k
+    pe_length = args.k  # This seems like the max size the 3rd dimension can be
     zDim = args.zDim
-
-    # GMG parameters (Cerebras-specific, but related to problem)
-    omega = 0.5  # Jacobi relaxation parameter
-    h = 1.0 / (width - 1)  # Grid spacing
 
     # perform argument checks
     assert pe_length >= 2, "the maximum size of z must be greater than 1"
+    assert zDim >= 2, "the minimum size of zDim must be greater than 1"
     assert zDim <= pe_length, "[0, zDim) cannot exceed the storage"
 
     # Initialize solver data.
-    host_solver = SimpleGMG(width, height, pe_length, args.levels, args.verbose, args.tolerance, args.pre_iter, args.post_iter, args.bottom_iter)
-    device_solver = np.copy(host_solver)    # Before solving make sure to make a deep copy as python might modify the data in the original object.
+    host_solver = SimpleGMG(width, height, zDim, args.levels, args.verbose, args.tolerance, args.pre_iter, args.post_iter, args.bottom_iter)
+    device_solver = copy.deepcopy(host_solver)    # Before solving make sure to make a deep copy as python might modify the data in the original object.
 
-    # Host 
-    host_residual, host_iterations = host_solver.solve(args.max_ite)
-    print(f"Host residual: {host_residual}, host iterations: {host_iterations}")
+
+    # Host GMG for validation
+    # host_residual, host_iterations = host_solver.solve(args.max_ite)
+    # print(f"Host residual: {host_residual}, host iterations: {host_iterations}")
 
     # Device side
     # Calculate fabric dimensions
-    fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y = calculate_fabric_dimensions(args, width, height, args.width_west_buf, args.width_east_buf)
+    # fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y = calculate_fabric_dimensions(args, width, height, args.width_west_buf, args.width_east_buf)
     
-    # Compile the kernel
-    layout_file = "./src/layout_gmg.csl"
-    # This is used when user doesn't use a compile command first.
-    csl_compile_core(cslc=cslc, width=width, height=height, pe_length=pe_length, blockSize=args.blockSize, file_config=layout_file,
-        elf_dir=logs_dir, fabric_width=fabric_width, fabric_height=fabric_height, core_fabric_offset_x=core_fabric_offset_x, core_fabric_offset_y=core_fabric_offset_y, use_precompile=args.run_only,
-        arch=args.arch if args.arch else "wse2", C0=0, C1=1, C2=2, C3=3, C4=4, C5=5, C6=6, C7=7, C8=8, channels=args.channels, 
-        width_west_buf=args.width_west_buf, width_east_buf=args.width_east_buf)
+    # # Compile the kernel
+    # layout_file = "./src/layout_gmg.csl"
+    # # This is used when user doesn't use a compile command first.
+    # csl_compile_core(cslc=cslc, width=width, height=height, pe_length=pe_length, blockSize=args.blockSize, file_config=layout_file,
+    #     elf_dir=logs_dir, fabric_width=fabric_width, fabric_height=fabric_height, core_fabric_offset_x=core_fabric_offset_x, core_fabric_offset_y=core_fabric_offset_y, use_precompile=args.run_only,
+    #     arch=args.arch if args.arch else "wse2", C0=0, C1=1, C2=2, C3=3, C4=4, C5=5, C6=6, C7=7, C8=8, channels=args.channels, 
+    #     width_west_buf=args.width_west_buf, width_east_buf=args.width_east_buf, levels=args.levels)
     
-#     # Initialize simulator
-#     if SdkRuntime is None:
-#         print("Error: Cerebras SDK not available. Cannot run GMG simulation.")
-#         return
+
+    # device_grid = device_solver.get_grids() # Already has data filled and shapes initialized.
+    u_hwl = np.transpose(device_solver.grids[0]['u'], (1, 2, 0))  # (ny, nx, nz) -> (height, width, zDim)
+    f_hwl = np.transpose(device_solver.grids[0]['f'], (1, 2, 0))  # Change order because CSL expects (height, width, zDim), numpy is (zDim, height, width)
+
+    x_1d_level_0 = hwl_2_oned_colmajor(height, width, zDim, u_hwl, DTYPE)
+    f_1d_level_0 = hwl_2_oned_colmajor(height, width, zDim, f_hwl, DTYPE)    
+    # x_1d_level_0 = hwl_2_oned_colmajor(height, width, zDim, device_solver.grids[0]['u'], DTYPE)
+    # f_1d_level_0 = hwl_2_oned_colmajor(height, width, zDim, device_solver.grids[0]['f'], DTYPE)
+    print(f"f_1d_level_0.shape: {f_1d_level_0}")
+    # order: {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
+    stencil_coeff = np.zeros((height, width, 7), dtype=DTYPE)  # 3D-7pt
+    stencil_coeff[:, :, 0] = device_solver.BETA # west(-1)
+    stencil_coeff[:, :, 1] = device_solver.BETA # east(-1)
+    stencil_coeff[:, :, 2] = device_solver.BETA # south(-1)
+    stencil_coeff[:, :, 3] = device_solver.BETA # north(-1)
+    stencil_coeff[:, :, 4] = device_solver.BETA # bottom(-1)
+    stencil_coeff[:, :, 5] = device_solver.BETA # top(-1)
+    stencil_coeff[:, :, 6] = device_solver.ALPHA  # center (-6)
+
+
+
+    # Create simulator
+    memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
+    memcpy_order = MemcpyOrder.COL_MAJOR
+    simulator = SdkRuntime(logs_dir, cmaddr=args.cmaddr)
     
-#     memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
+    # Load and run
+    simulator.load()
+    simulator.run()
     
-#     # Create simulator
-#     simulator = SdkRuntime(
-#         name="gmg",
-#         cmaddr=args.cmaddr,
-#         elf_dir=logs_dir,
-#         fabric_dims=(fabric_width, fabric_height),
-#         arch=args.arch if args.arch else "wse2"
-#     )
-    
-#     # Load and run
-#     simulator.load()
-#     simulator.run()
-    
-#     # Get symbols
-#     symbol_u = simulator.get_id("u")
-#     symbol_f = simulator.get_id("f")
-#     symbol_r = simulator.get_id("r")
-#     symbol_Au = simulator.get_id("Au")
-#     symbol_residual_norm = simulator.get_id("residual_norm")
-#     symbol_stencil_coeff = simulator.get_id("stencil_coeff")
+    # Get symbols
+    symbol_u = simulator.get_id("u")
+    symbol_f = simulator.get_id("f")
+    symbol_r = simulator.get_id("r")
+    symbol_Au = simulator.get_id("Au")
+    symbol_residual_norm = simulator.get_id("residual_norm")
+    symbol_stencil_coeff = simulator.get_id("stencil_coeff")
  
     
 #     # Initialize data
