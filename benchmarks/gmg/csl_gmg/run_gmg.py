@@ -136,8 +136,7 @@ def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order
 
     # Initialize GMG
     print("Step 1: Initialize GMG")
-    simulator.launch("f_gmg_init", np.int16(zDim), np.int16(height), np.int16(width), np.int16(zDim), 
-                     np.float32(device_solver.omega), np.float32(device_solver.h), nonblock=False)
+    simulator.launch("f_gmg_init", np.int16(zDim), nonblock=False) # blocking
     
     # # Apply operator to get Au
     # # print("Step 2: Apply operator")
@@ -194,7 +193,10 @@ def main():
 
 
     # Host GMG for validation
+    
     # host_residual, host_iterations = host_solver.solve(args.max_ite)
+    host_solver.compute_residual(0)
+    first_residual = host_solver.grids[0]['r']
     # print(f"Host residual: {host_residual}, host iterations: {host_iterations}")
 
     # Device side
@@ -253,16 +255,21 @@ def main():
     
     # Run GMG algorithm
     print("Running GMG algorithm...")
-    residual_norm = gmg_algorithm(device_solver, height, width, zDim, 
+    gmg_algorithm(device_solver, height, width, zDim, 
                                  memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_f, symbol_r, symbol_stencil_coeff
                                  )
     
     # Copy results back
     print("Copying results back...")
     r_result = copy_data_d2h(width, height, zDim, memcpy_dtype, memcpy_order, simulator, symbol_r)
-    u_result_3d = oned_to_hwl_colmajor(height, width, zDim, r_result, DTYPE)    
-    print("u_result_3d", u_result_3d)
+    r_result_3d = oned_to_hwl_colmajor(height, width, zDim, r_result, DTYPE)    
+    # print("r_result_3d", r_result_3d)
     
+    # verify if r_result_3d is close to f_hwl
+    print("first_residual", first_residual)
+    print("r_result_3d", r_result_3d)
+    np.testing.assert_allclose(r_result_3d, first_residual, atol=0.01, rtol=0)
+    print("SUCCESS!")
     # clean up
     simulator.stop()
 
