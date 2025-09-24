@@ -1,62 +1,41 @@
-// Copyright 2024 Cerebras Systems.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 // Geometric Multigrid (GMG) kernel for 3D Poisson equation
 // Implements: Jacobi smoothing, restriction, and interpolation operations
 
+// parameters
 param memcpyParams: comptime_struct;
-
 param reduceParams: comptime_struct;
-
 param stencilParams: comptime_struct;
-
 param MAX_ZDIM: i16; // size of vector x
-
 param BLOCK_SIZE: i16; // size of temporary buffers for communication
+// param STATE: local_task_id;
 
-param STATE: local_task_id;
-
+// libraries
 const timestamp = @import_module("<time>");
-
 const math_lib = @import_module("<math>");
-
-const blas_lib = @import_module("blas.csl");
-
-// memcpy module reserves
-// - input/output queue 0 and 1
+// const blas_lib = @import_module("blas.csl");
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
-
 // allreduce uses input queue/output queue 1
-const reduce_mod = @import_module( "../../csl-libs/allreduce/pe.csl", @concat_structs(reduceParams, .{
-     .f_callback = f_trigger_state_machine,
-     .queues = [1]u16{2},
-     .dest_dsr_ids = [1]u16{1},
-     .src0_dsr_ids = [1]u16{1},
-     .src1_dsr_ids = [1]u16{1}
-     }));
+// const reduce_mod = @import_module( "../../csl-libs/allreduce/pe.csl", @concat_structs(reduceParams, .{
+//     //  .f_callback = f_trigger_state_machine,
+//      .f_callback = sys_mod.unblock_cmd_stream,
+//      .queues = [1]u16{2},
+//      .dest_dsr_ids = [1]u16{1},
+//      .src0_dsr_ids = [1]u16{1},
+//      .src1_dsr_ids = [1]u16{1}
+//      }));
+// // output queue cannot overlap input queues
+// const stencil_mod = @import_module( "../../csl-libs/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
+//     //  .f_callback = f_trigger_state_machine,
+//      .f_callback = sys_mod.unblock_cmd_stream,
+//      .input_queues = [4]u16{4, 5, 6, 7},
+//      .output_queues = if (@is_arch("wse3")) [4]u16{4, 5, 6, 7} else [1]u16{3},
+//      .output_ut_id = 3,
+//      .BLOCK_SIZE = BLOCK_SIZE,
+//      .dest_dsr_ids = [2]u16{2,3},
+//      .src0_dsr_ids = [1]u16{2},
+//      .src1_dsr_ids = [2]u16{2,3}
+//      }));
 
-// output queue cannot overlap input queues
-const stencil_mod = @import_module( "../../csl-libs/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
-     .f_callback = f_trigger_state_machine,
-     .input_queues = [4]u16{4, 5, 6, 7},
-     .output_queues = if (@is_arch("wse3")) [4]u16{4, 5, 6, 7} else [1]u16{3},
-     .output_ut_id = 3,
-     .BLOCK_SIZE = BLOCK_SIZE,
-     .dest_dsr_ids = [2]u16{2,3},
-     .src0_dsr_ids = [1]u16{2},
-     .src1_dsr_ids = [2]u16{2,3}
-     }));
 
 // GMG data structures
 var u = @zeros([MAX_ZDIM]f32); // solution vector
@@ -73,16 +52,16 @@ var omega: f32 = @as(f32, 0.5); // Jacobi relaxation parameter
 var alpha: f32 = @as(f32, -6.0); // center coefficient
 var beta: f32 = @as(f32, 1.0); // neighbor coefficient
 var h: f32 = @as(f32, 1.0); // grid spacing
-
 // stencil coefficients are organized as
 // {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
 var stencil_coeff = @zeros([7]f32);
 
-// timing variables
-var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
-var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
-var time_buf_u16 = @zeros([timestamp.tsc_size_words*2]u16);
-var time_ref_u16 = @zeros([timestamp.tsc_size_words]u16);
+// TODO: Leo
+// // timing variables
+// var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
+// var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
+// var time_buf_u16 = @zeros([timestamp.tsc_size_words*2]u16);
+// var time_ref_u16 = @zeros([timestamp.tsc_size_words]u16);
 
 // residual norm for convergence checking
 var residual_norm = @zeros([1]f32);
@@ -118,170 +97,170 @@ var ptr_time_buf_u16: [*]u16 = &time_buf_u16;
 var ptr_time_ref: [*]u16 = &time_ref_u16;
 var ptr_residual_norm: [*]f32 = &residual_norm;
 
-// GMG initialization
-fn f_gmg_init(size: i16, nx_val: i16, ny_val: i16, nz_val: i16, omega_val: f32, h_val: f32) void {
-    n = size;
-    nx = nx_val;
-    ny = ny_val;
-    nz = nz_val;
-    omega = omega_val;
-    h = h_val;
+// // GMG initialization
+// fn f_gmg_init(size: i16, nx_val: i16, ny_val: i16, nz_val: i16, omega_val: f32, h_val: f32) void {
+//     n = size;
+//     nx = nx_val;
+//     ny = ny_val;
+//     nz = nz_val;
+//     omega = omega_val;
+//     h = h_val;
     
-    // Set up stencil coefficients for 7-point Poisson stencil
-    stencil_coeff[0] = beta; // west
-    stencil_coeff[1] = beta; // east
-    stencil_coeff[2] = beta; // south
-    stencil_coeff[3] = beta; // north
-    stencil_coeff[4] = beta; // bottom
-    stencil_coeff[5] = beta; // top
-    stencil_coeff[6] = alpha; // center
+//     // Set up stencil coefficients for 7-point Poisson stencil
+//     stencil_coeff[0] = beta; // west
+//     stencil_coeff[1] = beta; // east
+//     stencil_coeff[2] = beta; // south
+//     stencil_coeff[3] = beta; // north
+//     stencil_coeff[4] = beta; // bottom
+//     stencil_coeff[5] = beta; // top
+//     stencil_coeff[6] = alpha; // center
     
-    // Set the length of all DSDs
-    mem_u_dsd = @set_dsd_length(mem_u_dsd, @bitcast(u16,n));
-    mem_f_dsd = @set_dsd_length(mem_f_dsd, @bitcast(u16,n));
-    mem_r_dsd = @set_dsd_length(mem_r_dsd, @bitcast(u16,n));
-    mem_Au_dsd = @set_dsd_length(mem_Au_dsd, @bitcast(u16,n));
-    mem_u_smooth_dsd = @set_dsd_length(mem_u_smooth_dsd, @bitcast(u16,n));
-    mem_r_coarse_dsd = @set_dsd_length(mem_r_coarse_dsd, @bitcast(u16,n));
-    mem_u_coarse_dsd = @set_dsd_length(mem_u_coarse_dsd, @bitcast(u16,n));
-    mem_correction_dsd = @set_dsd_length(mem_correction_dsd, @bitcast(u16,n));
+//     // Set the length of all DSDs
+//     mem_u_dsd = @set_dsd_length(mem_u_dsd, @bitcast(u16,n));
+//     mem_f_dsd = @set_dsd_length(mem_f_dsd, @bitcast(u16,n));
+//     mem_r_dsd = @set_dsd_length(mem_r_dsd, @bitcast(u16,n));
+//     mem_Au_dsd = @set_dsd_length(mem_Au_dsd, @bitcast(u16,n));
+//     mem_u_smooth_dsd = @set_dsd_length(mem_u_smooth_dsd, @bitcast(u16,n));
+//     mem_r_coarse_dsd = @set_dsd_length(mem_r_coarse_dsd, @bitcast(u16,n));
+//     mem_u_coarse_dsd = @set_dsd_length(mem_u_coarse_dsd, @bitcast(u16,n));
+//     mem_correction_dsd = @set_dsd_length(mem_correction_dsd, @bitcast(u16,n));
     
-    sys_mod.unblock_cmd_stream();
-}
+//     sys_mod.unblock_cmd_stream();
+// }
 
-// Apply 7-point Poisson operator: Au = A*u
-fn f_apply_operator() void {
-    stencil_mod.spmv(n, &stencil_coeff, &u, &Au);
-    sys_mod.unblock_cmd_stream();
-}
+// // Apply 7-point Poisson operator: Au = A*u
+// fn f_apply_operator() void {
+//     stencil_mod.spmv(n, &stencil_coeff, &u, &Au);
+//     sys_mod.unblock_cmd_stream();
+// }
 
-// Compute residual: r = f - Au
-fn f_compute_residual() void {
-    // First apply operator to get Au
-    stencil_mod.spmv(n, &stencil_coeff, &u, &Au);
+// // Compute residual: r = f - Au
+// fn f_compute_residual() void {
+//     // First apply operator to get Au
+//     stencil_mod.spmv(n, &stencil_coeff, &u, &Au);
     
-    // Then compute residual: r = f - Au
-    @fsubs(mem_r_dsd, mem_f_dsd, mem_Au_dsd);
+//     // Then compute residual: r = f - Au
+//     @fsubs(mem_r_dsd, mem_f_dsd, mem_Au_dsd);
     
-    // Compute residual norm
-    residual_norm[0] = blas_lib.dot(n, &r, &r);
-    reduce_mod.allreduce(1, &residual_norm, reduce_mod.TYPE_BINARY_OP.ADD);
+//     // Compute residual norm
+//     residual_norm[0] = blas_lib.dot(n, &r, &r);
+//     reduce_mod.allreduce(1, &residual_norm, reduce_mod.TYPE_BINARY_OP.ADD);
     
-    sys_mod.unblock_cmd_stream();
-}
+//     sys_mod.unblock_cmd_stream();
+// }
 
-// Jacobi smoothing: u_new = u + omega * (f - Au) / diagonal
-fn f_jacobi_smooth(iterations: i16) void {
-    num_smooth_iter = iterations;
+// // Jacobi smoothing: u_new = u + omega * (f - Au) / diagonal
+// fn f_jacobi_smooth(iterations: i16) void {
+//     num_smooth_iter = iterations;
     
-    for (0..num_smooth_iter) |_| {
-        // Apply operator to get Au
-        stencil_mod.spmv(n, &stencil_coeff, &u, &Au);
+//     for (0..num_smooth_iter) |_| {
+//         // Apply operator to get Au
+//         stencil_mod.spmv(n, &stencil_coeff, &u, &Au);
         
-        // Jacobi update: u_new = u + omega * (f - Au) / diagonal
-        // For 7-point stencil, diagonal is alpha = -6
-        var diagonal: f32 = alpha / (h * h);
-        var omega_over_diag: f32 = omega / diagonal;
+//         // Jacobi update: u_new = u + omega * (f - Au) / diagonal
+//         // For 7-point stencil, diagonal is alpha = -6
+//         var diagonal: f32 = alpha / (h * h);
+//         var omega_over_diag: f32 = omega / diagonal;
         
-        // Compute update: omega * (f - Au) / diagonal
-        @fsubs(mem_u_smooth_dsd, mem_f_dsd, mem_Au_dsd); // u_smooth = f - Au
-        @fmacs(mem_u_smooth_dsd, mem_u_smooth_dsd, mem_u_smooth_dsd, omega_over_diag); // u_smooth *= omega/diagonal
+//         // Compute update: omega * (f - Au) / diagonal
+//         @fsubs(mem_u_smooth_dsd, mem_f_dsd, mem_Au_dsd); // u_smooth = f - Au
+//         @fmacs(mem_u_smooth_dsd, mem_u_smooth_dsd, mem_u_smooth_dsd, omega_over_diag); // u_smooth *= omega/diagonal
         
-        // Update solution: u = u + update
-        @fadds(mem_u_dsd, mem_u_dsd, mem_u_smooth_dsd);
-    }
+//         // Update solution: u = u + update
+//         @fadds(mem_u_dsd, mem_u_dsd, mem_u_smooth_dsd);
+//     }
     
-    sys_mod.unblock_cmd_stream();
-}
+//     sys_mod.unblock_cmd_stream();
+// }
 
-// Full weighting restriction: average 8 fine points to 1 coarse point
-fn f_restrict() void {
-    // For now, implement simple injection restriction
-    // TODO: Implement full weighting restriction
-    @fmovs(mem_r_coarse_dsd, mem_r_dsd);
-    sys_mod.unblock_cmd_stream();
-}
+// // Full weighting restriction: average 8 fine points to 1 coarse point
+// fn f_restrict() void {
+//     // For now, implement simple injection restriction
+//     // TODO: Implement full weighting restriction
+//     @fmovs(mem_r_coarse_dsd, mem_r_dsd);
+//     sys_mod.unblock_cmd_stream();
+// }
 
-// Linear interpolation: copy coarse value to 8 fine points
-fn f_interpolate() void {
-    // For now, implement simple injection interpolation
-    // TODO: Implement linear interpolation
-    @fmovs(mem_correction_dsd, mem_u_coarse_dsd);
-    sys_mod.unblock_cmd_stream();
-}
+// // Linear interpolation: copy coarse value to 8 fine points
+// fn f_interpolate() void {
+//     // For now, implement simple injection interpolation
+//     // TODO: Implement linear interpolation
+//     @fmovs(mem_correction_dsd, mem_u_coarse_dsd);
+//     sys_mod.unblock_cmd_stream();
+// }
 
-// Add correction to solution: u = u + correction
-fn f_add_correction() void {
-    @fadds(mem_u_dsd, mem_u_dsd, mem_correction_dsd);
-    sys_mod.unblock_cmd_stream();
-}
+// // Add correction to solution: u = u + correction
+// fn f_add_correction() void {
+//     @fadds(mem_u_dsd, mem_u_dsd, mem_correction_dsd);
+//     sys_mod.unblock_cmd_stream();
+// }
 
-// Timing functions
-fn f_enable_timer() void {
-    timestamp.enable_tsc();
-    sys_mod.unblock_cmd_stream();
-}
+// // Timing functions
+// fn f_enable_timer() void {
+//     timestamp.enable_tsc();
+//     sys_mod.unblock_cmd_stream();
+// }
 
-fn f_tic() void {
-    timestamp.get_timestamp(&tscStartBuffer);
-    sys_mod.unblock_cmd_stream();
-}
+// fn f_tic() void {
+//     timestamp.get_timestamp(&tscStartBuffer);
+//     sys_mod.unblock_cmd_stream();
+// }
 
-fn f_toc() void {
-    timestamp.get_timestamp(&tscEndBuffer);
-    sys_mod.unblock_cmd_stream();
-}
+// fn f_toc() void {
+//     timestamp.get_timestamp(&tscEndBuffer);
+//     sys_mod.unblock_cmd_stream();
+// }
 
-fn f_memcpy_timestamps() void {
-    time_buf_u16[0] = tscStartBuffer[0];
-    time_buf_u16[1] = tscStartBuffer[1];
-    time_buf_u16[2] = tscStartBuffer[2];
-    time_buf_u16[3] = tscEndBuffer[0];
-    time_buf_u16[4] = tscEndBuffer[1];
-    time_buf_u16[5] = tscEndBuffer[2];
-    sys_mod.unblock_cmd_stream();
-}
+// fn f_memcpy_timestamps() void {
+//     time_buf_u16[0] = tscStartBuffer[0];
+//     time_buf_u16[1] = tscStartBuffer[1];
+//     time_buf_u16[2] = tscStartBuffer[2];
+//     time_buf_u16[3] = tscEndBuffer[0];
+//     time_buf_u16[4] = tscEndBuffer[1];
+//     time_buf_u16[5] = tscEndBuffer[2];
+//     sys_mod.unblock_cmd_stream();
+// }
 
-fn f_reference_timestamps() void {
-    time_ref_u16[0] = reduce_mod.tscRefBuffer[0];
-    time_ref_u16[1] = reduce_mod.tscRefBuffer[1];
-    time_ref_u16[2] = reduce_mod.tscRefBuffer[2];
-    sys_mod.unblock_cmd_stream();
-}
+// fn f_reference_timestamps() void {
+//     time_ref_u16[0] = reduce_mod.tscRefBuffer[0];
+//     time_ref_u16[1] = reduce_mod.tscRefBuffer[1];
+//     time_ref_u16[2] = reduce_mod.tscRefBuffer[2];
+//     sys_mod.unblock_cmd_stream();
+// }
 
-fn f_trigger_state_machine() void {
-    // Simple trigger for compatibility with modules
-    sys_mod.unblock_cmd_stream();
-}
+// fn f_trigger_state_machine() void {
+//     // Simple trigger for compatibility with modules
+//     sys_mod.unblock_cmd_stream();
+// }
 
 // Export symbols
 comptime {
     @export_symbol(ptr_u, "u");
     @export_symbol(ptr_f, "f");
     @export_symbol(ptr_r, "r");
-    @export_symbol(ptr_Au, "Au");
-    @export_symbol(ptr_u_smooth, "u_smooth");
-    @export_symbol(ptr_r_coarse, "r_coarse");
-    @export_symbol(ptr_u_coarse, "u_coarse");
-    @export_symbol(ptr_correction, "correction");
     @export_symbol(ptr_stencil_coeff, "stencil_coeff");
-    @export_symbol(ptr_time_buf_u16, "time_buf_u16");
-    @export_symbol(ptr_time_ref, "time_ref");
-    @export_symbol(ptr_residual_norm, "residual_norm");
+    // @export_symbol(ptr_Au, "Au");
+    // @export_symbol(ptr_u_smooth, "u_smooth");
+    // @export_symbol(ptr_r_coarse, "r_coarse");
+    // @export_symbol(ptr_u_coarse, "u_coarse");
+    // @export_symbol(ptr_correction, "correction");
+    // @export_symbol(ptr_time_buf_u16, "time_buf_u16");
+    // @export_symbol(ptr_time_ref, "time_ref");
+    // @export_symbol(ptr_residual_norm, "residual_norm");
 }
 
 comptime {
-    @export_symbol(f_enable_timer);
-    @export_symbol(f_tic);
-    @export_symbol(f_toc);
-    @export_symbol(f_memcpy_timestamps);
-    @export_symbol(f_reference_timestamps);
-    @export_symbol(f_gmg_init);
-    @export_symbol(f_apply_operator);
-    @export_symbol(f_compute_residual);
-    @export_symbol(f_jacobi_smooth);
-    @export_symbol(f_restrict);
-    @export_symbol(f_interpolate);
-    @export_symbol(f_add_correction);
+    // @export_symbol(f_enable_timer);
+    // @export_symbol(f_tic);
+    // @export_symbol(f_toc);
+    // @export_symbol(f_memcpy_timestamps);
+    // @export_symbol(f_reference_timestamps);
+    // @export_symbol(f_gmg_init);
+    // @export_symbol(f_apply_operator);
+    // @export_symbol(f_compute_residual);
+    // @export_symbol(f_jacobi_smooth);
+    // @export_symbol(f_restrict);
+    // @export_symbol(f_interpolate);
+    // @export_symbol(f_add_correction);
 }
 
