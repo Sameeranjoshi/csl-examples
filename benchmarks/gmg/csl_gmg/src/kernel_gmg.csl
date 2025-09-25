@@ -122,28 +122,32 @@ fn f_apply_operator() void {
 
 // Compute residual: r = f - Au
 // where Au = A*u is computed by f_apply_operator
-fn f_compute_residual() void {
+fn f_residual() void {
     // First apply operator to get Au
-    f_apply_operator();
+    // f_apply_operator();
     // Then compute residual: r = f - Au
+    // print Au
+    
     @fsubs(mem_r_dsd, mem_f_dsd, mem_Au_dsd);
 
-    f_trigger_state_machine();
+    sys_mod.unblock_cmd_stream();
 }
+
 
 // Jacobi smoothing: u = u + JACOBI_COEFF * (f - Au)
 fn f_jacobi_smooth(smooth_iterations: i16, JACOBI_COEFF_PER_LEVEL: f32) void {
     
-    for (@range(i16, 0, smooth_iterations, 1)) |iter| {
+    // for (@range(i16, 0, smooth_iterations, 1)) |iter| {
         // 1. Initialize Au with 0.0
-        @fmovs(mem_Au_dsd, 0.0);
+        // @fmovs(mem_Au_dsd, 0.0);
         // 2. Au = A*u
-        f_apply_operator(); // Answer is in mem_Au_dsd
+        // f_apply_operator(); // Answer is in mem_Au_dsd
         // 3. residual_temp = f - Au
         @fsubs(mem_residual_temp_dsd, mem_f_dsd, mem_Au_dsd); // residual_temp = f - Au
         // 4. u = u + JACOBI_COEFF_PER_LEVEL * residual_temp
         @fmacs(mem_u_dsd, mem_u_dsd, mem_residual_temp_dsd, JACOBI_COEFF_PER_LEVEL);
-    }
+    // }
+    f_trigger_state_machine();
 }
 
 // // Full weighting restriction: average 8 fine points to 1 coarse point
@@ -232,7 +236,7 @@ comptime {
     // @export_symbol(f_reference_timestamps);
     @export_symbol(f_gmg_init);
     @export_symbol(f_apply_operator);
-    @export_symbol(f_compute_residual);
+    @export_symbol(f_residual);
     @export_symbol(f_trigger_state_machine);
     @export_symbol(f_jacobi_smooth);
     // @export_symbol(f_restrict);

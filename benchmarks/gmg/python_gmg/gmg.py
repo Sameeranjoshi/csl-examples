@@ -225,7 +225,6 @@ class SimpleGMG:
         for k in range(nz):
             for j in range(ny):
                 for i in range(nx):
-                    print(f"u[k, j, i]: {u[k, j, i]}")
                     val = alpha * u[k, j, i]
 
                     # west/east
@@ -241,10 +240,6 @@ class SimpleGMG:
                     if k < nz-1:   val += beta * u[k+1, j, i]
                     Au[k, j, i] = val / (h*h)
 
-        # print the AU in layer by layer 
-        print("Au in layer by layer")
-        for k in range(nz):
-            print(f"Layer {k}: {Au[k, :, :]}")
 
     def compute_residual(self, level: int):
         """Compute residual r = f - Au"""

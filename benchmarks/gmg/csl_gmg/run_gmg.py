@@ -126,6 +126,33 @@ def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
     return u_result
 
+def init_operator(device_solver, zDim, simulator):
+    print("Step 0: Initialize GMG")
+    simulator.launch("f_gmg_init", np.int16(zDim), np.float32(device_solver.grids[0]['h']), nonblock=False)
+
+def residual_operator(simulator):
+
+    print("Step 1: Apply operator")
+    # Au = A*u(laplacian)
+    simulator.launch("f_apply_operator", nonblock=False)
+    # # Compute residual
+    print("Step 2: Compute residual")
+    # r = b- au
+    simulator.launch("f_residual", nonblock=False)
+
+# x_new = x_old + JACOBI_COEFF_PER_LEVEL * (b- Ax)
+def jacobi_smoothing_operator(device_solver, simulator):
+
+  for i in range(device_solver.PRE_SMOOTH_ITER):
+    # Jacobi smoothing
+    print(f"Step {i+3}: Jacobi smoothing")
+    JACOBI_COEFF_PER_LEVEL = -1.0 * (device_solver.grids[0]['h'] * device_solver.grids[0]['h']) / 12.0;
+
+    simulator.launch("f_apply_operator", nonblock=False) # applyOp = A*u
+    # x_new = x_old + JACOBI_COEFF_PER_LEVEL * (b- applyOp)
+    simulator.launch("f_jacobi_smooth", np.int16(1), np.float32(JACOBI_COEFF_PER_LEVEL), nonblock=False)
+    
+
 def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_f, symbol_r, symbol_stencil_coeff):
     """Main GMG algorithm"""
     print("=" * 50)
@@ -135,20 +162,16 @@ def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order
     device_solver._print_initialization_info()
 
     # Initialize GMG
-    print("Step 1: Initialize GMG")
-    simulator.launch("f_gmg_init", np.int16(zDim), np.float32(device_solver.grids[0]['h']), nonblock=False) # blocking
+    print("Step 0: Initialize GMG")
+    init_operator(device_solver, zDim, simulator)
     
-
-    simulator.launch("f_apply_operator", nonblock=False)
-    # # Jacobi smoothing
-    # print("Step 2: Jacobi smoothing")
-    # JACOBI_COEFF_PER_LEVEL = -1.0 * (device_solver.grids[0]['h'] * device_solver.grids[0]['h']) / 12.0;
-    # simulator.launch("f_jacobi_smooth", np.int16(device_solver.PRE_SMOOTH_ITER), np.float32(JACOBI_COEFF_PER_LEVEL), nonblock=False)
+    # Jacobi smoothing
+    print("Step 1: Jacobi smoothing operator")
+    jacobi_smoothing_operator(device_solver, simulator)
     
-    # # Compute residual
-    # print("Step 3: Compute residual")
-    # simulator.launch("f_compute_residual", nonblock=False)
-  
+    # Compute residual
+    print("Step 2: Compute residual")
+    residual_operator(simulator)
     # # Restriction (for now, just copy)
     # print("Step 5: Restriction")
     # simulator.launch("f_restrict", nonblock=False)
@@ -194,12 +217,12 @@ def main():
     # Host GMG for validation
     
     # host_residual, host_iterations = host_solver.solve(args.max_ite)
-    # host_solver.jacobi_smooth(0, args.pre_iter)
-    host_solver.apply_operator(0)
-    # host_solver.compute_residual(0)
-    # first_residual = host_solver.grids[0]['r']
+    host_solver.jacobi_smooth(0, args.pre_iter)
+    # host_solver.apply_operator(0)
+    host_solver.compute_residual(0)
+    first_residual = host_solver.grids[0]['r']
     # first_smooth_u = host_solver.grids[0]['u']
-    first_au_host = host_solver.grids[0]['Au']
+    # first_au_host = host_solver.grids[0]['Au']
 
 
     # Device side
@@ -266,25 +289,20 @@ def main():
     
     # Copy results back
     print("Copying results back...")
-    # r_result = copy_data_d2h(width, height, zDim, memcpy_dtype, memcpy_order, simulator, symbol_r)
-    # r_result_3d = oned_to_hwl_colmajor(height, width, zDim, r_result, DTYPE)
-    u_smooth_result = copy_data_d2h(width, height, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u)
-    u_smooth_result_3d = oned_to_hwl_colmajor(height, width, zDim, u_smooth_result, DTYPE)
+    r_result = copy_data_d2h(width, height, zDim, memcpy_dtype, memcpy_order, simulator, symbol_r)
+    r_result_3d = oned_to_hwl_colmajor(height, width, zDim, r_result, DTYPE)
+    # u_smooth_result = copy_data_d2h(width, height, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u)
+    # u_smooth_result_3d = oned_to_hwl_colmajor(height, width, zDim, u_smooth_result, DTYPE)
     
-    au_device = copy_data_d2h(width, height, zDim, memcpy_dtype, memcpy_order, simulator, symbol_Au)
-    au_device_3d = oned_to_hwl_colmajor(height, width, zDim, au_device, DTYPE)
 
     # verify if r_result_3d is close to f_hwl
-    # print("first_residual", first_residual)
-    # print("r_result_3d")
-    # print(r_result_3d)
+    print("first_residual", first_residual)
+    print("r_result_3d")
+    print(r_result_3d)
     # print("first_smooth_u", first_smooth_u)
     # print("u_smooth_result_3d", u_smooth_result_3d)
-    print("first_au_host", first_au_host)
-    print("au_device_3d", au_device_3d)
-    np.testing.assert_allclose(au_device_3d, first_au_host, atol=1e-4, rtol=0)
     # np.testing.assert_allclose(u_smooth_result_3d, first_smooth_u, atol=1e-4, rtol=0)
-    # np.testing.assert_allclose(r_result_3d, first_residual, atol=1e-2, rtol=0)
+    np.testing.assert_allclose(r_result_3d, first_residual, atol=1e-5, rtol=1e-6)
     print("SUCCESS!")
     # clean up
     simulator.stop()
