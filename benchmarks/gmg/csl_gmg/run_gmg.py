@@ -110,13 +110,13 @@ def copy_data_h2d(u_1d, f_1d, stencil_coeff, height, width, zDim, memcpy_dtype, 
     """Copy data from host to device"""
     # # Copy solution vector u
     simulator.memcpy_h2d(symbol_u, u_1d, 0, 0, width, height, zDim,
-                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=True)
+                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
     # Copy right-hand side f
     simulator.memcpy_h2d(symbol_f, f_1d, 0, 0, width, height, zDim,
-                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=True)
+                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
     # Copy stencil coefficients
     simulator.memcpy_h2d(symbol_stencil_coeff, stencil_coeff, 0, 0, width, height, 7,
-                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=True)
+                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
 
 def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_device):
     """Copy data from symbol_device to host(creates new variable in host)"""
@@ -129,27 +129,26 @@ def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
 def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_f, symbol_r, symbol_stencil_coeff):
     """Main GMG algorithm"""
     print("=" * 50)
-    print(f"\nHardware information: grid size {height}x{width}x{zDim}, zDim={zDim}")
+    print(f"\nHardware : grid size {height}x{width}")
     print("=" * 50)    
     device_solver._print_level_info()
     device_solver._print_initialization_info()
 
     # Initialize GMG
     print("Step 1: Initialize GMG")
-    simulator.launch("f_gmg_init", np.int16(zDim), nonblock=False) # blocking
+    simulator.launch("f_gmg_init", np.int16(zDim), np.float32(device_solver.grids[0]['h']), nonblock=False) # blocking
     
-    # # Apply operator to get Au
-    # # print("Step 2: Apply operator")
-    # # simulator.launch("f_apply_operator", nonblock=False)
-    
-    # Compute residual
-    print("Step 3: Compute residual")
-    simulator.launch("f_compute_residual", nonblock=False)
-    
+
+    simulator.launch("f_apply_operator", nonblock=False)
     # # Jacobi smoothing
-    # print("Step 4: Jacobi smoothing")
-    # simulator.launch("f_jacobi_smooth", np.int16(num_smooth_iter), nonblock=False)
+    # print("Step 2: Jacobi smoothing")
+    # JACOBI_COEFF_PER_LEVEL = -1.0 * (device_solver.grids[0]['h'] * device_solver.grids[0]['h']) / 12.0;
+    # simulator.launch("f_jacobi_smooth", np.int16(device_solver.PRE_SMOOTH_ITER), np.float32(JACOBI_COEFF_PER_LEVEL), nonblock=False)
     
+    # # Compute residual
+    # print("Step 3: Compute residual")
+    # simulator.launch("f_compute_residual", nonblock=False)
+  
     # # Restriction (for now, just copy)
     # print("Step 5: Restriction")
     # simulator.launch("f_restrict", nonblock=False)
@@ -195,9 +194,13 @@ def main():
     # Host GMG for validation
     
     # host_residual, host_iterations = host_solver.solve(args.max_ite)
-    host_solver.compute_residual(0)
-    first_residual = host_solver.grids[0]['r']
-    # print(f"Host residual: {host_residual}, host iterations: {host_iterations}")
+    # host_solver.jacobi_smooth(0, args.pre_iter)
+    host_solver.apply_operator(0)
+    # host_solver.compute_residual(0)
+    # first_residual = host_solver.grids[0]['r']
+    # first_smooth_u = host_solver.grids[0]['u']
+    first_au_host = host_solver.grids[0]['Au']
+
 
     # Device side
     # Calculate fabric dimensions
@@ -219,13 +222,14 @@ def main():
     f_hwl = np.transpose(device_solver.grids[0]['f'], (1, 2, 0))  # Change order because CSL expects (height, width, zDim), numpy is (zDim, height, width)
     # order: {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
     stencil_coeff = np.zeros((height, width, 7), dtype=DTYPE)  # 3D-7pt
-    stencil_coeff[:, :, 0] = device_solver.BETA # west(-1)
-    stencil_coeff[:, :, 1] = device_solver.BETA # east(-1)
-    stencil_coeff[:, :, 2] = device_solver.BETA # south(-1)
-    stencil_coeff[:, :, 3] = device_solver.BETA # north(-1)
-    stencil_coeff[:, :, 4] = device_solver.BETA # bottom(-1)
-    stencil_coeff[:, :, 5] = device_solver.BETA # top(-1)
-    stencil_coeff[:, :, 6] = device_solver.ALPHA  # center (-6)
+    h = device_solver.grids[0]['h']
+    stencil_coeff[:, :, 0] = device_solver.BETA/h**2 # west(-1)
+    stencil_coeff[:, :, 1] = device_solver.BETA/h**2 # east(-1)
+    stencil_coeff[:, :, 2] = device_solver.BETA/h**2 # south(-1)
+    stencil_coeff[:, :, 3] = device_solver.BETA/h**2 # north(-1)
+    stencil_coeff[:, :, 4] = device_solver.BETA/(h**2) # bottom(-1)
+    stencil_coeff[:, :, 5] = device_solver.BETA/(h**2) # top(-1)
+    stencil_coeff[:, :, 6] = device_solver.ALPHA/(h**2)  # center (-6)
 
     # Flatten the data    
     u_1d_level_0 = hwl_2_oned_colmajor(height, width, zDim, u_hwl, DTYPE)
@@ -242,6 +246,7 @@ def main():
     symbol_f = simulator.get_id("f")  # right-hand side
     symbol_r = simulator.get_id("r")  # residual (reuse x for now)
     symbol_stencil_coeff = simulator.get_id("stencil_coeff")
+    symbol_Au = simulator.get_id("Au")
     # host  = device
     #TODO: Leo
      # Load and run
@@ -261,14 +266,25 @@ def main():
     
     # Copy results back
     print("Copying results back...")
-    r_result = copy_data_d2h(width, height, zDim, memcpy_dtype, memcpy_order, simulator, symbol_r)
-    r_result_3d = oned_to_hwl_colmajor(height, width, zDim, r_result, DTYPE)    
-    # print("r_result_3d", r_result_3d)
+    # r_result = copy_data_d2h(width, height, zDim, memcpy_dtype, memcpy_order, simulator, symbol_r)
+    # r_result_3d = oned_to_hwl_colmajor(height, width, zDim, r_result, DTYPE)
+    u_smooth_result = copy_data_d2h(width, height, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u)
+    u_smooth_result_3d = oned_to_hwl_colmajor(height, width, zDim, u_smooth_result, DTYPE)
     
+    au_device = copy_data_d2h(width, height, zDim, memcpy_dtype, memcpy_order, simulator, symbol_Au)
+    au_device_3d = oned_to_hwl_colmajor(height, width, zDim, au_device, DTYPE)
+
     # verify if r_result_3d is close to f_hwl
-    print("first_residual", first_residual)
-    print("r_result_3d", r_result_3d)
-    np.testing.assert_allclose(r_result_3d, first_residual, atol=0.01, rtol=0)
+    # print("first_residual", first_residual)
+    # print("r_result_3d")
+    # print(r_result_3d)
+    # print("first_smooth_u", first_smooth_u)
+    # print("u_smooth_result_3d", u_smooth_result_3d)
+    print("first_au_host", first_au_host)
+    print("au_device_3d", au_device_3d)
+    np.testing.assert_allclose(au_device_3d, first_au_host, atol=1e-4, rtol=0)
+    # np.testing.assert_allclose(u_smooth_result_3d, first_smooth_u, atol=1e-4, rtol=0)
+    # np.testing.assert_allclose(r_result_3d, first_residual, atol=1e-2, rtol=0)
     print("SUCCESS!")
     # clean up
     simulator.stop()

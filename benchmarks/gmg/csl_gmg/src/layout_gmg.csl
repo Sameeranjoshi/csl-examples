@@ -108,6 +108,7 @@ layout{
     @export_name("u", [*]f32, true);
     @export_name("f", [*]f32, true);
     @export_name("r", [*]f32, true);
+    @export_name("Au", [*]f32, true);
     @export_name("stencil_coeff", [*]f32, true);
 
 
@@ -116,10 +117,11 @@ layout{
     // @export_name("f_toc", fn()void);
     // @export_name("f_memcpy_timestamps", fn()void);
 
-    @export_name("f_gmg_init", fn(i16)void);
+    @export_name("f_gmg_init", fn(i16, f32)void);
     @export_name("f_apply_operator", fn()void);
     @export_name("f_compute_residual", fn()void);
     @export_name("f_trigger_state_machine", fn()void);
+    @export_name("f_jacobi_smooth", fn(i16, f32)void);
     // @export_name("f_update_p", fn(i16)void);
     // @export_name("f_spmv_Ap", fn()void);
     // @export_name("f_eta", fn()void);

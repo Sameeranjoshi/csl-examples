@@ -74,7 +74,7 @@ class SimpleGMG:
             
             grid = {
                 'nx': nx, 'ny': ny, 'nz': nz, 'h': h,
-                'u': np.zeros((nz, ny, nx), dtype=DTYPE),      # Solution
+                'u': np.ones((nz, ny, nx), dtype=DTYPE),      # Solution
                 'f': np.zeros((nz, ny, nx), dtype=DTYPE),      # Right-hand side
                 'r': np.zeros((nz, ny, nx), dtype=DTYPE),      # Residual
                 'Au': np.zeros((nz, ny, nx), dtype=DTYPE)      # A*u
@@ -221,16 +221,31 @@ class SimpleGMG:
         
         # Clear Au
         Au.fill(0.0)
-        
-        # Apply 7-point stencil: ∇²u = (u[i±1,j,k] + u[i,j±1,k] + u[i,j,k±1] - 6u[i,j,k]) / h²
-        for k in range(1, nz-1):
-            for j in range(1, ny-1):
-                for i in range(1, nx-1):
-                    Au[k, j, i] = (alpha * u[k, j, i] +
-                                  beta * (u[k, j, i+1] + u[k, j, i-1] +
-                                  u[k, j+1, i] + u[k, j-1, i] +
-                                  u[k+1, j, i] + u[k-1, j, i])) / (h * h)
-    
+
+        for k in range(nz):
+            for j in range(ny):
+                for i in range(nx):
+                    print(f"u[k, j, i]: {u[k, j, i]}")
+                    val = alpha * u[k, j, i]
+
+                    # west/east
+                    if i > 0:      val += beta * u[k, j, i-1]
+                    if i < nx-1:   val += beta * u[k, j, i+1]
+
+                    # south/north
+                    if j > 0:      val += beta * u[k, j-1, i]
+                    if j < ny-1:   val += beta * u[k, j+1, i]
+
+                    # bottom/top
+                    if k > 0:      val += beta * u[k-1, j, i]
+                    if k < nz-1:   val += beta * u[k+1, j, i]
+                    Au[k, j, i] = val / (h*h)
+
+        # print the AU in layer by layer 
+        print("Au in layer by layer")
+        for k in range(nz):
+            print(f"Layer {k}: {Au[k, :, :]}")
+
     def compute_residual(self, level: int):
         """Compute residual r = f - Au"""
         grid = self.grids[level]
@@ -264,7 +279,8 @@ class SimpleGMG:
             update = omega * (f - Au) / diagonal
             
             # Update interior points only
-            u[1:-1, 1:-1, 1:-1] += update[1:-1, 1:-1, 1:-1]
+            # u[1:-1, 1:-1, 1:-1] += update[1:-1, 1:-1, 1:-1]
+            u[:] += update[:]  # update all cells, boundary handled by apply_operator
     
     def restrict(self, fine_level: int):
         """Full weighting restriction"""
@@ -288,6 +304,7 @@ class SimpleGMG:
                     fi, fj, fk = 2*i, 2*j, 2*k
                     
                     # Average 8 neighboring fine points
+                    # only interior points
                     if (fi+1 < fine['nx'] and fj+1 < fine['ny'] and fk+1 < fine['nz']):
                         coarse_f[k, j, i] = (
                             fine_r[fk, fj, fi] + fine_r[fk, fj, fi+1] +

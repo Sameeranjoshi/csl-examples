@@ -33,21 +33,22 @@ const stencil_mod = @import_module("../../../csl-libs/stencil_3d_7pts/pe.csl", @
      .src0_dsr_ids = [1]u16{2},
      .src1_dsr_ids = [2]u16{2,3}
      }));
-
+const simprint = @import_module("<simprint>", .{ .enable = true });
+const layout_module = @import_module("<layout>");
 
 // GMG data structures
 var u = @zeros([MAX_ZDIM]f32); // solution vector
 var f = @zeros([MAX_ZDIM]f32); // right-hand side
 var r = @zeros([MAX_ZDIM]f32); // residual
 var Au = @zeros([MAX_ZDIM]f32); // A*u (operator applied to solution)
-// var u_smooth = @zeros([MAX_ZDIM]f32); // smoothed solution
+var residual_temp = @zeros([MAX_ZDIM]f32); // residual temporary
 // var r_coarse = @zeros([MAX_ZDIM]f32); // coarse residual
 // var u_coarse = @zeros([MAX_ZDIM]f32); // coarse solution
 // var correction = @zeros([MAX_ZDIM]f32); // correction from coarse level
 
 // GMG parameters
-// var omega: f32 = @as(f32, 0.5); // Jacobi relaxation parameters
-var h: f32 = @as(f32, 1.0); // grid spacing
+var omega: f32 = @as(f32, 0.5); // Jacobi relaxation parameters
+var h_level: f32 = @as(f32, 1.0); // grid spacing
 // stencil coefficients are organized as
 // {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
 var stencil_coeff = @zeros([7]f32);
@@ -69,12 +70,13 @@ var n: i16 = 0;
 // var nz: i16 = 0;
 // var num_smooth_iter: i16 = 0;
 
+
 // DSDs for memory access
 var mem_u_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> u[i] });
 var mem_f_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> f[i] });
 var mem_r_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r[i] });
 var mem_Au_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> Au[i] });
-// var mem_u_smooth_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> u_smooth[i] });
+var mem_residual_temp_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> residual_temp[i] });
 // var mem_r_coarse_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r_coarse[i] });
 // var mem_u_coarse_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> u_coarse[i] });
 // var mem_correction_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> correction[i] });
@@ -83,8 +85,7 @@ var mem_Au_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> Au[i] });
 var ptr_u: [*]f32 = &u;
 var ptr_f: [*]f32 = &f;
 var ptr_r: [*]f32 = &r;
-// var ptr_Au: [*]f32 = &Au;
-// var ptr_u_smooth: [*]f32 = &u_smooth;
+var ptr_Au: [*]f32 = &Au;
 // var ptr_r_coarse: [*]f32 = &r_coarse;
 // var ptr_u_coarse: [*]f32 = &u_coarse;
 // var ptr_correction: [*]f32 = &correction;
@@ -95,14 +96,15 @@ var ptr_stencil_coeff: [*]f32 = &stencil_coeff;
 // var ptr_residual_norm: [*]f32 = &residual_norm;
 
 // GMG initialization
-fn f_gmg_init(size: i16) void {
+fn f_gmg_init(size: i16, h: f32) void {
     n = size;   // This will be the zDim
-    
+    h_level = h;
     // Set the length of all DSDs
     mem_u_dsd = @set_dsd_length(mem_u_dsd, @bitcast(u16,n));
     mem_f_dsd = @set_dsd_length(mem_f_dsd, @bitcast(u16,n));
     mem_r_dsd = @set_dsd_length(mem_r_dsd, @bitcast(u16,n));
     mem_Au_dsd = @set_dsd_length(mem_Au_dsd, @bitcast(u16,n));
+    mem_residual_temp_dsd = @set_dsd_length(mem_residual_temp_dsd, @bitcast(u16,n));
     // mem_u_smooth_dsd = @set_dsd_length(mem_u_smooth_dsd, @bitcast(u16,n));
     // mem_r_coarse_dsd = @set_dsd_length(mem_r_coarse_dsd, @bitcast(u16,n));
     // mem_u_coarse_dsd = @set_dsd_length(mem_u_coarse_dsd, @bitcast(u16,n));
@@ -112,13 +114,10 @@ fn f_gmg_init(size: i16) void {
 }
 
 // Apply 7-point Poisson operator: Au = A*u
-// scale by 1/h^2
+// Coefficient is already scaled by 1/h^2
 fn f_apply_operator() void {
+    // 1. Au = A*u
     stencil_mod.spmv(n, &stencil_coeff, &u, &Au);
-
-    var h2 = math_lib.pow(h, 2.0);
-    var h2_inv = math_lib.inv(h2);
-    @fmacs(mem_Au_dsd, mem_Au_dsd, mem_Au_dsd, h2_inv);
 }
 
 // Compute residual: r = f - Au
@@ -126,36 +125,26 @@ fn f_apply_operator() void {
 fn f_compute_residual() void {
     // First apply operator to get Au
     f_apply_operator();
-    
     // Then compute residual: r = f - Au
     @fsubs(mem_r_dsd, mem_f_dsd, mem_Au_dsd);
-    
-    sys_mod.unblock_cmd_stream();
+
+    f_trigger_state_machine();
 }
 
-// // Jacobi smoothing: u_new = u + omega * (f - Au) / diagonal
-// fn f_jacobi_smooth(iterations: i16) void {
-//     num_smooth_iter = iterations;
+// Jacobi smoothing: u = u + JACOBI_COEFF * (f - Au)
+fn f_jacobi_smooth(smooth_iterations: i16, JACOBI_COEFF_PER_LEVEL: f32) void {
     
-//     for (0..num_smooth_iter) |_| {
-//         // Apply operator to get Au
-//         stencil_mod.spmv(n, &stencil_coeff, &u, &Au);
-        
-//         // Jacobi update: u_new = u + omega * (f - Au) / diagonal
-//         // For 7-point stencil, diagonal is alpha = -6
-//         var diagonal: f32 = alpha / (h * h);
-//         var omega_over_diag: f32 = omega / diagonal;
-        
-//         // Compute update: omega * (f - Au) / diagonal
-//         @fsubs(mem_u_smooth_dsd, mem_f_dsd, mem_Au_dsd); // u_smooth = f - Au
-//         @fmacs(mem_u_smooth_dsd, mem_u_smooth_dsd, mem_u_smooth_dsd, omega_over_diag); // u_smooth *= omega/diagonal
-        
-//         // Update solution: u = u + update
-//         @fadds(mem_u_dsd, mem_u_dsd, mem_u_smooth_dsd);
-//     }
-    
-//     sys_mod.unblock_cmd_stream();
-// }
+    for (@range(i16, 0, smooth_iterations, 1)) |iter| {
+        // 1. Initialize Au with 0.0
+        @fmovs(mem_Au_dsd, 0.0);
+        // 2. Au = A*u
+        f_apply_operator(); // Answer is in mem_Au_dsd
+        // 3. residual_temp = f - Au
+        @fsubs(mem_residual_temp_dsd, mem_f_dsd, mem_Au_dsd); // residual_temp = f - Au
+        // 4. u = u + JACOBI_COEFF_PER_LEVEL * residual_temp
+        @fmacs(mem_u_dsd, mem_u_dsd, mem_residual_temp_dsd, JACOBI_COEFF_PER_LEVEL);
+    }
+}
 
 // // Full weighting restriction: average 8 fine points to 1 coarse point
 // fn f_restrict() void {
@@ -223,6 +212,7 @@ comptime {
     @export_symbol(ptr_u, "u");
     @export_symbol(ptr_f, "f");
     @export_symbol(ptr_r, "r");
+    @export_symbol(ptr_Au, "Au");
     @export_symbol(ptr_stencil_coeff, "stencil_coeff");
     // @export_symbol(ptr_Au, "Au");
     // @export_symbol(ptr_u_smooth, "u_smooth");
@@ -244,7 +234,7 @@ comptime {
     @export_symbol(f_apply_operator);
     @export_symbol(f_compute_residual);
     @export_symbol(f_trigger_state_machine);
-    // @export_symbol(f_jacobi_smooth);
+    @export_symbol(f_jacobi_smooth);
     // @export_symbol(f_restrict);
     // @export_symbol(f_interpolate);
     // @export_symbol(f_add_correction);
