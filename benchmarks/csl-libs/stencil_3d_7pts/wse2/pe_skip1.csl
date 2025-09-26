@@ -1,0 +1,548 @@
+// Copyright 2024 Cerebras Systems.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Modified WSE2 PE implementation for skip-1 communication pattern
+
+param c_recv_west: color;
+param c_send_east: color;
+param c_recv_east: color;
+param c_send_west: color;
+
+param c_recv_south: color;
+param c_send_north: color;
+param c_recv_north: color;
+param c_send_south: color;
+
+param COMM: local_task_id; // entrypoint f_comm
+param SEND: local_task_id; // entrypoint f_send
+param RECV: local_task_id; // entrypoint f_recv
+
+param first_px: bool;
+param last_px: bool;
+param first_py: bool;
+param last_py: bool;
+
+// New parameters for skip-1 communication
+param participates_x: bool; // Whether this PE participates in x-direction communication
+param participates_y: bool; // Whether this PE participates in y-direction communication
+
+// To continue next command, f_callback = sys_mod.unblock_cmd_stream
+param f_callback : fn ()void;
+
+param input_queues:[4]u16;
+param output_queues:[1]u16;
+// output_ut_id is NOT used in WSE2
+param output_ut_id = {};
+
+param BLOCK_SIZE: i16; // size of temporary buffers for communication
+
+// explicit DSR allocation
+param dest_dsr_ids:[2]u16;
+param src0_dsr_ids:[1]u16;
+param src1_dsr_ids:[2]u16;
+
+const iq_recv_west = @get_input_queue(input_queues[0]);
+const iq_recv_east = @get_input_queue(input_queues[1]);
+const iq_recv_south = @get_input_queue(input_queues[2]);
+const iq_recv_north = @get_input_queue(input_queues[3]);
+
+////////////////////////////////////////////////////////////////////////////////
+// Main memory (48KB)
+////////////////////////////////////////////////////////////////////////////////
+
+// The formula of Laplacian is
+//     c_west   * x[i-2][j  ][k  ] + c_east  * x[i+2][j  ][k  ] +
+//     c_south  * x[i  ][j-2][k  ] + c_north * x[i  ][j+2][k  ] +
+//     c_bottom * x[i  ][j  ][k-1] + c_top  * x[i  ][j  ][k+1] +
+//     c_center * x[i][j][k]
+// Note: For skip-1 communication, we use x[i±2][j±2] instead of x[i±1][j±1]
+// The following stencil coefficents are passed by spmv()
+var c_west: f32;
+var c_east: f32;
+var c_south: f32;
+var c_north: f32;
+var c_bottom: f32;
+var c_top: f32;
+var c_center: f32;
+
+// The following buffers hold data from four skip-1 neighbors
+var west_buf = @zeros([BLOCK_SIZE]f32); // from west (skip-1)
+var east_buf = @zeros([BLOCK_SIZE]f32); // from east (skip-1)
+var south_buf = @zeros([BLOCK_SIZE]f32);// from south (skip-1)
+var north_buf = @zeros([BLOCK_SIZE]f32);// from north (skip-1)
+
+var count_send_recv: i16 = 0;
+
+const SEND_STATE_EAST: i16 = 0;
+const SEND_STATE_WEST: i16 = 1;
+const SEND_STATE_NORTH: i16 = 2;
+const SEND_STATE_SOUTH: i16 = 3;
+const SEND_STATE_DONE: i16 = 4;
+
+const RECV_STATE_WEST: i16 = 0;
+const RECV_STATE_EAST: i16 = 1;
+const RECV_STATE_SOUTH: i16 = 2;
+const RECV_STATE_NORTH: i16 = 3;
+const RECV_STATE_DONE: i16 = 4;
+
+var recv_state: i16 = RECV_STATE_WEST;
+var send_state: i16 = SEND_STATE_EAST;
+
+var zDim: i16 = 0;
+var cur_length: i16 = BLOCK_SIZE;
+var start_x: i16 = 0;
+var rem_length: i16 = 0;
+
+const dest_dsr_send = @get_dsr(dsr_dest, dest_dsr_ids[0]);
+const src1_dsr_send = @get_dsr(dsr_src1, src1_dsr_ids[0]);
+const dest_dsr_recv = @get_dsr(dsr_dest, dest_dsr_ids[1]);
+const src1_dsr_recv = @get_dsr(dsr_src1, src1_dsr_ids[1]);
+const src0_dsr = @get_dsr(dsr_src0, src0_dsr_ids[0]);
+
+const dummy_f32 = @zeros([1]f32);
+
+// communication with skip-1 neighbors
+// mem_center_buf_dsd: send to W, E, S, N (skip-1)
+// mem_west_buf_dsd: recv from W (skip-1)
+// mem_east_buf_dsd: recv from E (skip-1)
+// mem_south_buf_dsd: recv from S (skip-1)
+// mem_north_buf_dsd: recv from N (skip-1)
+var mem_center_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{BLOCK_SIZE} -> dummy_f32[i] });
+var mem_west_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{BLOCK_SIZE} -> west_buf[i] });
+var mem_east_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{BLOCK_SIZE} -> east_buf[i] });
+var mem_south_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{BLOCK_SIZE} -> south_buf[i] });
+var mem_north_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{BLOCK_SIZE} -> north_buf[i] });
+
+// mem_y_buf_dsd holds the partial sum of laplacian on x-y plane.
+var mem_y_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{BLOCK_SIZE} -> dummy_f32[i] });
+
+// mem_y_z_*** and mem_x_z_*** are used in laplacian on z direction.
+var mem_y_z_minus_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i+1] });
+var mem_y_z_plus_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i] });
+var mem_y_z_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i] });
+
+var mem_x_z_minus_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i] });
+var mem_x_z_plus_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i+1] });
+var mem_x_z_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i] });
+
+var fab_recv_west_wdsd =  @get_dsd(fabin_dsd, .{
+   .extent = BLOCK_SIZE,
+   .fabric_color = c_recv_west,
+   .input_queue = @get_input_queue(input_queues[0])
+});
+
+var fab_recv_east_wdsd =  @get_dsd(fabin_dsd, .{
+   .extent = BLOCK_SIZE,
+   .fabric_color = c_recv_east,
+   .input_queue = @get_input_queue(input_queues[1])
+});
+
+var fab_recv_south_wdsd =  @get_dsd(fabin_dsd, .{
+   .extent = BLOCK_SIZE,
+   .fabric_color = c_recv_south,
+   .input_queue = @get_input_queue(input_queues[2])
+});
+
+var fab_recv_north_wdsd =  @get_dsd(fabin_dsd, .{
+   .extent = BLOCK_SIZE,
+   .fabric_color = c_recv_north,
+   .input_queue = @get_input_queue(input_queues[3])
+});
+
+var fab_trans_east_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = BLOCK_SIZE,
+    .fabric_color = c_send_east,
+    .output_queue = @get_output_queue(output_queues[0])
+});
+
+var fab_trans_west_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = BLOCK_SIZE,
+    .fabric_color = c_send_west,
+    .output_queue = @get_output_queue(output_queues[0])
+});
+
+var fab_trans_north_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = BLOCK_SIZE,
+    .fabric_color = c_send_north,
+    .output_queue = @get_output_queue(output_queues[0])
+});
+
+var fab_trans_south_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = BLOCK_SIZE,
+    .fabric_color = c_send_south,
+    .output_queue = @get_output_queue(output_queues[0])
+});
+
+// The portal function of 7-point stencil module with skip-1 communication
+//   y = A*x
+//
+// How to use:
+//  stencil_mod = = @import_module( "<stencil_3d_7_pts_skip1/pe>")
+//  stencil_mod.spmv(coeff, n=zDim, x, y); // compute y = A*x
+//  The user has to prepare the coefficients, the input vector x and
+//  the output vector y.
+//  spmv() only accepts pointers for coeff, x, and y.
+//
+//  The callback is triggered when spmv() finishes.
+//
+//  For skip-1 communication, the stencil coefficients should be adjusted
+//  to account for the skip-1 pattern (x[i±2][j±2] instead of x[i±1][j±1])
+//
+//  Assumption: n >= 2
+fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32) void {
+
+    @assert(2 <= n);
+
+    zDim = n;
+
+    c_west = (coeff.*)[0];
+    c_east = (coeff.*)[1];
+    c_south = (coeff.*)[2];
+    c_north = (coeff.*)[3];
+    c_bottom = (coeff.*)[4];
+    c_top = (coeff.*)[5];
+    c_center = (coeff.*)[6];
+
+    cur_length = BLOCK_SIZE;
+    if (zDim < cur_length){
+        cur_length = zDim;
+    }
+    
+    // bind x and y to mem_center_buf_dsd and mem_y_buf_dsd respectively
+    mem_center_buf_dsd = @set_dsd_base_addr(mem_center_buf_dsd, x);
+    mem_y_buf_dsd = @set_dsd_base_addr(mem_y_buf_dsd, y);
+
+    // reset the length of all DSDs except laplacian of z
+    update_dsd_length(cur_length);
+
+    // Setup z-direction DSDs (same as original)
+    mem_y_z_minus_buf_dsd = @set_dsd_base_addr(mem_y_z_minus_buf_dsd, y);
+    mem_y_z_minus_buf_dsd = @increment_dsd_offset(mem_y_z_minus_buf_dsd, 1, f32);
+    mem_y_z_minus_buf_dsd = @set_dsd_length(mem_y_z_minus_buf_dsd, @bitcast(u16,zDim-1));
+
+    mem_y_z_plus_buf_dsd = @set_dsd_base_addr(mem_y_z_plus_buf_dsd, y);
+    mem_y_z_plus_buf_dsd = @set_dsd_length(mem_y_z_plus_buf_dsd, @bitcast(u16,zDim-1));
+
+    mem_y_z_buf_dsd = @set_dsd_base_addr(mem_y_z_buf_dsd, y);
+    mem_y_z_buf_dsd = @set_dsd_length(mem_y_z_buf_dsd, @bitcast(u16,zDim));
+
+    mem_x_z_minus_buf_dsd = @set_dsd_base_addr(mem_x_z_minus_buf_dsd, x);
+    mem_x_z_minus_buf_dsd = @set_dsd_length(mem_x_z_minus_buf_dsd, @bitcast(u16,zDim-1));
+
+    mem_x_z_plus_buf_dsd = @set_dsd_base_addr(mem_x_z_plus_buf_dsd, x);
+    mem_x_z_plus_buf_dsd = @increment_dsd_offset(mem_x_z_plus_buf_dsd, 1, f32);
+    mem_x_z_plus_buf_dsd = @set_dsd_length(mem_x_z_plus_buf_dsd, @bitcast(u16,zDim-1));
+
+    mem_x_z_buf_dsd = @set_dsd_base_addr(mem_x_z_buf_dsd, x);
+    mem_x_z_buf_dsd = @set_dsd_length(mem_x_z_buf_dsd, @bitcast(u16,zDim));
+
+    // reset the starting position of z-direction
+    start_x = 0;
+
+    // reset y[k] = 0 for k = 0,1,2,..., zDim-1
+    @load_to_dsr(dest_dsr_send, mem_y_z_buf_dsd);
+    @fmovs(dest_dsr_send, @as(f32,0));
+
+    // start first block of spmv
+    @activate(COMM);
+}
+
+// Laplacian on x-y plane with skip-1 neighbors received from COMM
+// The formula is
+//    y[i][j][k] += c_west * x[i-2][j][k] + c_east * x[i+2][j][k] +
+//                  c_south* x[i][j-2][k] + c_north* x[i][j+2][k]
+//
+// Note: For skip-1 communication, we use x[i±2][j±2] instead of x[i±1][j±1]
+fn laplacian_xy() void {
+    @load_to_dsr(dest_dsr_send, mem_y_buf_dsd);
+    @load_to_dsr(src0_dsr, mem_y_buf_dsd);
+    @load_to_dsr(src1_dsr_send, mem_west_buf_dsd);
+    @fmacs(dest_dsr_send, src0_dsr, src1_dsr_send, c_west);
+
+    @load_to_dsr(dest_dsr_send, mem_y_buf_dsd);
+    @load_to_dsr(src0_dsr, mem_y_buf_dsd);
+    @load_to_dsr(src1_dsr_send, mem_east_buf_dsd);
+    @fmacs(dest_dsr_send, src0_dsr, src1_dsr_send, c_east);
+
+    @load_to_dsr(dest_dsr_send, mem_y_buf_dsd);
+    @load_to_dsr(src0_dsr, mem_y_buf_dsd);
+    @load_to_dsr(src1_dsr_send, mem_south_buf_dsd);
+    @fmacs(dest_dsr_send, src0_dsr, src1_dsr_send, c_south);
+
+    @load_to_dsr(dest_dsr_send, mem_y_buf_dsd);
+    @load_to_dsr(src0_dsr, mem_y_buf_dsd);
+    @load_to_dsr(src1_dsr_send, mem_north_buf_dsd);
+    @fmacs(dest_dsr_send, src0_dsr, src1_dsr_send, c_north);
+}
+
+// Laplacian on z direction with whole local vector x (unchanged)
+fn laplacian_z() void {
+    @load_to_dsr(dest_dsr_send, mem_y_z_minus_buf_dsd);
+    @load_to_dsr(src0_dsr, mem_y_z_minus_buf_dsd);
+    @load_to_dsr(src1_dsr_send, mem_x_z_minus_buf_dsd);
+    @fmacs(dest_dsr_send, src0_dsr, src1_dsr_send, c_bottom);
+
+    @load_to_dsr(dest_dsr_send, mem_y_z_plus_buf_dsd);
+    @load_to_dsr(src0_dsr, mem_y_z_plus_buf_dsd);
+    @load_to_dsr(src1_dsr_send, mem_x_z_plus_buf_dsd);
+    @fmacs(dest_dsr_send, src0_dsr, src1_dsr_send, c_top);
+
+    @load_to_dsr(dest_dsr_send, mem_y_z_buf_dsd);
+    @load_to_dsr(src0_dsr, mem_y_z_buf_dsd);
+    @load_to_dsr(src1_dsr_send, mem_x_z_buf_dsd);
+    @fmacs(dest_dsr_send, src0_dsr, src1_dsr_send, c_center);
+}
+
+// If both SEND and RECV are done, perform
+// - compute laplacian on x-y
+// - update the DSD of pointer x and y
+// - activate COMM
+fn compute_and_next_send_recv() void {
+    if (2 <= count_send_recv){
+        // RECV/SEND of this block are done
+        laplacian_xy();
+        // advance start_x, mem_center_buf_dsd and mem_y_buf_dsd for next block
+        start_x += BLOCK_SIZE;
+        mem_center_buf_dsd = @increment_dsd_offset(mem_center_buf_dsd, BLOCK_SIZE, f32);
+        mem_y_buf_dsd = @increment_dsd_offset(mem_y_buf_dsd, BLOCK_SIZE, f32);
+        // continue the next block
+        @activate(COMM);
+    }
+}
+
+// Send data to four skip-1 neighbors sequentially
+// Modified to handle skip-1 communication pattern
+task f_send() void {
+    if (SEND_STATE_EAST == send_state){ // send to east (skip-1)
+        // For skip-1 communication, only PEs that participate in x-direction send
+        if (!participates_x or last_px){
+            @activate(SEND); // nothing to send
+        }else{
+            @load_to_dsr(dest_dsr_send, fab_trans_east_wdsd, .{.async=true, .activate = f_send });
+            @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
+            @mov32(dest_dsr_send, src1_dsr_send, .{.async=true} );
+        }
+        send_state = SEND_STATE_WEST;
+    }else if (SEND_STATE_WEST == send_state){ // send to west (skip-1)
+        if (!participates_x or first_px){
+            @activate(SEND); // nothing to send
+        }else{
+            @load_to_dsr(dest_dsr_send, fab_trans_west_wdsd, .{.async=true, .activate = f_send });
+            @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
+            @mov32(dest_dsr_send, src1_dsr_send, .{.async=true} );
+        }
+        send_state = SEND_STATE_NORTH;
+    }else if (SEND_STATE_NORTH == send_state){ // send to north (skip-1)
+        if (!participates_y or first_py){
+            @activate(SEND); // nothing to send
+        }else{
+            @load_to_dsr(dest_dsr_send, fab_trans_north_wdsd, .{.async=true, .activate = f_send });
+            @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
+            @mov32(dest_dsr_send, src1_dsr_send, .{.async=true} );
+        }
+        send_state = SEND_STATE_SOUTH;
+    }else if (SEND_STATE_SOUTH == send_state) { // send to south (skip-1)
+        if (!participates_y or last_py){
+            @activate(SEND); // nothing to send
+        }else{
+            @load_to_dsr(dest_dsr_send, fab_trans_south_wdsd, .{.async=true, .activate = f_send });
+            @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
+            @mov32(dest_dsr_send, src1_dsr_send, .{.async=true} );
+        }
+        send_state = SEND_STATE_DONE;
+    }else{
+        count_send_recv += 1;
+        compute_and_next_send_recv();
+        send_state = SEND_STATE_EAST;
+    }
+}
+
+// Receive data from four skip-1 neighbors sequentially
+// Modified to handle skip-1 communication pattern
+task f_recv() void {
+    if (RECV_STATE_WEST == recv_state){ // receive from west (skip-1)
+        if (!participates_x or first_px){
+            @activate(RECV); // nothing to receive
+        }else{
+            @load_to_dsr(dest_dsr_recv, mem_west_buf_dsd);
+            @load_to_dsr(src1_dsr_recv, fab_recv_west_wdsd, .{.async=true, .activate = f_recv });
+            @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
+        }
+        recv_state = RECV_STATE_EAST;
+    }else if (RECV_STATE_EAST == recv_state){ // receive from east (skip-1)
+        if (!participates_x or last_px){
+            @activate(RECV); // nothing to receive
+        }else{
+            @load_to_dsr(dest_dsr_recv, mem_east_buf_dsd);
+            @load_to_dsr(src1_dsr_recv, fab_recv_east_wdsd, .{.async=true, .activate = f_recv });
+            @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
+        }
+        recv_state = RECV_STATE_SOUTH;
+    }else if (RECV_STATE_SOUTH == recv_state){ // receive from south (skip-1)
+        if (!participates_y or last_py){
+            @activate(RECV); // nothing to receive
+        }else{
+            @load_to_dsr(dest_dsr_recv, mem_south_buf_dsd);
+            @load_to_dsr(src1_dsr_recv, fab_recv_south_wdsd, .{.async=true, .activate = f_recv });
+            @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
+        }
+        recv_state = RECV_STATE_NORTH;
+    }else if (RECV_STATE_NORTH == recv_state){ // receive from north (skip-1)
+        if (!participates_y or first_py){
+            @activate(RECV); // nothing to receive
+        }else{
+            @load_to_dsr(dest_dsr_recv, mem_north_buf_dsd);
+            @load_to_dsr(src1_dsr_recv, fab_recv_north_wdsd, .{.async=true, .activate = f_recv });
+            @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
+        }
+        recv_state = RECV_STATE_DONE;
+    }else{
+        count_send_recv += 1;
+        compute_and_next_send_recv();
+        recv_state = RECV_STATE_WEST;
+    }
+}
+
+fn update_dsd_length( cur_length: i16) void {
+    var u16_cur_length: u16 = @bitcast(u16,cur_length);
+
+    // update the length of fabin/fabout for the communication
+    fab_recv_west_wdsd = @set_dsd_length(fab_recv_west_wdsd, u16_cur_length);
+    fab_recv_east_wdsd = @set_dsd_length(fab_recv_east_wdsd, u16_cur_length);
+    fab_recv_south_wdsd = @set_dsd_length(fab_recv_south_wdsd, u16_cur_length);
+    fab_recv_north_wdsd = @set_dsd_length(fab_recv_north_wdsd, u16_cur_length);
+    fab_trans_east_wdsd = @set_dsd_length(fab_trans_east_wdsd, u16_cur_length);
+    fab_trans_west_wdsd = @set_dsd_length(fab_trans_west_wdsd, u16_cur_length);
+    fab_trans_north_wdsd = @set_dsd_length(fab_trans_north_wdsd, u16_cur_length);
+    fab_trans_south_wdsd = @set_dsd_length(fab_trans_south_wdsd, u16_cur_length);
+
+    // update length of local x for send
+    mem_center_buf_dsd = @set_dsd_length(mem_center_buf_dsd, u16_cur_length);
+    // update length of local received buffers
+    mem_west_buf_dsd = @set_dsd_length(mem_west_buf_dsd, u16_cur_length);
+    mem_east_buf_dsd = @set_dsd_length(mem_east_buf_dsd, u16_cur_length);
+    mem_south_buf_dsd = @set_dsd_length(mem_south_buf_dsd, u16_cur_length);
+    mem_north_buf_dsd = @set_dsd_length(mem_north_buf_dsd, u16_cur_length);
+
+    // update length for x-y laplacian
+    mem_y_buf_dsd = @set_dsd_length(mem_y_buf_dsd, u16_cur_length);
+}
+
+task f_comm() void {
+    rem_length = (zDim - start_x);
+    if (0 < rem_length){
+        if (rem_length < cur_length){
+            cur_length = rem_length;
+            update_dsd_length(cur_length);
+        }
+
+        @assert(RECV_STATE_WEST == recv_state);
+        @assert(SEND_STATE_EAST == send_state);
+
+        count_send_recv = 0;
+        @activate(SEND);
+        @activate(RECV);
+    }else{
+        laplacian_z();
+        f_callback();
+    }
+}
+
+comptime {
+    @bind_local_task(f_send, SEND);
+    @bind_local_task(f_recv, RECV);
+    @bind_local_task(f_comm, COMM);
+}
+
+// Skip-1 communication color configuration
+// For skip-1 communication, we need to route to PEs that are +1 away
+// This requires more complex routing than simple EAST/WEST/SOUTH/NORTH
+// We'll need to use custom routing or multiple hops
+
+// C0, C1: recv_west_skip1, send_east_skip1
+// Pattern: P0 <-> P2 <-> P4 (skip P1, P3)
+comptime {
+    if (first_px){
+        // px = 0: send to east (skip-1) - this would be PE at px=2
+        @set_local_color_config(c_send_east, .{ .routes = .{ .rx = .{RAMP}, .tx = .{EAST} } } );
+    }else{
+        if (last_px){
+           // px = width-1: recv from west (skip-1) - this would be PE at px=width-3
+           @set_local_color_config(c_recv_west, .{ .routes = .{ .rx = .{WEST}, .tx = .{RAMP} } } );
+        }else{
+           // 0 < px < width-1: receive from west (skip-1), send to east (skip-1)
+           @set_local_color_config(c_recv_west, .{ .routes = .{ .rx = .{WEST}, .tx = .{RAMP} } } );
+           @set_local_color_config(c_send_east, .{ .routes = .{ .rx = .{RAMP}, .tx = .{EAST} } } );
+        }
+    }
+}
+
+// C2, C3: recv_east_skip1, send_west_skip1
+comptime {
+    if (first_px){
+        // px = 0: receive from east (skip-1)
+        @set_local_color_config(c_recv_east, .{ .routes = .{ .rx = .{EAST}, .tx = .{RAMP} } } );
+    }else{
+        if (last_px){
+           // px = width-1: send to west (skip-1)
+           @set_local_color_config(c_send_west, .{ .routes = .{ .rx = .{RAMP}, .tx = .{WEST} } } );
+        }else{
+           // 0 < px < width-1: receive from east (skip-1), send to west (skip-1)
+           @set_local_color_config(c_recv_east, .{ .routes = .{ .rx = .{EAST}, .tx = .{RAMP} } } );
+           @set_local_color_config(c_send_west, .{ .routes = .{ .rx = .{RAMP}, .tx = .{WEST} } } );
+        }
+    }
+}
+
+// C4, C5: recv_south_skip1, send_north_skip1
+comptime {
+    if (first_py){
+        // py = 0: receive from south (skip-1)
+        @set_local_color_config(c_recv_south, .{ .routes = .{ .rx = .{SOUTH}, .tx = .{RAMP} } } );
+    }else{
+        if (last_py){
+           // py = height-1: send to north (skip-1)
+           @set_local_color_config(c_send_north, .{ .routes = .{ .rx = .{RAMP}, .tx = .{NORTH} } } );
+        }else{
+           // 0 < py < height-1: receive from south (skip-1), send to north (skip-1)
+           @set_local_color_config(c_recv_south, .{ .routes = .{ .rx = .{SOUTH}, .tx = .{RAMP} } } );
+           @set_local_color_config(c_send_north, .{ .routes = .{ .rx = .{RAMP}, .tx = .{NORTH} } } );
+        }
+    }
+}
+
+// C6, C7: recv_north_skip1, send_south_skip1
+comptime {
+    if (first_py){
+        // py = 0: send to south (skip-1)
+        @set_local_color_config(c_send_south, .{ .routes = .{ .rx = .{RAMP}, .tx = .{SOUTH} } } );
+    }else{
+        if (last_py){
+           // py = height-1: recv from north (skip-1)
+           @set_local_color_config(c_recv_north, .{ .routes = .{ .rx = .{NORTH}, .tx = .{RAMP} } } );
+        }else{
+           // 0 < py < height-1: receive from north (skip-1), send to south (skip-1)
+           @set_local_color_config(c_recv_north, .{ .routes = .{ .rx = .{NORTH}, .tx = .{RAMP} } } );
+           @set_local_color_config(c_send_south, .{ .routes = .{ .rx = .{RAMP}, .tx = .{SOUTH} } } );
+        }
+    }
+}
+
+// binding a color to an input queue.
+comptime {
+    @initialize_queue(iq_recv_west, .{.color = c_recv_west});
+    @initialize_queue(iq_recv_east, .{.color = c_recv_east});
+    @initialize_queue(iq_recv_south, .{.color = c_recv_south});
+    @initialize_queue(iq_recv_north, .{.color = c_recv_north});
+}
