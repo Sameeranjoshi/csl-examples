@@ -57,7 +57,7 @@ def build_one_pe_only(platform):
     assert result == [value]
     print("SUCCESS!")
 
-def build_send_receive_2_pe(platform):
+def paint_inside_region(platform):
     layout = SdkLayout(platform)
     code = layout.create_code_region('./send_receive.csl', 'send_receive', 2, 1)
     sender_PE = PE(0,0)
@@ -86,7 +86,7 @@ def build_send_receive_2_pe(platform):
     assert np.array_equal(value, result)
     print("SUCCESS!")
 
-def build_ports(platform):
+def paint_across_2_regions(platform):
     layout = SdkLayout(platform)
     ######################
     ### Common invariants
@@ -201,8 +201,8 @@ def main():
 
     # Tut1
     # build_one_pe_only(platform)
-    # build_send_receive_2_pe(platform)
-    build_ports(platform)
+    paint_inside_region(platform)
+    # paint_across_2_regions(platform)
 
 
 if __name__ == "__main__":
