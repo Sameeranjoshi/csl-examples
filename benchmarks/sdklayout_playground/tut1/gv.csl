@@ -1,0 +1,13 @@
+// Code parameter specified by the host using 'set_param_all'.
+param value: i16;
+export var gv: i16;
+
+const main_id = @get_local_task_id(8);
+task main() void {
+  gv = value;
+}
+
+comptime {
+  @bind_local_task(main, main_id);
+  @activate(main_id);
+}

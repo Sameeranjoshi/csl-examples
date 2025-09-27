@@ -1,0 +1,24 @@
+param size: u16;
+param rx: color;
+
+const in_q = @get_input_queue(0);
+
+export var data: [size]u16;
+
+const data_dsd = @get_dsd(mem1d_dsd, .{.tensor_access = |i|{size} -> data[i]});
+
+const input = @get_dsd(fabin_dsd, .{.extent = size,
+                                    .fabric_color = rx,
+                                    .input_queue = in_q});
+
+const main_id = @get_local_task_id(8);
+task main() void {
+  @mov16(data_dsd, input, .{.async = true});
+}
+
+comptime {
+  @bind_local_task(main, main_id);
+  @activate(main_id);
+
+  @initialize_queue(in_q, .{.color = rx});
+}
