@@ -324,6 +324,7 @@ def main():
 
   print(f"step 3: compute y = A*x with zDim = {zDim}")
   # positive zDim can be smaller than pe_length
+  runner.launch("f_init_spmv", np.uint16(1), nonblock=False)
   runner.launch("f_spmv", np.int16(zDim), nonblock=False)
 
   print("step 4: toc() records time_end")
