@@ -32,6 +32,15 @@ param last_px: bool;
 param first_py: bool;
 param last_py: bool;
 
+// Hop-based communication parameters (runtime variables)
+var hops: u16 = 1;
+var factor: u16 = 1;
+var is_active_pe: bool = true;
+var should_communicate_west: bool = true;
+var should_communicate_east: bool = true;
+var should_communicate_south: bool = true;
+var should_communicate_north: bool = true;
+
 // To continue next command, f_callback = sys_mod.unblock_cmd_stream
 param f_callback : fn ()void;
 
@@ -213,7 +222,8 @@ var fab_trans_south_wdsd = @get_dsd(fabout_dsd, .{
     .fabric_color = c_send_south,
     .output_queue = @get_output_queue(output_queues[0])
 });
-
+const layout_mod = @import_module("<layout>");
+const simprint = @import_module("<simprint>", .{ .enable = true });
 
 // The portal function of 7-point stencil module
 //   y = A*x
@@ -411,8 +421,8 @@ fn compute_and_next_send_recv() void {
 // SEND_STATE_SOUTH --> send to south
 task f_send() void {
     if (SEND_STATE_EAST == send_state){ // send to east
-        // The last PE of x-dir has no east neighbor, so it does not send data to the east
-        if (last_px){
+        // Only send if this PE is active and should communicate east
+        if (!is_active_pe or !should_communicate_east){
             @activate(SEND); // nothing to send
         }else{
             //@mov32(fab_trans_east_wdsd, mem_center_buf_dsd, .{.async=true, .activate = f_send });
@@ -422,8 +432,8 @@ task f_send() void {
         }
         send_state = SEND_STATE_WEST;// goto next state
     }else if (SEND_STATE_WEST == send_state){ // send to west
-        // The first PE of x-dir has no west neighbor, so it does not send data to the west
-        if (first_px){
+        // Only send if this PE is active and should communicate west
+        if (!is_active_pe or !should_communicate_west){
             @activate(SEND); // nothing to send
         }else{
             //@mov32(fab_trans_west_wdsd, mem_center_buf_dsd, .{.async=true, .activate = f_send });
@@ -433,8 +443,8 @@ task f_send() void {
         }
         send_state = SEND_STATE_NORTH;
     }else if (SEND_STATE_NORTH == send_state){ // send to north
-        // The first PE of y-dir has no north neighbor, so it does not send data to the north
-        if (first_py){
+        // Only send if this PE is active and should communicate north
+        if (!is_active_pe or !should_communicate_north){
             @activate(SEND); // nothing to send
         }else{
             //@mov32(fab_trans_north_wdsd, mem_center_buf_dsd, .{.async=true, .activate = f_send });
@@ -444,8 +454,8 @@ task f_send() void {
         }
         send_state = SEND_STATE_SOUTH;
     }else if (SEND_STATE_SOUTH == send_state) { // send to south
-        // The last PE of y-dir has no south neighbor, so it does not send data to the south
-        if (last_py){
+        // Only send if this PE is active and should communicate south
+        if (!is_active_pe or !should_communicate_south){
             @activate(SEND); // nothing to send
         }else{
             //@mov32(fab_trans_south_wdsd, mem_center_buf_dsd, .{.async=true, .activate = f_send });
@@ -476,44 +486,40 @@ task f_send() void {
 //
 task f_recv() void {
     if (RECV_STATE_WEST == recv_state){ // receive from west
-        // The first PE of x-dir has no west neighbor so it does not receive data from the west
-        if (first_px){
+        // Only receive if this PE is active and should communicate west
+        if (!is_active_pe or !should_communicate_west){
             @activate(RECV); // nothing to receive
         }else{
-            //@mov32(mem_west_buf_dsd, fab_recv_west_wdsd, .{.async=true, .activate = f_recv });
             @load_to_dsr(dest_dsr_recv, mem_west_buf_dsd);
             @load_to_dsr(src1_dsr_recv, fab_recv_west_wdsd, .{.async=true, .activate = f_recv });
             @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
         }
         recv_state = RECV_STATE_EAST; // goto next state
     }else if (RECV_STATE_EAST == recv_state){ // receive from east
-        // The last PE of x-dir has no east neighbor, so it does not recv data from the east
-        if (last_px){
+        // Only receive if this PE is active and should communicate east
+        if (!is_active_pe or !should_communicate_east){
             @activate(RECV); // nothing to receive
         }else{
-            //@mov32(mem_east_buf_dsd, fab_recv_east_wdsd, .{.async=true, .activate = f_recv });
             @load_to_dsr(dest_dsr_recv, mem_east_buf_dsd);
             @load_to_dsr(src1_dsr_recv, fab_recv_east_wdsd, .{.async=true, .activate = f_recv });
             @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
         }
         recv_state = RECV_STATE_SOUTH;
     }else if (RECV_STATE_SOUTH == recv_state){ // receive from south
-        // The last PE of y-dir has no south neighbor, so it does not recv data from the south
-        if (last_py){
+        // Only receive if this PE is active and should communicate south
+        if (!is_active_pe or !should_communicate_south){
             @activate(RECV); // nothing to receive
         }else{
-            //@mov32(mem_south_buf_dsd, fab_recv_south_wdsd, .{.async=true, .activate = f_recv });
             @load_to_dsr(dest_dsr_recv, mem_south_buf_dsd);
             @load_to_dsr(src1_dsr_recv, fab_recv_south_wdsd, .{.async=true, .activate = f_recv });
             @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
         }
         recv_state = RECV_STATE_NORTH;
     }else if (RECV_STATE_NORTH == recv_state){ // receive from north
-        // The first PE of y-dir has no north neighbor so it does not receive data from the north
-        if (first_py){
+        // Only receive if this PE is active and should communicate north
+        if (!is_active_pe or !should_communicate_north){
             @activate(RECV); // nothing to receive
         }else{
-            //@mov32(mem_north_buf_dsd, fab_recv_north_wdsd, .{.async=true, .activate = f_recv });
             @load_to_dsr(dest_dsr_recv, mem_north_buf_dsd);
             @load_to_dsr(src1_dsr_recv, fab_recv_north_wdsd, .{.async=true, .activate = f_recv });
             @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
@@ -751,11 +757,67 @@ comptime {
     }
 }
 
+fn isActivePE(px: i16, py: i16, factor: u16) bool {
+    return (px % @as(i16, factor)) == 0 and (py % @as(i16, factor)) == 0;
+}
 
+fn isPEInRange(px: i16, py: i16, width: i16, height: i16) bool {
+    return (px >= 0) and (px < width) and (py >= 0) and (py < height);
+}
+
+fn isNeighborInRange(px: i16, py: i16, width: i16, height: i16) bool {
+    return isPEInRange(px, py, width, height);
+}
 // binding a color to an input queue.
 // This is necessary when an explicit DSR binds to a fabin DSD because
 // the compiler no longer can generate the instruction to set up the
 // config register of input queue.
+// Function to set hop-based communication parameters
+fn setHopBasedParams(hops_value: u16, factor_value: u16, width: i16, height: i16) void {
+    hops = hops_value;
+    factor = factor_value;
+    
+    // Get PE coordinates from layout module
+    
+    const px: i16 = @as(i16, layout_mod.get_x_coord());
+    const py: i16 = @as(i16, layout_mod.get_y_coord());
+    
+    // Determine if this PE is active
+    is_active_pe = isActivePE(px, py, factor);
+    
+    if (!is_active_pe) {
+        // If PE is not active, don't communicate in any direction
+        should_communicate_west = false;
+        should_communicate_east = false;
+        should_communicate_south = false;
+        should_communicate_north = false;
+        return;
+    }
+    
+    // Check hop-based neighbors for each direction
+    var neighbor_px: i16 = px - @as(i16, hops);
+    var neighbor_py: i16 = py;
+    should_communicate_west = isNeighborInRange(neighbor_px, neighbor_py, width, height) and
+                             isActivePE(neighbor_px, neighbor_py, factor);
+    
+    neighbor_px = px + @as(i16, hops);
+    neighbor_py = py;
+    should_communicate_east = isNeighborInRange(neighbor_px, neighbor_py, width, height) and
+                             isActivePE(neighbor_px, neighbor_py, factor);
+    
+    neighbor_px = px;
+    neighbor_py = py - @as(i16, hops);
+    should_communicate_north = isNeighborInRange(neighbor_px, neighbor_py, width, height) and
+                              isActivePE(neighbor_px, neighbor_py, factor);
+    
+    neighbor_px = px;
+    neighbor_py = py + @as(i16, hops);
+    should_communicate_south = isNeighborInRange(neighbor_px, neighbor_py, width, height) and
+                              isActivePE(neighbor_px, neighbor_py, factor);
+    // print the value of should_communicate_west, should_communicate_east, should_communicate_south, should_communicate_north
+    simprint.fmt_with_coords("is active pe = {d}, should_communicate_west = {d}, should_communicate_east = {d}, should_communicate_south = {d}, should_communicate_north = {d}, south(neighbor_px = {d}, neighbor_py = {d}", .{ @as(u16, is_active_pe), @as(u16, should_communicate_west), @as(u16, should_communicate_east), @as(u16, should_communicate_south), @as(u16, should_communicate_north), @as(u16, neighbor_px), @as(u16, neighbor_py) });
+}
+
 comptime {
     @initialize_queue(iq_recv_west, .{.color = c_recv_west});
     @initialize_queue(iq_recv_east, .{.color = c_recv_east});

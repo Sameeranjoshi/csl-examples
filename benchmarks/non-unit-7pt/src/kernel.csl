@@ -165,23 +165,24 @@ fn f_init_spmv(level_id:u16) void {
         AM_I_ACTIVE_PE = 0;
     }
 
-    sys_mod.unblock_cmd_stream();
-}
+    // Set hop-based communication parameters in the stencil module
+    // Get width and height from layout parameters (assuming they're available)
+    const rectangle = @get_rectangle();
+    const width: i16 = rectangle.width; // This should be passed as a parameter or retrieved from somewhere
+    const height: i16 = rectangle.height; // This should be passed as a parameter or retrieved from somewhere
+    stencil_mod.setHopBasedParams(hops, factor, width, height);
 
-fn f_only_spmv(n:i16) void {
-    stencil_mod.spmv(n, &stencil_coeff, &x, &y);
+    sys_mod.unblock_cmd_stream();
 }
 
 // stencil coefficients are organized as
 // {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
 fn f_spmv(n:i16) void {
-    if (AM_I_ACTIVE_PE == 1) {
-        simprint.fmt_with_coords("Pe_id_x = {d}, Pe_id_y = {d} is active", .{ pe_id_x, pe_id_y });
-        // stencil_mod.spmv(n, neighbour_distance, &stencil_coeff, &x, &y);
-        f_only_spmv(n);
-    } else {
-        simprint.fmt_with_coords("Pe_id_x = {d}, Pe_id_y = {d} is inactive", .{ pe_id_x, pe_id_y });
-        // sys_mod.unblock_cmd_stream();
+    simprint.fmt_with_coords("Pe_id_x = {d}, Pe_id_y = {d} is active, hops = {d}, factor = {d}", .{ pe_id_x, pe_id_y, hops, factor });
+    stencil_mod.spmv(n, &stencil_coeff, &x, &y);
+    // print the value of y
+    for (y) |val, i| {
+        simprint.fmt_with_coords("y[{d}] = {f}", .{ i, val });
     }
     sys_mod.unblock_cmd_stream();
 }

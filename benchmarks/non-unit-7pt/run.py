@@ -324,7 +324,7 @@ def main():
 
   print(f"step 3: compute y = A*x with zDim = {zDim}")
   # positive zDim can be smaller than pe_length
-  runner.launch("f_init_spmv", np.uint16(1), nonblock=False)
+  runner.launch("f_init_spmv", np.uint16(3), nonblock=False)
   runner.launch("f_spmv", np.int16(zDim), nonblock=False)
 
   print("step 4: toc() records time_end")
@@ -428,6 +428,19 @@ def main():
   z = y_ref.ravel() - y_wse.ravel()
   nrm_z = np.linalg.norm(z, np.inf)
   print(f"|y_ref - y_wes| = {nrm_z}")
+  # Print y_ref and y_wse in layers if 3D
+  if y_ref.ndim == 3:
+    print("y_ref (by layers):")
+    for z in range(y_ref.shape[2]):
+      print(f"Layer {z}:")
+      print(y_ref[:, :, z])
+    print("y_wse (by layers):")
+    for z in range(y_wse.shape[2]):
+      print(f"Layer {z}:")
+      print(y_wse[:, :, z])
+  else:
+    print(f"y_ref = {y_ref}")
+    print(f"y_wse = {y_wse}")
   np.testing.assert_allclose(y_ref.ravel(), y_wse.ravel(), 1.e-5)
   print("\nSUCCESS!")
 

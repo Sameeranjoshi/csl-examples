@@ -103,3 +103,8 @@ const stencil_mod = @import_module(get_stencil_module(), stencilParams);
 fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32) void {
     stencil_mod.spmv(n, coeff, x, y);
 }
+
+// Function to set hop-based communication parameters
+fn setHopBasedParams(hops_value: u16, factor_value: u16, width: i16, height: i16) void {
+    stencil_mod.setHopBasedParams(hops_value, factor_value, width, height);
+}
