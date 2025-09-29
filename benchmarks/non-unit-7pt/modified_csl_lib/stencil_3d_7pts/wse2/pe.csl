@@ -768,10 +768,7 @@ fn isPEInRange(px: i16, py: i16, width: i16, height: i16) bool {
 fn isNeighborInRange(px: i16, py: i16, width: i16, height: i16) bool {
     return isPEInRange(px, py, width, height);
 }
-// binding a color to an input queue.
-// This is necessary when an explicit DSR binds to a fabin DSD because
-// the compiler no longer can generate the instruction to set up the
-// config register of input queue.
+
 // Function to set hop-based communication parameters
 fn setHopBasedParams(hops_value: u16, factor_value: u16, width: i16, height: i16) void {
     hops = hops_value;
@@ -814,8 +811,6 @@ fn setHopBasedParams(hops_value: u16, factor_value: u16, width: i16, height: i16
     neighbor_py = py + @as(i16, hops);
     should_communicate_south = isNeighborInRange(neighbor_px, neighbor_py, width, height) and
                               isActivePE(neighbor_px, neighbor_py, factor);
-    // print the value of should_communicate_west, should_communicate_east, should_communicate_south, should_communicate_north
-    simprint.fmt_with_coords("is active pe = {d}, should_communicate_west = {d}, should_communicate_east = {d}, should_communicate_south = {d}, should_communicate_north = {d}, south(neighbor_px = {d}, neighbor_py = {d}", .{ @as(u16, is_active_pe), @as(u16, should_communicate_west), @as(u16, should_communicate_east), @as(u16, should_communicate_south), @as(u16, should_communicate_north), @as(u16, neighbor_px), @as(u16, neighbor_py) });
 }
 
 comptime {

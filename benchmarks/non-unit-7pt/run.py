@@ -195,28 +195,35 @@ def main():
 
   np.random.seed(2)
   # A is h-by-w-by-l
-  x = np.arange(height*width*pe_length).reshape(height, width, pe_length).astype(np.float32) + 100
+  x = np.ones(height*width*pe_length).reshape(height, width, pe_length).astype(np.float32) #+ 100
+  print(f"x = {x}")
 
   x_1d = hwl_2_oned_colmajor(height, width, pe_length, x, np.float32)
-
+  print(f"x_1d = {x_1d}")
   # stencil coefficients has the following order
   # {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
   stencil_coeff = np.zeros((height, width, 7), dtype = np.float32)
   for i in range(height):
     for j in range(width):
       stencil_coeff[(i, j, 0)] = -1 # west
-      stencil_coeff[(i, j, 1)] = -2 # east
-      stencil_coeff[(i, j, 2)] = -3 # south
-      stencil_coeff[(i, j, 3)] = -4 # north
-      stencil_coeff[(i, j, 4)] = -5 # bottom
-      stencil_coeff[(i, j, 5)] = -6 # top
+      stencil_coeff[(i, j, 1)] = -1 # east
+      stencil_coeff[(i, j, 2)] = -1 # south
+      stencil_coeff[(i, j, 3)] = -1 # north
+      stencil_coeff[(i, j, 4)] = -1 # bottom
+      stencil_coeff[(i, j, 5)] = -1 # top
       stencil_coeff[(i, j, 6)] = 6  # center
 
+  print(f"stencil_coeff = {stencil_coeff}")
   stencil_coeff_1d = hwl_2_oned_colmajor(height, width, 7, stencil_coeff, np.float32)
-
+  print(f"stencil_coeff_1d = {stencil_coeff_1d}")
   y_ref = np.zeros((height, width, pe_length), dtype=np.float32)
-
-  laplacian(stencil_coeff, zDim, x, y_ref)
+  print(f"y_ref = {y_ref}")
+  # Use hop-based laplacian to match WSE implementation
+  # Active PEs are determined by factor, neighbors are immediate (hops=1)
+  level_id = 1
+  factor = 2**level_id  # factor = 2 (determines which PEs are active)
+  hops = factor  # immediate neighbors for 7-point stencil
+  laplacian(stencil_coeff, zDim, x, y_ref, hops=hops, factor=factor)
 
   # fabric-offsets = 1,1
   fabric_offset_x = 1
@@ -324,7 +331,7 @@ def main():
 
   print(f"step 3: compute y = A*x with zDim = {zDim}")
   # positive zDim can be smaller than pe_length
-  runner.launch("f_init_spmv", np.uint16(3), nonblock=False)
+  runner.launch("f_init_spmv", np.uint16(level_id), nonblock=False)
   runner.launch("f_spmv", np.int16(zDim), nonblock=False)
 
   print("step 4: toc() records time_end")

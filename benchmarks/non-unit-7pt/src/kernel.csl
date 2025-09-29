@@ -153,17 +153,11 @@ fn f_init_spmv(level_id:u16) void {
     // window
     restriction_window_width = @as(u16, math_lib.pow(const_2, @as(f16, factor + 1))); // window size = 2^(factor + 1)
     restriction_window_height = @as(u16, math_lib.pow(const_2, @as(f16, factor + 1)));    
-    // hops
+    // hops - keep as immediate neighbors for 7-point stencil
     hops = factor;
     // total active inside window(always fixed)
     total_active_in_window_x = 2;
     total_active_in_window_y = 2;
-
-    if (pe_id_x % factor == 0 and pe_id_y % factor ==0) {
-        AM_I_ACTIVE_PE = 1;
-    } else {
-        AM_I_ACTIVE_PE = 0;
-    }
 
     // Set hop-based communication parameters in the stencil module
     // Get width and height from layout parameters (assuming they're available)
@@ -171,31 +165,15 @@ fn f_init_spmv(level_id:u16) void {
     const width: i16 = rectangle.width; // This should be passed as a parameter or retrieved from somewhere
     const height: i16 = rectangle.height; // This should be passed as a parameter or retrieved from somewhere
     stencil_mod.setHopBasedParams(hops, factor, width, height);
-
     sys_mod.unblock_cmd_stream();
 }
 
 // stencil coefficients are organized as
 // {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
 fn f_spmv(n:i16) void {
-    simprint.fmt_with_coords("Pe_id_x = {d}, Pe_id_y = {d} is active, hops = {d}, factor = {d}", .{ pe_id_x, pe_id_y, hops, factor });
     stencil_mod.spmv(n, &stencil_coeff, &x, &y);
-    // print the value of y
-    for (y) |val, i| {
-        simprint.fmt_with_coords("y[{d}] = {f}", .{ i, val });
-    }
     sys_mod.unblock_cmd_stream();
 }
-
-// fn f_reduction_window(n:i16) void {
-//     // window size = 2^(factor + 1)
-//     if (AM_I_ACTIVE_PE == 1) {
-//         simprint.fmt_with_coords("Pe_id_x = {d}, Pe_id_y = {d} is active", .{ pe_id_x, pe_id_y });
-//     } else {
-//         simprint.fmt_with_coords("Pe_id_x = {d}, Pe_id_y = {d} is inactive", .{ pe_id_x, pe_id_y });
-//     }
-//     sys_mod.unblock_cmd_stream();
-// }
 
 fn f_sync( n: i16 ) void {
    reduce_mod.allreduce(n, &dot, reduce_mod.TYPE_BINARY_OP.ADD);
