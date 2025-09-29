@@ -102,15 +102,15 @@ const stencil_mod = @import_module(get_stencil_module(), stencilParams);
 const simprint = @import_module("<simprint>", .{ .enable = true });
 
 fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32) void {    
-    if (stencil_mod.is_active_pe == true) {
-      simprint.fmt_with_coords("is active pe(SPMV) = {d}, should_communicate_west = {d}, should_communicate_east = {d}, should_communicate_south = {d}, should_communicate_north = {d}, hops = {d}, factor = {d}", .{ @as(u16, stencil_mod.is_active_pe), @as(u16, stencil_mod.should_communicate_west), @as(u16, stencil_mod.should_communicate_east), @as(u16, stencil_mod.should_communicate_south), @as(u16, stencil_mod.should_communicate_north), stencil_mod.hops, stencil_mod.factor });  
-        stencil_mod.spmv(n, coeff, x, y);
-    } else {  // saved a lot of cycles for computing spmv on inactive PEs
-        for (@range(i16, 1, n, 1) ) |i| {
-            y[i] = 0.0;
-        }
-    }
-
+    // if (stencil_mod.is_active_pe == true) {
+    //   simprint.fmt_with_coords("is active pe(SPMV) = {d}, should_communicate_west = {d}, should_communicate_east = {d}, should_communicate_south = {d}, should_communicate_north = {d}, hops = {d}, factor = {d}", .{ @as(u16, stencil_mod.is_active_pe), @as(u16, stencil_mod.should_communicate_west), @as(u16, stencil_mod.should_communicate_east), @as(u16, stencil_mod.should_communicate_south), @as(u16, stencil_mod.should_communicate_north), stencil_mod.hops, stencil_mod.factor });  
+    //     stencil_mod.spmv(n, coeff, x, y);
+    // } else {  // saved a lot of cycles for computing spmv on inactive PEs
+    //     for (@range(i16, 1, n, 1) ) |i| {
+    //         y[i] = 0.0;
+    //     }
+    // }
+    stencil_mod.spmv(n, coeff, x, y);
 }
 
 // Function to set hop-based communication parameters

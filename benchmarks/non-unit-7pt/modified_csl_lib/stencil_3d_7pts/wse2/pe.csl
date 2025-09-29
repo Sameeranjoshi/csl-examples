@@ -32,15 +32,6 @@ param last_px: bool;
 param first_py: bool;
 param last_py: bool;
 
-// Hop-based communication parameters (runtime variables)
-var hops: u16 = 1;
-var factor: u16 = 1;
-var is_active_pe: bool = true;
-var should_communicate_west: bool = true;
-var should_communicate_east: bool = true;
-var should_communicate_south: bool = true;
-var should_communicate_north: bool = true;
-
 // To continue next command, f_callback = sys_mod.unblock_cmd_stream
 param f_callback : fn ()void;
 
@@ -55,6 +46,15 @@ param BLOCK_SIZE: i16; // size of temporary buffers for communication
 param dest_dsr_ids:[2]u16;
 param src0_dsr_ids:[1]u16;
 param src1_dsr_ids:[2]u16;
+
+// Hop-based communication parameters (runtime variables)
+var hops: u16 = 1;
+var factor: u16 = 1;
+var is_active_pe: bool = true;
+var should_communicate_west: bool = true;
+var should_communicate_east: bool = true;
+var should_communicate_south: bool = true;
+var should_communicate_north: bool = true;
 
 // The call-graph of the stencil kernel is
 //
@@ -251,15 +251,31 @@ fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32) void {
     @assert(2 <= n);
 
     zDim = n;
-
-    c_west = (coeff.*)[0];
-    c_east = (coeff.*)[1];
-    c_south = (coeff.*)[2];
-    c_north = (coeff.*)[3];
-    c_bottom = (coeff.*)[4];
-    c_top = (coeff.*)[5];
-    c_center = (coeff.*)[6];
-
+    
+    // Debug print to trace execution
+    if (is_active_pe) {
+        simprint.fmt_with_coords("PE spmv called: is_active_pe={d}", .{@as(u32, is_active_pe)});
+        simprint.print_string("PE spmv called - printing buffers");
+    }
+    if (is_active_pe) {
+        c_west = (coeff.*)[0];
+        c_east = (coeff.*)[1];
+        c_south = (coeff.*)[2];
+        c_north = (coeff.*)[3];
+        c_bottom = (coeff.*)[4];
+        c_top = (coeff.*)[5];
+        c_center = (coeff.*)[6];
+    } else {
+        // make all 0, why? We need eventual answer to be 0.
+        // There is a scope here for optimization.
+        c_west = 0.0;
+        c_east = 0.0;
+        c_south = 0.0;
+        c_north = 0.0;
+        c_bottom = 0.0;
+        c_top = 0.0;
+        c_center = 0.0;
+    }
     // case 1: zDim <= BLOCK_SIZE
     //   cur_length = zDim
     //   only one iteration
@@ -337,6 +353,22 @@ fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32) void {
 //
 // TODO: to reduce latency, combine laplacian_xy into RECV
 fn laplacian_xy() void {
+    if (is_active_pe) {
+        // simprint.print_string("PE laplacian_xy called - printing buffers");
+        // print the received buffers
+        for(@range(i16, 0, BLOCK_SIZE, 1)) |i| {  
+            simprint.print_f32(west_buf[i]);
+        }
+        for(@range(i16, 0, BLOCK_SIZE, 1)) |i| {
+            simprint.print_f32(east_buf[i]);
+        }
+        for(@range(i16, 0, BLOCK_SIZE, 1)) |i| {
+            simprint.print_f32(south_buf[i]);
+        }
+        for(@range(i16, 0, BLOCK_SIZE, 1)) |i| {
+            simprint.print_f32(north_buf[i]);
+        }
+    }
     //@fmacs(mem_y_buf_dsd, mem_y_buf_dsd, mem_west_buf_dsd, c_west);
     @load_to_dsr(dest_dsr_send, mem_y_buf_dsd);
     @load_to_dsr(src0_dsr, mem_y_buf_dsd);
@@ -401,6 +433,10 @@ fn laplacian_z() void {
 fn compute_and_next_send_recv() void {
     if (2 <= count_send_recv){
         // RECV/SEND of this block are done
+        if (is_active_pe) {
+            simprint.fmt_with_coords("PE compute_and_next_send_recv: count_send_recv={d}, calling laplacian_xy", .{@as(u32, count_send_recv)});
+            simprint.print_string("PE compute_and_next_send_recv - printing buffers");
+        }
         laplacian_xy();
         // advance start_x, mem_center_buf_dsd and mem_y_buf_dsd for next block
         // only one of SEND/RECV can do so
@@ -419,49 +455,58 @@ fn compute_and_next_send_recv() void {
 // SEND_STATE_WEST -> send to west
 // SEND_STATE_NORTH --> send to north
 // SEND_STATE_SOUTH --> send to south
+// Simple approach: Active PEs send their own data, inactive PEs forward received data
 task f_send() void {
     if (SEND_STATE_EAST == send_state){ // send to east
-        // Only send if this PE is active and should communicate east
-        if (!is_active_pe or !should_communicate_east){
-            @activate(SEND); // nothing to send
-        }else{
-            //@mov32(fab_trans_east_wdsd, mem_center_buf_dsd, .{.async=true, .activate = f_send });
+        if (should_communicate_east){
             @load_to_dsr(dest_dsr_send, fab_trans_east_wdsd, .{.async=true, .activate = f_send });
-            @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
+            if (is_active_pe){
+                @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
+            }else{
+                @load_to_dsr(src1_dsr_send, mem_west_buf_dsd);
+            }
             @mov32(dest_dsr_send, src1_dsr_send, .{.async=true} );
+        } else {
+            @activate(SEND);
         }
         send_state = SEND_STATE_WEST;// goto next state
     }else if (SEND_STATE_WEST == send_state){ // send to west
-        // Only send if this PE is active and should communicate west
-        if (!is_active_pe or !should_communicate_west){
-            @activate(SEND); // nothing to send
-        }else{
-            //@mov32(fab_trans_west_wdsd, mem_center_buf_dsd, .{.async=true, .activate = f_send });
+        if (should_communicate_west){
             @load_to_dsr(dest_dsr_send, fab_trans_west_wdsd, .{.async=true, .activate = f_send });
-            @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
+            if (is_active_pe){
+                @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
+            }else{
+                @load_to_dsr(src1_dsr_send, mem_east_buf_dsd);
+            }
             @mov32(dest_dsr_send, src1_dsr_send, .{.async=true} );
+        } else {
+            @activate(SEND);
         }
         send_state = SEND_STATE_NORTH;
     }else if (SEND_STATE_NORTH == send_state){ // send to north
-        // Only send if this PE is active and should communicate north
-        if (!is_active_pe or !should_communicate_north){
-            @activate(SEND); // nothing to send
-        }else{
-            //@mov32(fab_trans_north_wdsd, mem_center_buf_dsd, .{.async=true, .activate = f_send });
+        if (should_communicate_north){
             @load_to_dsr(dest_dsr_send, fab_trans_north_wdsd, .{.async=true, .activate = f_send });
-            @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
+            if (is_active_pe){
+                @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
+            }else{
+                @load_to_dsr(src1_dsr_send, mem_south_buf_dsd);
+            }
             @mov32(dest_dsr_send, src1_dsr_send, .{.async=true} );
+        } else {
+            @activate(SEND);
         }
         send_state = SEND_STATE_SOUTH;
     }else if (SEND_STATE_SOUTH == send_state) { // send to south
-        // Only send if this PE is active and should communicate south
-        if (!is_active_pe or !should_communicate_south){
-            @activate(SEND); // nothing to send
-        }else{
-            //@mov32(fab_trans_south_wdsd, mem_center_buf_dsd, .{.async=true, .activate = f_send });
+        if (should_communicate_south){
             @load_to_dsr(dest_dsr_send, fab_trans_south_wdsd, .{.async=true, .activate = f_send });
-            @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
+            if (is_active_pe){
+                @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
+            }else{  // Forward
+                @load_to_dsr(src1_dsr_send, mem_north_buf_dsd);
+            }
             @mov32(dest_dsr_send, src1_dsr_send, .{.async=true} );
+        } else {
+            @activate(SEND); // nothing to send
         }
         send_state = SEND_STATE_DONE;
     }else{
@@ -484,45 +529,42 @@ task f_send() void {
 // RECV_STATE_SOUTH -> receive from south
 // RECV_STATE_NORTH -> receive from north
 //
+// Simple approach: All PEs receive data, active PEs use it for computation, inactive PEs forward it
 task f_recv() void {
     if (RECV_STATE_WEST == recv_state){ // receive from west
-        // Only receive if this PE is active and should communicate west
-        if (!is_active_pe or !should_communicate_west){
-            @activate(RECV); // nothing to receive
-        }else{
+        if (should_communicate_west){
             @load_to_dsr(dest_dsr_recv, mem_west_buf_dsd);
             @load_to_dsr(src1_dsr_recv, fab_recv_west_wdsd, .{.async=true, .activate = f_recv });
             @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
+        } else {
+            @activate(RECV); // nothing to receive
         }
         recv_state = RECV_STATE_EAST; // goto next state
     }else if (RECV_STATE_EAST == recv_state){ // receive from east
-        // Only receive if this PE is active and should communicate east
-        if (!is_active_pe or !should_communicate_east){
-            @activate(RECV); // nothing to receive
-        }else{
+        if (should_communicate_east){
             @load_to_dsr(dest_dsr_recv, mem_east_buf_dsd);
             @load_to_dsr(src1_dsr_recv, fab_recv_east_wdsd, .{.async=true, .activate = f_recv });
             @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
+        } else {
+            @activate(RECV); // nothing to receive
         }
         recv_state = RECV_STATE_SOUTH;
     }else if (RECV_STATE_SOUTH == recv_state){ // receive from south
-        // Only receive if this PE is active and should communicate south
-        if (!is_active_pe or !should_communicate_south){
-            @activate(RECV); // nothing to receive
-        }else{
+        if (should_communicate_south){
             @load_to_dsr(dest_dsr_recv, mem_south_buf_dsd);
             @load_to_dsr(src1_dsr_recv, fab_recv_south_wdsd, .{.async=true, .activate = f_recv });
             @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
+        } else {
+            @activate(RECV); // nothing to receive
         }
         recv_state = RECV_STATE_NORTH;
     }else if (RECV_STATE_NORTH == recv_state){ // receive from north
-        // Only receive if this PE is active and should communicate north
-        if (!is_active_pe or !should_communicate_north){
-            @activate(RECV); // nothing to receive
-        }else{
+        if (should_communicate_north){
             @load_to_dsr(dest_dsr_recv, mem_north_buf_dsd);
             @load_to_dsr(src1_dsr_recv, fab_recv_north_wdsd, .{.async=true, .activate = f_recv });
             @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
+        } else {
+            @activate(RECV);
         }
         recv_state = RECV_STATE_DONE;
     }else{
@@ -625,7 +667,7 @@ task f_comm() void {
         // restart a block SEND/RECV
         count_send_recv = 0;
         // send data to the east
-        @activate(SEND);
+        @activate(SEND);    // ACTIVE
         // recv data from the west
         @activate(RECV);
     }else{
@@ -782,35 +824,26 @@ fn setHopBasedParams(hops_value: u16, factor_value: u16, width: i16, height: i16
     // Determine if this PE is active
     is_active_pe = isActivePE(px, py, factor);
     
-    if (!is_active_pe) {
-        // If PE is not active, don't communicate in any direction
-        should_communicate_west = false;
-        should_communicate_east = false;
-        should_communicate_south = false;
-        should_communicate_north = false;
-        return;
-    }
+    // Debug print PE status
+    simprint.fmt_with_coords("PE({d},{d}): factor={d}, is_active_pe={d}", .{@as(u32, px), @as(u32, py), @as(u32, factor), @as(u32, is_active_pe)});
+    simprint.print_string("PE setHopBasedParams - printing buffers");
+    simprint.fmt_with_coords("px={d}, py={d}, width={d}, height={d}", .{@as(u32, px), @as(u32, py), @as(u32, width), @as(u32, height)});
+    // if (!is_active_pe) {
+    //     // Inactive PEs don't participate in communication
+    //     should_communicate_west = false;
+    //     should_communicate_east = false;
+    //     should_communicate_south = false;
+    //     should_communicate_north = false;
+    //     return;
+    // }
     
+    // Regardless of active or inactive a PE can communicate, now it's role depends on active or inactive how it communicates
     // Check hop-based neighbors for each direction
-    var neighbor_px: i16 = px - @as(i16, hops);
-    var neighbor_py: i16 = py;
-    should_communicate_west = isNeighborInRange(neighbor_px, neighbor_py, width, height) and
-                             isActivePE(neighbor_px, neighbor_py, factor);
-    
-    neighbor_px = px + @as(i16, hops);
-    neighbor_py = py;
-    should_communicate_east = isNeighborInRange(neighbor_px, neighbor_py, width, height) and
-                             isActivePE(neighbor_px, neighbor_py, factor);
-    
-    neighbor_px = px;
-    neighbor_py = py - @as(i16, hops);
-    should_communicate_north = isNeighborInRange(neighbor_px, neighbor_py, width, height) and
-                              isActivePE(neighbor_px, neighbor_py, factor);
-    
-    neighbor_px = px;
-    neighbor_py = py + @as(i16, hops);
-    should_communicate_south = isNeighborInRange(neighbor_px, neighbor_py, width, height) and
-                              isActivePE(neighbor_px, neighbor_py, factor);
+    // can_communicate_west, change later
+    should_communicate_west = isNeighborInRange(px -1 , py, width, height);
+    should_communicate_east = isNeighborInRange(px + 1, py, width, height);
+    should_communicate_north = isNeighborInRange(px, py - 1, width, height);
+    should_communicate_south = isNeighborInRange(px, py + 1, width, height);
 }
 
 comptime {

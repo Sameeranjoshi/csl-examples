@@ -34,34 +34,34 @@ const SEND: local_task_id = entrypoints[0];
 const RECV: local_task_id = entrypoints[1];
 const COMM: local_task_id = entrypoints[2];
 
-// Helper functions for hop-based neighbor communication
-fn isActivePE(px: i16, py: i16, factor: u16) bool {
-    return (px % @as(i16, factor) == 0) and (py % @as(i16, factor) == 0);
-}
+// // Helper functions for hop-based neighbor communication
+// fn isActivePE(px: i16, py: i16, factor: u16) bool {
+//     return (px % @as(i16, factor) == 0) and (py % @as(i16, factor) == 0);
+// }
 
-fn shouldCommunicateWithNeighbor(px: i16, py: i16, direction_var: u16, hops: u16, factor: u16) bool {
-    var neighbor_px: i16 = px;
-    var neighbor_py: i16 = py;
+// fn shouldCommunicateWithNeighbor(px: i16, py: i16, direction_var: u16, hops: u16, factor: u16) bool {
+//     var neighbor_px: i16 = px;
+//     var neighbor_py: i16 = py;
     
-    if (direction_var == 0) { // WEST
-        neighbor_px = px - @as(i16, hops);
-    } else if (direction_var == 1) { // EAST  
-        neighbor_px = px + @as(i16, hops);
-    } else if (direction_var == 2) { // SOUTH
-        neighbor_py = py + @as(i16, hops);
-    } else if (direction_var == 3) { // NORTH
-        neighbor_py = py - @as(i16, hops);
-    }
+//     if (direction_var == 0) { // WEST
+//         neighbor_px = px - 1;
+//     } else if (direction_var == 1) { // EAST  
+//         neighbor_px = px + 1;
+//     } else if (direction_var == 2) { // SOUTH
+//         neighbor_py = py + 1;
+//     } else if (direction_var == 3) { // NORTH
+//         neighbor_py = py - 1;
+//     }
     
-    // Check if neighbor is within bounds
-    if ((neighbor_px < 0) or (neighbor_px >= width) or 
-        (neighbor_py < 0) or (neighbor_py >= height)) {
-        return false;
-    }
-    
-    // Only communicate if both current PE and neighbor are active
-    return isActivePE(px, py, factor) and isActivePE(neighbor_px, neighbor_py, factor);
-}
+//     // Check if neighbor is within bounds
+//     if ((neighbor_px < 0) or (neighbor_px >= width) or 
+//         (neighbor_py < 0) or (neighbor_py >= height)) {
+//         return false;
+//     }
+//     return true;    // always communicate with E,W,N,S neighbors even active or inactive
+//     // Only communicate if both current PE and neighbor are active
+//     // return isActivePE(px, py, factor) and isActivePE(neighbor_px, neighbor_py, factor);
+// }
 
 fn get_params(px:i16, py:i16) comptime_struct {
 
@@ -74,14 +74,14 @@ fn get_params(px:i16, py:i16) comptime_struct {
     var last_px: bool = ((width-1) == px);
     var is_px_even: bool = (0 == (px % 2));
     
-    // Hop-based neighbor logic
-    var should_communicate_west: bool = shouldCommunicateWithNeighbor(px, py, 0, hops, factor);
-    var should_communicate_east: bool = shouldCommunicateWithNeighbor(px, py, 1, hops, factor);
-    var should_communicate_south: bool = shouldCommunicateWithNeighbor(px, py, 2, hops, factor);
-    var should_communicate_north: bool = shouldCommunicateWithNeighbor(px, py, 3, hops, factor);
+    // // Hop-based neighbor logic
+    // var should_communicate_west: bool = shouldCommunicateWithNeighbor(px, py, 0, hops, factor);
+    // var should_communicate_east: bool = shouldCommunicateWithNeighbor(px, py, 1, hops, factor);
+    // var should_communicate_south: bool = shouldCommunicateWithNeighbor(px, py, 2, hops, factor);
+    // var should_communicate_north: bool = shouldCommunicateWithNeighbor(px, py, 3, hops, factor);
     
-    // Determine if this PE should participate in communication
-    var is_active_pe: bool = isActivePE(px, py, factor);
+    // // Determine if this PE should participate in communication
+    // var is_active_pe: bool = isActivePE(px, py, factor);
 
     // C0, C1:recv_west, send_east
     //         C0     C1     C0     C1     C0
@@ -161,10 +161,10 @@ fn get_params(px:i16, py:i16) comptime_struct {
         // Hop-based communication parameters
         .hops = hops,
         .factor = factor,
-        .is_active_pe = is_active_pe,
-        .should_communicate_west = should_communicate_west,
-        .should_communicate_east = should_communicate_east,
-        .should_communicate_south = should_communicate_south,
-        .should_communicate_north = should_communicate_north,
+        // .is_active_pe = is_active_pe,
+        // .should_communicate_west = should_communicate_west,
+        // .should_communicate_east = should_communicate_east,
+        // .should_communicate_south = should_communicate_south,
+        // .should_communicate_north = should_communicate_north,
     };
 }

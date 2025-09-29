@@ -213,14 +213,11 @@ def main():
       stencil_coeff[(i, j, 5)] = -1 # top
       stencil_coeff[(i, j, 6)] = 6  # center
 
-  print(f"stencil_coeff = {stencil_coeff}")
   stencil_coeff_1d = hwl_2_oned_colmajor(height, width, 7, stencil_coeff, np.float32)
-  print(f"stencil_coeff_1d = {stencil_coeff_1d}")
   y_ref = np.zeros((height, width, pe_length), dtype=np.float32)
-  print(f"y_ref = {y_ref}")
   # Use hop-based laplacian to match WSE implementation
   # Active PEs are determined by factor, neighbors are immediate (hops=1)
-  level_id = 1
+  level_id = 0
   factor = 2**level_id  # factor = 2 (determines which PEs are active)
   hops = factor  # immediate neighbors for 7-point stencil
   laplacian(stencil_coeff, zDim, x, y_ref, hops=hops, factor=factor)
