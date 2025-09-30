@@ -359,22 +359,6 @@ fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32) void {
 //
 // TODO: to reduce latency, combine laplacian_xy into RECV
 fn laplacian_xy() void {
-    if (is_active_pe) {
-        // simprint.print_string("PE laplacian_xy called - printing buffers");
-        // print the received buffers
-        for(@range(i16, 0, BLOCK_SIZE, 1)) |i| {  
-            simprint.print_f32(west_buf[i]);
-        }
-        for(@range(i16, 0, BLOCK_SIZE, 1)) |i| {
-            simprint.print_f32(east_buf[i]);
-        }
-        for(@range(i16, 0, BLOCK_SIZE, 1)) |i| {
-            simprint.print_f32(south_buf[i]);
-        }
-        for(@range(i16, 0, BLOCK_SIZE, 1)) |i| {
-            simprint.print_f32(north_buf[i]);
-        }
-    }
     //@fmacs(mem_y_buf_dsd, mem_y_buf_dsd, mem_west_buf_dsd, c_west);
     @load_to_dsr(dest_dsr_send, mem_y_buf_dsd);
     @load_to_dsr(src0_dsr, mem_y_buf_dsd);
