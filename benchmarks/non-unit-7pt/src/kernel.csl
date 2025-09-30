@@ -63,8 +63,6 @@ var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
 var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
 
 var AM_I_ACTIVE_PE: i16 = 0;
-var pe_id_x: u16 = 0;
-var pe_id_y: u16 = 0;
 var factor: u16 = 1;   // at least 1
 var hops: u16 = 1;  // The least hops between active PEs
 var restriction_window_width: u16 = 1;
@@ -145,16 +143,17 @@ fn f_memcpy_timestamps() void {
 // total active PEs inside the window - done
 fn f_init_spmv(level_id:u16) void {
     // PE coordinates
-    pe_id_x = layout_mod.get_x_coord(); // global index of PE
-    pe_id_y = layout_mod.get_y_coord();    
+    const pe_id_x: i16 = @as(i16, layout_mod.get_x_coord());
+    const pe_id_y: i16 = @as(i16, layout_mod.get_y_coord());        
     // factor
     var const_2: f16 = 2.0;
     factor = @as(u16, math_lib.pow(const_2, @as(f16, level_id)));    // stride = 2^level_id
-    // window
-    restriction_window_width = @as(u16, math_lib.pow(const_2, @as(f16, factor + 1))); // window size = 2^(factor + 1)
-    restriction_window_height = @as(u16, math_lib.pow(const_2, @as(f16, factor + 1)));    
     // hops - keep as immediate neighbors for 7-point stencil
     hops = factor;
+
+    // window(restriction window)
+    restriction_window_width = @as(u16, math_lib.pow(const_2, @as(f16, factor + 1))); // window size = 2^(factor + 1)
+    restriction_window_height = @as(u16, math_lib.pow(const_2, @as(f16, factor + 1)));    
     // total active inside window(always fixed)
     total_active_in_window_x = 2;
     total_active_in_window_y = 2;
@@ -172,7 +171,7 @@ fn f_init_spmv(level_id:u16) void {
 // {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
 fn f_spmv(n:i16) void {
     stencil_mod.spmv(n, &stencil_coeff, &x, &y);
-    sys_mod.unblock_cmd_stream();
+    // sys_mod.unblock_cmd_stream();
 }
 
 fn f_sync( n: i16 ) void {

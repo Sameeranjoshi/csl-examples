@@ -430,16 +430,12 @@ def main():
   z = y_ref.ravel() - y_wse.ravel()
   nrm_z = np.linalg.norm(z, np.inf)
   print(f"|y_ref - y_wes| = {nrm_z}")
-  # Print y_ref and y_wse in layers if 3D
+  # Print only the first 2D slice for both y_ref and y_wse if 3D
   if y_ref.ndim == 3:
-    print("y_ref (by layers):")
-    for z in range(y_ref.shape[2]):
-      print(f"Layer {z}:")
-      print(y_ref[:, :, z])
-    print("y_wse (by layers):")
-    for z in range(y_wse.shape[2]):
-      print(f"Layer {z}:")
-      print(y_wse[:, :, z])
+    print("y_ref (first 2D slice):")
+    print(y_ref[:, :, 0])
+    print("y_wse (first 2D slice):")
+    print(y_wse[:, :, 0])
   else:
     print(f"y_ref = {y_ref}")
     print(f"y_wse = {y_wse}")
