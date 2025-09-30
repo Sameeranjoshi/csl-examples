@@ -215,7 +215,7 @@ def main():
   y_ref = np.zeros((height, width, pe_length), dtype=np.float32)
   # Use hop-based laplacian to match WSE implementation
   # Active PEs are determined by factor, neighbors are immediate (hops=1)
-  level_id = 1
+  level_id = 3
   factor = 2**level_id  # factor = 2 (determines which PEs are active)
   hops = factor  # immediate neighbors for 7-point stencil
   laplacian(stencil_coeff, zDim, x, y_ref, hops=hops, factor=factor)
