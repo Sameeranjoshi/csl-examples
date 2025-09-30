@@ -183,9 +183,9 @@ def laplacian(stencil_coeff, zDim, x, y, hops=1, factor=1):
         # Only compute stencil for active PEs
         if is_active_pe:
           y[(i,j,k)] = c_west*west_buf + c_east*east_buf + \
-                       c_south*south_buf + c_north*north_buf + \
-                       c_bottom*bottom_buf + c_top*top_buf + \
-                       c_center*center_buf
+                        c_south*south_buf + c_north*north_buf + \
+                        c_bottom*bottom_buf + c_top*top_buf + \
+                        c_center*center_buf
         else:
           y[(i,j,k)] = 0  # Non-active PEs produce zero
 

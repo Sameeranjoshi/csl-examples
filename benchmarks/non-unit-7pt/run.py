@@ -195,11 +195,9 @@ def main():
 
   np.random.seed(2)
   # A is h-by-w-by-l
-  x = np.ones(height*width*pe_length).reshape(height, width, pe_length).astype(np.float32) #+ 100
-  print(f"x = {x}")
+  x = np.ones(height*width*pe_length).reshape(height, width, pe_length).astype(np.float32) + 100
 
   x_1d = hwl_2_oned_colmajor(height, width, pe_length, x, np.float32)
-  print(f"x_1d = {x_1d}")
   # stencil coefficients has the following order
   # {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
   stencil_coeff = np.zeros((height, width, 7), dtype = np.float32)
@@ -217,7 +215,7 @@ def main():
   y_ref = np.zeros((height, width, pe_length), dtype=np.float32)
   # Use hop-based laplacian to match WSE implementation
   # Active PEs are determined by factor, neighbors are immediate (hops=1)
-  level_id = 0
+  level_id = 1
   factor = 2**level_id  # factor = 2 (determines which PEs are active)
   hops = factor  # immediate neighbors for 7-point stencil
   laplacian(stencil_coeff, zDim, x, y_ref, hops=hops, factor=factor)

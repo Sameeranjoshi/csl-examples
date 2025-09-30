@@ -56,6 +56,13 @@ var should_communicate_east: bool = true;
 var should_communicate_south: bool = true;
 var should_communicate_north: bool = true;
 
+// // Forwarding mechanism for intermediate PEs
+// var has_received_data: bool = false;
+// var should_forward_east: bool = false;
+// var should_forward_west: bool = false;
+// var should_forward_north: bool = false;
+// var should_forward_south: bool = false;
+
 // The call-graph of the stencil kernel is
 //
 //  COMM ----> SEND ----> Laplacian
@@ -254,8 +261,8 @@ fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32) void {
     
     // Debug print to trace execution
     if (is_active_pe) {
-        simprint.fmt_with_coords("PE spmv called: is_active_pe={d}", .{@as(u32, is_active_pe)});
-        simprint.print_string("PE spmv called - printing buffers");
+        simprint.fmt_with_coords("\nPE spmv called: is_active_pe={d}", .{@as(u32, is_active_pe)});
+        simprint.print_string("PE spmv called - printing buffers\n");
     }
     if (is_active_pe) {
         c_west = (coeff.*)[0];
@@ -266,8 +273,7 @@ fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32) void {
         c_top = (coeff.*)[5];
         c_center = (coeff.*)[6];
     } else {
-        // make all 0, why? We need eventual answer to be 0.
-        // There is a scope here for optimization.
+        // Inactive PEs: set coefficients to 0 so they produce 0 output
         c_west = 0.0;
         c_east = 0.0;
         c_south = 0.0;
@@ -431,20 +437,27 @@ fn laplacian_z() void {
 // - update the DSD of pointer x and y
 // - activate COMM
 fn compute_and_next_send_recv() void {
-    if (2 <= count_send_recv){
-        // RECV/SEND of this block are done
-        if (is_active_pe) {
-            simprint.fmt_with_coords("PE compute_and_next_send_recv: count_send_recv={d}, calling laplacian_xy", .{@as(u32, count_send_recv)});
-            simprint.print_string("PE compute_and_next_send_recv - printing buffers");
+    if (2 <= count_send_recv){  // First hop completed
+        if (count_send_recv == 2) {
+            // First hop done, start second hop
+            simprint.fmt_with_coords("First hop done, starting second hop", .{});
+            @activate(SEND);
+            @activate(RECV);
+        } else if (4 <= count_send_recv) {  // Both hops completed
+            // RECV/SEND of this block are done
+            if (is_active_pe) {
+                simprint.fmt_with_coords("PE compute_and_next_send_recv: count_send_recv={d}, calling laplacian_xy", .{@as(u32, count_send_recv)});
+                simprint.print_string("PE compute_and_next_send_recv - printing buffers");
+            }
+            laplacian_xy();
+            // advance start_x, mem_center_buf_dsd and mem_y_buf_dsd for next block
+            // only one of SEND/RECV can do so
+            start_x += BLOCK_SIZE;
+            mem_center_buf_dsd = @increment_dsd_offset(mem_center_buf_dsd, BLOCK_SIZE, f32);
+            mem_y_buf_dsd = @increment_dsd_offset(mem_y_buf_dsd, BLOCK_SIZE, f32);
+            // continue the next block
+            @activate(COMM);
         }
-        laplacian_xy();
-        // advance start_x, mem_center_buf_dsd and mem_y_buf_dsd for next block
-        // only one of SEND/RECV can do so
-        start_x += BLOCK_SIZE;
-        mem_center_buf_dsd = @increment_dsd_offset(mem_center_buf_dsd, BLOCK_SIZE, f32);
-        mem_y_buf_dsd = @increment_dsd_offset(mem_y_buf_dsd, BLOCK_SIZE, f32);
-        // continue the next block
-        @activate(COMM);
     }
 }
 
@@ -461,12 +474,15 @@ task f_send() void {
         if (should_communicate_east){
             @load_to_dsr(dest_dsr_send, fab_trans_east_wdsd, .{.async=true, .activate = f_send });
             if (is_active_pe){
+                // Active PE: send own data
+                simprint.fmt_with_coords("SEND EAST: Active PE sending own data", .{});
                 @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
             }else{
                 @load_to_dsr(src1_dsr_send, mem_west_buf_dsd);
             }
             @mov32(dest_dsr_send, src1_dsr_send, .{.async=true} );
         } else {
+            simprint.fmt_with_coords("SEND EAST: No communication needed", .{});
             @activate(SEND);
         }
         send_state = SEND_STATE_WEST;// goto next state
@@ -474,6 +490,7 @@ task f_send() void {
         if (should_communicate_west){
             @load_to_dsr(dest_dsr_send, fab_trans_west_wdsd, .{.async=true, .activate = f_send });
             if (is_active_pe){
+                // Active PE: send own data
                 @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
             }else{
                 @load_to_dsr(src1_dsr_send, mem_east_buf_dsd);
@@ -511,6 +528,7 @@ task f_send() void {
         send_state = SEND_STATE_DONE;
     }else{
         count_send_recv += 1;
+        simprint.fmt_with_coords("SEND DONE: count_send_recv={d}", .{@as(u32, count_send_recv)});
         // if both SEND and RECV are done, perform
         // - compute laplacian on x-y
         // - update the DSD of pointer x and y
@@ -529,14 +547,16 @@ task f_send() void {
 // RECV_STATE_SOUTH -> receive from south
 // RECV_STATE_NORTH -> receive from north
 //
-// Simple approach: All PEs receive data, active PEs use it for computation, inactive PEs forward it
+// FIXED: Intermediate PEs set forwarding flags when they receive data
 task f_recv() void {
     if (RECV_STATE_WEST == recv_state){ // receive from west
         if (should_communicate_west){
+            simprint.fmt_with_coords("RECV WEST: Receiving data, is_active_pe={d}", .{@as(u32, is_active_pe)});
             @load_to_dsr(dest_dsr_recv, mem_west_buf_dsd);
             @load_to_dsr(src1_dsr_recv, fab_recv_west_wdsd, .{.async=true, .activate = f_recv });
             @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
         } else {
+            simprint.fmt_with_coords("RECV WEST: No communication needed", .{});
             @activate(RECV); // nothing to receive
         }
         recv_state = RECV_STATE_EAST; // goto next state
@@ -569,6 +589,7 @@ task f_recv() void {
         recv_state = RECV_STATE_DONE;
     }else{
         count_send_recv += 1;
+        simprint.fmt_with_coords("RECV DONE: count_send_recv={d}", .{@as(u32, count_send_recv)});
         // if both SEND and RECV are done, perform
         // - compute laplacian on x-y
         // - update the DSD of pointer x and y
@@ -666,9 +687,15 @@ task f_comm() void {
 
         // restart a block SEND/RECV
         count_send_recv = 0;
-        // send data to the east
+        
+        // Debug: Print PE status at start of communication
+        simprint.fmt_with_coords("COMM START: is_active_pe={d}, should_comm_west={d}, should_comm_east={d}", .{@as(u32, is_active_pe), @as(u32, should_communicate_west), @as(u32, should_communicate_east)});
+        
+        // Double hop pattern: SEND → RECV → SEND → RECV
+        simprint.fmt_with_coords("Starting double hop pattern", .{});
+        
+        // First hop: send data to the east, recv data from the west
         @activate(SEND);    // ACTIVE
-        // recv data from the west
         @activate(RECV);
     }else{
         // laplacian has been done on x-y direction by COMM
@@ -825,9 +852,10 @@ fn setHopBasedParams(hops_value: u16, factor_value: u16, width: i16, height: i16
     is_active_pe = isActivePE(px, py, factor);
     
     // Debug print PE status
-    simprint.fmt_with_coords("PE({d},{d}): factor={d}, is_active_pe={d}", .{@as(u32, px), @as(u32, py), @as(u32, factor), @as(u32, is_active_pe)});
-    simprint.print_string("PE setHopBasedParams - printing buffers");
-    simprint.fmt_with_coords("px={d}, py={d}, width={d}, height={d}", .{@as(u32, px), @as(u32, py), @as(u32, width), @as(u32, height)});
+    // simprint.fmt_with_coords("PE({d},{d}): factor={d}, is_active_pe={d}", .{@as(u32, px), @as(u32, py), @as(u32, factor), @as(u32, is_active_pe)});
+    // simprint.print_string("PE setHopBasedParams - printing buffers");
+    // simprint.fmt_with_coords("px={d}, py={d}, width={d}, height={d}", .{@as(u32, px), @as(u32, py), @as(u32, width), @as(u32, height)});
+    // simprint.fmt_with_coords("Communication flags: west={d}, east={d}, north={d}, south={d}", .{@as(u32, should_communicate_west), @as(u32, should_communicate_east), @as(u32, should_communicate_north), @as(u32, should_communicate_south)});
     // if (!is_active_pe) {
     //     // Inactive PEs don't participate in communication
     //     should_communicate_west = false;
