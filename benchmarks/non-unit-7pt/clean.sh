@@ -3,4 +3,4 @@ rm -r wio_flows_tmpdir.*
 rm *.pyc
 rm mapper_layouts/different_layouts.pyc
 rm sim* -rf
-rm -rf out/
+rm -rf out*/

@@ -62,20 +62,22 @@ var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
 // ending time of H2D/D2H
 var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
 
-var AM_I_ACTIVE_PE: i16 = 0;
 var factor: u16 = 1;   // at least 1
 var hops: u16 = 1;  // The least hops between active PEs
 var restriction_window_width: u16 = 1;
 var restriction_window_height: u16 = 1; // starting size of the window.
-var total_active_in_window_x: u16 = 2;
-var total_active_in_window_y: u16 = 2;
+var active_pes_in_restriction_window_x: u16 = 2;
+var active_pes_in_restriction_window_y: u16 = 2;
+const rectangle = @get_rectangle();
+const width: u16 = rectangle.width; // This should be passed as a parameter or retrieved from somewhere
+const height: u16 = rectangle.height; // This should be passed as a parameter or retrieved from somewhere  
 ////////////////////////////////////////////////////////////////////////////////
 // Main memory (48KB)
 ////////////////////////////////////////////////////////////////////////////////
 
 var x = @zeros([MAX_ZDIM]f32);
 var y = @zeros([MAX_ZDIM]f32);
-
+var reduced_result = @zeros([MAX_ZDIM]f32);
 var dot = @zeros([1]f32);
 
 // stencil coefficients are organized as
@@ -99,6 +101,7 @@ var ptr_y: [*]f32 = &y;
 var ptr_stencil_coeff: [*]f32 = &stencil_coeff;
 var ptr_time_buf_u16: [*]u16 = &time_buf_u16;
 var ptr_time_ref: [*]u16 = &time_ref_u16;
+var ptr_reduced_result: [*]f32 = &reduced_result;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Tasks
@@ -106,6 +109,9 @@ var ptr_time_ref: [*]u16 = &time_ref_u16;
 //     task_begin(name, entrypoint, color)
 ////////////////////////////////////////////////////////////////////////////////
 
+fn is_bottom_right_of_restriction_window(px: u16, py: u16, restriction_window_width: u16, restriction_window_height: u16) bool {
+    return px == restriction_window_width - 1 and py == restriction_window_height - 1;
+}
 
 fn f_tic() void {
     timestamp.get_timestamp(&tscStartBuffer);
@@ -141,29 +147,36 @@ fn f_memcpy_timestamps() void {
 // total pe hXW - not done
 // hops across x and y - done
 // total active PEs inside the window - done
-fn f_init_spmv(level_id:u16) void {
+fn f_init_spmv(level_id:u16) void {       
     // PE coordinates
-    const pe_id_x: i16 = @as(i16, layout_mod.get_x_coord());
-    const pe_id_y: i16 = @as(i16, layout_mod.get_y_coord());        
+    const pe_id_x: u16 = layout_mod.get_x_coord();
+    const pe_id_y: u16 = layout_mod.get_y_coord();       
+    // Get width and height from layout parameters (assuming they're available)
     // factor
     var const_2: f16 = 2.0;
     factor = @as(u16, math_lib.pow(const_2, @as(f16, level_id)));    // stride = 2^level_id
     // hops - keep as immediate neighbors for 7-point stencil
     hops = factor;
-
     // window(restriction window)
     restriction_window_width = @as(u16, math_lib.pow(const_2, @as(f16, factor + 1))); // window size = 2^(factor + 1)
     restriction_window_height = @as(u16, math_lib.pow(const_2, @as(f16, factor + 1)));    
     // total active inside window(always fixed)
-    total_active_in_window_x = 2;
-    total_active_in_window_y = 2;
+    active_pes_in_restriction_window_x = 2;
+    active_pes_in_restriction_window_y = 2;
+
+    // Configure reduction module runtime params (use current layout width/height)
+    // Todo: Remove this initialization later.  It is only for debugging.   
+    // set reduced_result to 1.0 in only 1st layer.
+    var row: i16 = 0;
+    while(row < MAX_ZDIM) : (row +=1) {
+        reduced_result[row] = @as(f32, 1.0);
+    }
+
 
     // Set hop-based communication parameters in the stencil module
-    // Get width and height from layout parameters (assuming they're available)
-    const rectangle = @get_rectangle();
-    const width: i16 = rectangle.width; // This should be passed as a parameter or retrieved from somewhere
-    const height: i16 = rectangle.height; // This should be passed as a parameter or retrieved from somewhere
     stencil_mod.setHopBasedParams(hops, factor, width, height);
+    reduce_mod.setReductionParams(width, height);
+
     sys_mod.unblock_cmd_stream();
 }
 
@@ -171,7 +184,39 @@ fn f_init_spmv(level_id:u16) void {
 // {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
 fn f_spmv(n:i16) void {
     stencil_mod.spmv(n, &stencil_coeff, &x, &y);
+}
+
+// restriction pattern is top-left, changes per level and the restriction keeps the z dimension the same.
+fn f_reduction_top_left_pattern(n:i16) void {
+    // Semi-coarsening: Reduces only 2 dimensions and not the z dimension.
+    // 1. Make sure the code is aware of the new window size at this level and total_active PEs inside the window.(f_init_spmv)
+    // 2. Now inside the restriction window:
+        // 2.1. Reduce rows across x dimension to right(west-to-east).
+        // 2.2. Reduce last column only across y dimension(north-to-south).
+        // 2.3. The final answer is now stored in bottom right PE.
+    // Simple case: perform row then column reduction; result ends in bottom-right PE
+    
+    reduce_mod.reduce_row_col(n, &reduced_result, reduce_mod.TYPE_BINARY_OP.ADD);
+    // The code triggeres a callback when done.
     // sys_mod.unblock_cmd_stream();
+}
+
+// 2.4. Divide it by total number of active PEs in the window.
+fn f_restriction() void {
+    // PE coordinates
+    const pe_id_x: u16 = layout_mod.get_x_coord();
+    const pe_id_y: u16 = layout_mod.get_y_coord(); 
+    if (is_bottom_right_of_restriction_window(pe_id_x, pe_id_y, width, height)) {
+    // if (layout_mod.get_x_coord() == @as(u16, width - 1) and layout_mod.get_y_coord() == @as(u16, height - 1)) {
+        var zindex: i16 = 0;
+        // var total_active_PEs = @as(f32, active_pes_in_restriction_window_x * active_pes_in_restriction_window_y);
+        var total_active_PEs = @as(f32, width * height);
+        simprint.fmt_with_coords("total_active_PEs = {f}, before division reduced_result[0] = {f}", .{ total_active_PEs, reduced_result[0] });
+        while(zindex < MAX_ZDIM) : (zindex +=1) {
+            reduced_result[zindex] = reduced_result[zindex] / total_active_PEs ;
+        }
+    }
+    sys_mod.unblock_cmd_stream();
 }
 
 fn f_sync( n: i16 ) void {
@@ -206,6 +251,7 @@ comptime {
     @export_symbol(ptr_stencil_coeff, "stencil_coeff");
     @export_symbol(ptr_time_buf_u16, "time_buf_u16");
     @export_symbol(ptr_time_ref, "time_ref");
+    @export_symbol(ptr_reduced_result, "reduced_result");
 }
 
 comptime{
@@ -216,4 +262,6 @@ comptime{
     @export_symbol(f_spmv);
     @export_symbol(f_sync);
     @export_symbol(f_reference_timestamps);
+    @export_symbol(f_reduction_top_left_pattern);
+    @export_symbol(f_restriction);
 }

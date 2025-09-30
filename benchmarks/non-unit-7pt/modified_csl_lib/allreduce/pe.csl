@@ -158,6 +158,30 @@ param src1_dsr_ids: [1]u16;
 const timestamp = @import_module("<time>");
 
 const math_lib = @import_module("<math>");
+const layout_mod = @import_module("<layout>");
+const simprint = @import_module("<simprint>", .{.enable = true});
+
+// Runtime-configurable reduction parameters (width/height and edge flags)
+// These mirror the params but can be updated at runtime similar to hop-based params in stencil
+var width_rt: i16 = 1;
+var height_rt: i16 = 1;
+var first_px_rt: bool = false; // (0 == px)
+var last_px_rt: bool = false;  // ((width_rt-1) == px)
+var first_py_rt: bool = false; // (0 == py)
+var last_py_rt: bool = false;  // ((height_rt-1) == py)
+
+// Configure runtime reduction parameters (call from kernel)
+// Sets width/height and per-PE edge flags; reduction then targets bottom-right PE
+fn setReductionParams(w: i16, h: i16) void {
+    width_rt = w;
+    height_rt = h;
+    const px: i16 = @as(i16, layout_mod.get_x_coord());
+    const py: i16 = @as(i16, layout_mod.get_y_coord());
+    first_px_rt = (0 == px);
+    last_px_rt = (px == (w - 1));
+    first_py_rt = (0 == py);
+    last_py_rt = (py == (h - 1));
+}
 
 // A new type for binary operators
 // compiler assigns ADD=0 and MAX=1
@@ -253,6 +277,24 @@ fn allreduce( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP ) void {
    state_seq[1] = STATE_COL_REDUCE;
    state_seq[2] = STATE_BCAST;
    state_seq[3] = STATE_DONE;
+
+   state_idx = 0;
+   cur_state = state_seq[0];
+   @activate(C_STATE_ENTRY);
+}
+
+// Row+Column reduction only (no broadcast), final result resides in bottom-right PE
+fn reduce_row_col( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP ) void {
+   x = in_tensor;
+   functor = op;
+
+   @assert(n > 0);
+   wvlts_per_pe = @bitcast(u16, n);
+
+   // setup state sequence: row -> col -> done
+   state_seq[0] = STATE_ROW_REDUCE;
+   state_seq[1] = STATE_COL_REDUCE;
+   state_seq[2] = STATE_DONE;
 
    state_idx = 0;
    cur_state = state_seq[0];

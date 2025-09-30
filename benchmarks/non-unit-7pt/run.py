@@ -304,6 +304,7 @@ def main():
   symbol_stencil_coeff = runner.get_id("stencil_coeff")
   symbol_time_buf_u16 = runner.get_id("time_buf_u16")
   symbol_time_ref = runner.get_id("time_ref")
+  symbol_reduced_result = runner.get_id("reduced_result")
 
   runner.load()
   runner.run()
@@ -327,6 +328,8 @@ def main():
   print(f"step 3: compute y = A*x with zDim = {zDim}")
   # positive zDim can be smaller than pe_length
   runner.launch("f_init_spmv", np.uint16(level_id), nonblock=False)
+  runner.launch("f_reduction_top_left_pattern", np.int16(zDim), nonblock=False)
+  runner.launch("f_restriction", nonblock=False)
   runner.launch("f_spmv", np.int16(zDim), nonblock=False)
 
   print("step 4: toc() records time_end")
@@ -346,6 +349,13 @@ def main():
   runner.memcpy_d2h(y_1d, symbol_y, 0, 0, width, height, pe_length,\
     streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
   y_wse = np.reshape(y_1d, (height, width, pe_length), order='F')
+
+  # print(reduced_result_hwl)
+  print("step 7: D2H reduced_result of type f32")
+  reduced_result_1d = np.zeros(height*width*pe_length, np.float32)
+  runner.memcpy_d2h(reduced_result_1d, symbol_reduced_result, 0, 0, width, height, pe_length,\
+    streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+  reduced_result_hwl = oned_to_hwl_colmajor(height, width, pe_length, reduced_result_1d, np.float32)
 
   print("step 8: prepare reference clock")
   runner.launch("f_reference_timestamps", nonblock=False)
@@ -430,15 +440,13 @@ def main():
   z = y_ref.ravel() - y_wse.ravel()
   nrm_z = np.linalg.norm(z, np.inf)
   print(f"|y_ref - y_wes| = {nrm_z}")
-  # # Print only the first 2D slice for both y_ref and y_wse if 3D
-  # if y_ref.ndim == 3:
-  #   print("y_ref (first 2D slice):")
-  #   print(y_ref[:, :, 0])
-  #   print("y_wse (first 2D slice):")
-  #   print(y_wse[:, :, 0])
-  # else:
-  #   print(f"y_ref = {y_ref}")
-  #   print(f"y_wse = {y_wse}")
+  # Print reduced_result_hwl layer by layer if 3D, else print as is
+  if reduced_result_hwl.ndim == 3:
+    for k in range(reduced_result_hwl.shape[2]):
+      print(f"reduced_result_hwl (layer {k}):")
+      print(reduced_result_hwl[:, :, k])
+  else:
+    print(f"reduced_result_hwl = {reduced_result_hwl}")
   np.testing.assert_allclose(y_ref.ravel(), y_wse.ravel(), 1.e-5)
   print("\nSUCCESS!")
 

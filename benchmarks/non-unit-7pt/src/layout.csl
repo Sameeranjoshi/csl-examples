@@ -119,6 +119,7 @@ layout{
     @export_name("stencil_coeff", [*]f32, true);
     @export_name("time_buf_u16", [*]u16, true);
     @export_name("time_ref", [*]u16, true);
+    @export_name("reduced_result", [*]f32, true);
 
     @export_name("f_tic", fn()void);
     @export_name("f_toc", fn()void);
@@ -127,4 +128,7 @@ layout{
     @export_name("f_spmv", fn(i16)void);
     @export_name("f_sync", fn(i16)void);
     @export_name("f_reference_timestamps", fn()void);
+    // @export_name("f_semi_coarsening_reduction", fn()void);
+    @export_name("f_reduction_top_left_pattern", fn(i16)void);
+    @export_name("f_restriction", fn()void);
 } // end of layout
