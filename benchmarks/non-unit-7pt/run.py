@@ -215,7 +215,7 @@ def main():
   y_ref = np.zeros((height, width, pe_length), dtype=np.float32)
   # Use hop-based laplacian to match WSE implementation
   # Active PEs are determined by factor, neighbors are immediate (hops=1)
-  level_id = 3
+  level_id = 0
   factor = 2**level_id  # factor = 2 (determines which PEs are active)
   hops = factor  # immediate neighbors for 7-point stencil
   laplacian(stencil_coeff, zDim, x, y_ref, hops=hops, factor=factor)
@@ -430,15 +430,15 @@ def main():
   z = y_ref.ravel() - y_wse.ravel()
   nrm_z = np.linalg.norm(z, np.inf)
   print(f"|y_ref - y_wes| = {nrm_z}")
-  # Print only the first 2D slice for both y_ref and y_wse if 3D
-  if y_ref.ndim == 3:
-    print("y_ref (first 2D slice):")
-    print(y_ref[:, :, 0])
-    print("y_wse (first 2D slice):")
-    print(y_wse[:, :, 0])
-  else:
-    print(f"y_ref = {y_ref}")
-    print(f"y_wse = {y_wse}")
+  # # Print only the first 2D slice for both y_ref and y_wse if 3D
+  # if y_ref.ndim == 3:
+  #   print("y_ref (first 2D slice):")
+  #   print(y_ref[:, :, 0])
+  #   print("y_wse (first 2D slice):")
+  #   print(y_wse[:, :, 0])
+  # else:
+  #   print(f"y_ref = {y_ref}")
+  #   print(f"y_wse = {y_wse}")
   np.testing.assert_allclose(y_ref.ravel(), y_wse.ravel(), 1.e-5)
   print("\nSUCCESS!")
 
