@@ -204,6 +204,9 @@ const STATE_BCAST: i16 = 2;
 const STATE_SCALE_AND_SQUARE: i16 = 3;
 const STATE_NRM2: i16 = 4;
 const STATE_DONE: i16 = 5;
+// New states for reverse reduction (targeting top-left PE)
+const STATE_ROW_REDUCE_REVERSE: i16 = 6;  // right-to-left (east-to-west)
+const STATE_COL_REDUCE_REVERSE: i16 = 7;  // bottom-to-top (south-to-north)
 
 // allreduce(ADD/MAX) has four states
 // allreduce_nrm2 has 9 states
@@ -283,17 +286,19 @@ fn allreduce( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP ) void {
    @activate(C_STATE_ENTRY);
 }
 
-// Row+Column reduction only (no broadcast), final result resides in bottom-right PE
-fn reduce_row_col( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP ) void {
+
+// Row+Column reduction with reversed directions, final result resides in top-left PE
+// Reduction flow: right-to-left (columns), then bottom-to-top (rows)
+fn reduce_row_col_top_left( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP ) void {
    x = in_tensor;
    functor = op;
 
    @assert(n > 0);
    wvlts_per_pe = @bitcast(u16, n);
 
-   // setup state sequence: row -> col -> done
-   state_seq[0] = STATE_ROW_REDUCE;
-   state_seq[1] = STATE_COL_REDUCE;
+   // setup state sequence: reverse row -> reverse col -> done
+   state_seq[0] = STATE_ROW_REDUCE_REVERSE;
+   state_seq[1] = STATE_COL_REDUCE_REVERSE;
    state_seq[2] = STATE_DONE;
 
    state_idx = 0;
@@ -481,6 +486,34 @@ task f_state_entry() void {
         reduce_pes = height-1;
         reduce_first_pe = first_py;
         reduce_last_pe = last_py;
+        reduce( wvlts_per_pe );
+
+        // prefetch next state which will be copied into cur_state in teardown handler
+        state_idx += 1;
+        next_state = state_seq[state_idx];
+
+    }else if (STATE_ROW_REDUCE_REVERSE == cur_state){
+        // Reverse row reduction: right-to-left (EAST to WEST)
+        rowReduceReverse_configure();
+        // perform reverse row reduction and store the result to first PE (px=0)
+        // last PE (px=width-1) will send TD to turn C_ROUTE back to teardown mode
+        reduce_pes = width-1;
+        reduce_first_pe = last_px;   // rightmost PE sends first
+        reduce_last_pe = first_px;   // leftmost PE receives
+        reduce( wvlts_per_pe );
+
+        // prefetch next state which will be copied into cur_state in teardown handler
+        state_idx += 1;
+        next_state = state_seq[state_idx];
+
+    }else if (STATE_COL_REDUCE_REVERSE == cur_state){
+        // Reverse column reduction: bottom-to-top (SOUTH to NORTH)
+        colReduceReverse_configure();
+        // perform reverse column reduction and store the result to first PE (py=0)
+        // last PE (py=height-1) will send TD to turn C_ROUTE back to teardown mode
+        reduce_pes = height-1;
+        reduce_first_pe = last_py;   // bottommost PE sends first
+        reduce_last_pe = first_py;   // topmost PE receives
         reduce( wvlts_per_pe );
 
         // prefetch next state which will be copied into cur_state in teardown handler
@@ -937,6 +970,80 @@ fn colReduce_configure() void {
 
     // (3) clear teardown-in-progress bit
     // config_reg[c] ^= mask where mask = 1 << 14
+    tile_config.teardown.exit(C_ROUTE);
+}
+
+
+// Reverse row reduction: right-to-left (EAST to WEST)
+// Final result in px=0 (leftmost PE)
+fn rowReduceReverse_configure() void {
+
+    // (1) setup the new routing first because the pos1 needs to inherit from pos0
+    const addr = color_config.get_color_config_addr(C_ROUTE);
+
+    if (last_px){
+        // rightmost PE (px=width-1) sends data westward
+        // .rx = .{ RAMP },.tx = .{ WEST },
+        color_config.reset_routes(addr, .{.tx = WEST, .rx = RAMP});
+    }else if (first_px){
+        // leftmost PE (px=0) only receives data from east
+        // .rx = .{ EAST }, .tx = .{ RAMP },
+        color_config.reset_routes(addr, .{.tx = RAMP, .rx = EAST});
+    }else{
+        // middle PEs: receive from east, send to west
+        // .rx = .{ EAST }, .tx = .{ WEST },
+        color_config.reset_routes(addr, .{.tx = WEST, .rx = EAST});
+    }
+
+    // (2) setup switch according to config parameters
+    switch_config.clear_current_position(C_ROUTE);
+    switch_config.set_invalid_for_all_switch_positions(C_ROUTE);
+
+    if (first_px){
+        // leftmost PE (receiver) does not have pos1
+    }else{
+        // others have ".pos1 = .{ .rx = RAMP }"
+        switch_config.set_rx_switch_pos1(C_ROUTE, RAMP);
+    }
+
+    // (3) clear teardown-in-progress bit
+    tile_config.teardown.exit(C_ROUTE);
+}
+
+
+// Reverse column reduction: bottom-to-top (SOUTH to NORTH)
+// Final result in py=0 (topmost PE)
+fn colReduceReverse_configure() void {
+
+    // (1) setup the new routing first because the pos1 needs to inherit from pos0
+    const addr = color_config.get_color_config_addr(C_ROUTE);
+
+    if (last_py){
+        // bottommost PE (py=height-1) sends data northward
+        // .rx = .{ RAMP },.tx = .{ NORTH },
+        color_config.reset_routes(addr, .{.tx = NORTH, .rx = RAMP});
+    }else if (first_py){
+        // topmost PE (py=0) only receives data from south
+        // .rx = .{ SOUTH }, .tx = .{ RAMP },
+        color_config.reset_routes(addr, .{.tx = RAMP, .rx = SOUTH});
+    }else{
+        // middle PEs: receive from south, send to north
+        // .rx = .{ SOUTH }, .tx = .{ NORTH },
+        color_config.reset_routes(addr, .{.tx = NORTH, .rx = SOUTH});
+    }
+
+    // (2) setup switch according to config parameters
+    switch_config.clear_current_position(C_ROUTE);
+    switch_config.set_invalid_for_all_switch_positions(C_ROUTE);
+
+    if (first_py){
+        // topmost PE (receiver) does not have pos1
+    }else{
+        // others have ".pos1 = .{ .rx = RAMP }"
+        switch_config.set_rx_switch_pos1(C_ROUTE, RAMP);
+    }
+
+    // (3) clear teardown-in-progress bit
     tile_config.teardown.exit(C_ROUTE);
 }
 

@@ -109,8 +109,8 @@ var ptr_reduced_result: [*]f32 = &reduced_result;
 //     task_begin(name, entrypoint, color)
 ////////////////////////////////////////////////////////////////////////////////
 
-fn is_bottom_right_of_restriction_window(px: u16, py: u16, restriction_window_width: u16, restriction_window_height: u16) bool {
-    return px == restriction_window_width - 1 and py == restriction_window_height - 1;
+fn is_top_left_of_restriction_window(px: u16, py: u16, restriction_window_width: u16, restriction_window_height: u16) bool {
+    return px == 0 and py == 0;
 }
 
 fn f_tic() void {
@@ -172,7 +172,6 @@ fn f_init_spmv(level_id:u16) void {
         reduced_result[row] = @as(f32, 1.0);
     }
 
-
     // Set hop-based communication parameters in the stencil module
     stencil_mod.setHopBasedParams(hops, factor, width, height);
     reduce_mod.setReductionParams(width, height);
@@ -191,13 +190,13 @@ fn f_reduction_top_left_pattern(n:i16) void {
     // Semi-coarsening: Reduces only 2 dimensions and not the z dimension.
     // 1. Make sure the code is aware of the new window size at this level and total_active PEs inside the window.(f_init_spmv)
     // 2. Now inside the restriction window:
-        // 2.1. Reduce rows across x dimension to right(west-to-east).
-        // 2.2. Reduce last column only across y dimension(north-to-south).
-        // 2.3. The final answer is now stored in bottom right PE.
-    // Simple case: perform row then column reduction; result ends in bottom-right PE
+        // 2.1. Reduce rows across x dimension from right to left (east-to-west).
+        // 2.2. Reduce column from bottom to top (south-to-north).
+        // 2.3. The final answer is now stored in top-left PE (0,0).
+    // result ends in top-left PE
     
-    reduce_mod.reduce_row_col(n, &reduced_result, reduce_mod.TYPE_BINARY_OP.ADD);
-    // The code triggeres a callback when done.
+    reduce_mod.reduce_row_col_top_left(n, &reduced_result, reduce_mod.TYPE_BINARY_OP.ADD);
+    // The code triggers a callback when done.
     // sys_mod.unblock_cmd_stream();
 }
 
@@ -206,12 +205,12 @@ fn f_restriction() void {
     // PE coordinates
     const pe_id_x: u16 = layout_mod.get_x_coord();
     const pe_id_y: u16 = layout_mod.get_y_coord(); 
-    if (is_bottom_right_of_restriction_window(pe_id_x, pe_id_y, width, height)) {
+    if (is_top_left_of_restriction_window(pe_id_x, pe_id_y, width, height)) {
     // if (layout_mod.get_x_coord() == @as(u16, width - 1) and layout_mod.get_y_coord() == @as(u16, height - 1)) {
         var zindex: i16 = 0;
         // var total_active_PEs = @as(f32, active_pes_in_restriction_window_x * active_pes_in_restriction_window_y);
         var total_active_PEs = @as(f32, width * height);
-        simprint.fmt_with_coords("total_active_PEs = {f}, before division reduced_result[0] = {f}", .{ total_active_PEs, reduced_result[0] });
+        // Divide all Z dimensions
         while(zindex < MAX_ZDIM) : (zindex +=1) {
             reduced_result[zindex] = reduced_result[zindex] / total_active_PEs ;
         }
