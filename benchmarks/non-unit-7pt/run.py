@@ -329,7 +329,7 @@ def main():
   # positive zDim can be smaller than pe_length
   runner.launch("f_init_spmv", np.uint16(level_id), nonblock=False)
   runner.launch("f_reduction_top_left_pattern", np.int16(zDim), nonblock=False)
-  # runner.launch("f_restriction", nonblock=False)
+  runner.launch("f_restriction", nonblock=False)
   runner.launch("f_spmv", np.int16(zDim), nonblock=False)
 
   print("step 4: toc() records time_end")

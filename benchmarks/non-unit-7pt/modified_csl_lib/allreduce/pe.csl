@@ -169,23 +169,38 @@ var window_end_x: i16 = 0;      // Window end x coordinate (inclusive)
 var window_end_y: i16 = 0;      // Window end y coordinate (inclusive)
 var restriction_window_width: i16 = 1;
 var restriction_window_height: i16 = 1;
-var is_active_for_reduction: bool = true;  // Is this PE active in current reduction?
+var current_factor: u16 = 1;    // Current factor for active PE calculation
+var is_active_pe: bool = true;  // Is this PE active in current reduction?
 var is_window_boundary_x_start: bool = false;  // PE is at window start in x
 var is_window_boundary_x_end: bool = false;    // PE is at window end in x
 var is_window_boundary_y_start: bool = false;  // PE is at window start in y
 var is_window_boundary_y_end: bool = false;    // PE is at window end in y
+var total_active_pes_x_in_window: i16 = 2;  // Number of active PEs in x-direction of window
+var total_active_pes_y_in_window: i16 = 2;  // Number of active PEs in y-direction of window
 
 // Configure runtime reduction parameters (call from kernel)
 // Sets width/height and per-PE edge flags; reduction then targets bottom-right PE
+fn isActivePE(px: i16, py: i16, factor: u16) bool {
+    return (px % @as(i16, factor)) == 0 and (py % @as(i16, factor)) == 0;
+}
 
+// Runtime parameters for active PE counts in window
+fn inwindow(px: i16, py: i16) bool {
+    return (px >= window_st_x) and (px <= window_end_x) and
+           (py >= window_st_y) and (py <= window_end_y);
+}
 
 // Configure windowed reduction parameters for GMG restriction
 // Each window performs reduction independently, targeting its top-left corner
 // window_width, window_height: Size of each restriction window
 // factor: Determines window spacing (2^factor)
-fn setWindowedReductionParams(window_width: i16, window_height: i16) void {
+// active_x, active_y: Number of active PEs in x and y directions within window
+fn setWindowedReductionParams(window_width: i16, window_height: i16, factor: u16, total_active_pes_in_window_x: u16, total_active_pes_in_window_y: u16) void {
     restriction_window_width = window_width;
     restriction_window_height = window_height;
+    current_factor = factor;  // Store for later use
+    total_active_pes_x_in_window = @as(i16, total_active_pes_in_window_x);  // Store active PE counts
+    total_active_pes_y_in_window = @as(i16, total_active_pes_in_window_y);
     
     const px: i16 = @as(i16, layout_mod.get_x_coord());
     const py: i16 = @as(i16, layout_mod.get_y_coord());
@@ -201,9 +216,8 @@ fn setWindowedReductionParams(window_width: i16, window_height: i16) void {
     window_end_x = window_st_x + window_width - 1;
     window_end_y = window_st_y + window_height - 1;
     
-    // Check if PE is within its window (should always be true for tiled windows)
-    // is_active_for_reduction = (px >= window_st_x) and (px <= window_end_x) and
-    //                           (py >= window_st_y) and (py <= window_end_y);
+    // Check if this PE is active based on factor
+    is_active_pe = isActivePE(px, py, factor) and inwindow(px, py);
     
     // Determine window boundary positions for this PE
     is_window_boundary_x_start = (px == window_st_x);
@@ -526,7 +540,8 @@ task f_state_entry() void {
         rowReduceReverse_configure();
         // perform reverse row reduction and store the result to window start PE
         // Window end PE sends TD to turn C_ROUTE back to teardown mode
-        reduce_pes = restriction_window_width - 1;
+        // ALL PEs in window forward data, receiver accumulates from all
+        reduce_pes = restriction_window_width - 1;  // All PEs in row forward
         reduce_first_pe = is_window_boundary_x_end;   // window rightmost PE sends first
         reduce_last_pe = is_window_boundary_x_start;  // window leftmost PE receives
         reduce( wvlts_per_pe );
@@ -540,7 +555,8 @@ task f_state_entry() void {
         colReduceReverse_configure();
         // perform reverse column reduction and store the result to window start PE
         // Window end PE sends TD to turn C_ROUTE back to teardown mode
-        reduce_pes = restriction_window_height - 1;
+        // ALL PEs in window forward data, receiver accumulates from all
+        reduce_pes = restriction_window_height - 1;  // All PEs in column forward
         reduce_first_pe = is_window_boundary_y_end;   // window bottommost PE sends first
         reduce_last_pe = is_window_boundary_y_start;  // window topmost PE receives
         reduce( wvlts_per_pe );
@@ -603,7 +619,18 @@ task f_state_entry() void {
     }
 }
 
+// Zero buffer for inactive PEs to send (identity for ADD operation)
+// Large enough the max it can go is equal to the problem size zdim, which on 3D cube problem will go to max(H,W) of wafer
+// as the stencils map on wafer 1 to 1 and can't do subproblem on a single PE.
+const MAX_PENCIL_DIM : u16 = 2048;  // Choosen a random number bigger than max(H,W)
+var zero_buf = @zeros([MAX_PENCIL_DIM]f32);  // Large enough for any reduction size
+var zero_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> zero_buf[i] });
+
 fn reduce( n: u16 ) void {
+
+    // now use the value of n to compute the correct size of the zero buffer
+    const pencil_dim : u16 = @bitcast(u16, n);
+    zero_buf_dsd = @set_dsd_length(zero_buf_dsd, pencil_dim);
 
     // WARNING: block LOCK in the beginning and only
     // unblock LOCK when "reduce" finishes
@@ -615,7 +642,13 @@ fn reduce( n: u16 ) void {
     // The last PE does not call f_send_ctrl(), so this op is DON'T care
     mem_ctrl_buf_dsd =  @set_dsd_base_addr(mem_ctrl_buf_dsd, ctrl_11);
 
-    mem_x_buf_dsd = @set_dsd_base_addr(mem_x_buf_dsd, x);
+    // Active PEs send their data, inactive PEs send zeros (identity for ADD)
+    if (is_active_pe) {
+        mem_x_buf_dsd = @set_dsd_base_addr(mem_x_buf_dsd, x);
+    } else {
+        // Inactive PE sends zeros to not contribute to sum
+        mem_x_buf_dsd = @set_dsd_base_addr(mem_x_buf_dsd, zero_buf);
+    }
     mem_x_buf_dsd = @set_dsd_length(mem_x_buf_dsd, n);
 
     fab_recv_wdsd = @set_dsd_length(fab_recv_wdsd, n);
@@ -700,7 +733,9 @@ fn nrm2_postprocessing() void{
 // unblock LOCK here when the operation is done
 task f_send_data() void {
     if (reduce_last_pe){
-        // last PE receives data from reduce_pes neighbors
+        // last PE receives data from reduce_pes active neighbors
+        // reduce_pes is set to (active_pes_x - 1) or (active_pes_y - 1)
+        // So we only receive from active PEs
         if (count_recv_or_send < reduce_pes){
             //@fadds(mem_x_buf_dsd, mem_x_buf_dsd, fab_recv_wdsd, .{.async=true, .activate=f_send_data} );
             @load_to_dsr(src1_dsr, fab_recv_wdsd, .{.async=true, .activate=f_send_data} );
@@ -719,7 +754,7 @@ task f_send_data() void {
             @unblock(C_LOCK);
         }
     }else{
-        // other PE (not last PE) sends data and control
+        // other PE (not last PE): ALL PEs must send/forward to keep chain alive
         if (count_recv_or_send < 1){
             //@mov32(fab_trans_x_wdsd, mem_x_buf_dsd, .{.async=true, .activate=f_send_ctrl} );
             @load_to_dsr(dest_dsr, fab_trans_x_wdsd, .{.async=true, .activate=f_send_ctrl} );

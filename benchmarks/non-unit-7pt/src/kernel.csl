@@ -190,7 +190,7 @@ fn f_init_spmv(level_id:u16) void {
     // Window size depends on the current level (2^(factor+1))
     const window_w = @as(i16, restriction_window_width);
     const window_h = @as(i16, restriction_window_height);
-    reduce_mod.setWindowedReductionParams(window_w, window_h);
+    reduce_mod.setWindowedReductionParams(window_w, window_h, factor, active_pes_in_restriction_window_x, active_pes_in_restriction_window_y);
 
     sys_mod.unblock_cmd_stream();
 }
@@ -225,10 +225,9 @@ fn f_restriction() void {
     // Check if this PE is the top-left corner of its restriction window
     if (is_top_left_of_restriction_window(pe_id_x, pe_id_y, restriction_window_width, restriction_window_height)) {
         var zindex: i16 = 0;
-        // Total PEs in the restriction window (for now, sum all PEs in window)
-        // Later can be refined to only count active PEs
-        var total_active_PEs = @as(f32, restriction_window_width * restriction_window_height);
-        // Divide all Z dimensions by total PEs in window
+        // Use precomputed count of active PEs in the window
+        const total_active_PEs = @as(f32, active_pes_in_restriction_window_x * active_pes_in_restriction_window_y);
+        // Divide all Z dimensions by total active PEs in window
         while(zindex < MAX_ZDIM) : (zindex +=1) {
             reduced_result[zindex] = reduced_result[zindex] / total_active_PEs ;
         }
