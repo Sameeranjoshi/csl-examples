@@ -109,8 +109,19 @@ var ptr_reduced_result: [*]f32 = &reduced_result;
 //     task_begin(name, entrypoint, color)
 ////////////////////////////////////////////////////////////////////////////////
 
-fn is_top_left_of_restriction_window(px: u16, py: u16, restriction_window_width: u16, restriction_window_height: u16) bool {
-    return px == 0 and py == 0;
+// Check if this PE is the top-left corner of its restriction window
+// Each window is tiled across the mesh
+fn is_top_left_of_restriction_window(px: u16, py: u16, window_width: u16, window_height: u16) bool {
+    // Calculate which window this PE belongs to
+    const window_idx_x: u16 = px / window_width;
+    const window_idx_y: u16 = py / window_height;
+    
+    // Calculate window start position
+    const window_st_x: u16 = window_idx_x * window_width;
+    const window_st_y: u16 = window_idx_y * window_height;
+    
+    // Check if this PE is at the window's top-left corner
+    return (px == window_st_x) and (py == window_st_y);
 }
 
 fn f_tic() void {
@@ -158,8 +169,8 @@ fn f_init_spmv(level_id:u16) void {
     // hops - keep as immediate neighbors for 7-point stencil
     hops = factor;
     // window(restriction window)
-    restriction_window_width = @as(u16, math_lib.pow(const_2, @as(f16, factor + 1))); // window size = 2^(factor + 1)
-    restriction_window_height = @as(u16, math_lib.pow(const_2, @as(f16, factor + 1)));    
+    restriction_window_width = @as(u16, math_lib.pow(const_2, @as(f16, level_id + 1))); // window size = 2^(factor + 1)
+    restriction_window_height = @as(u16, math_lib.pow(const_2, @as(f16, level_id + 1)));    
     // total active inside window(always fixed)
     active_pes_in_restriction_window_x = 2;
     active_pes_in_restriction_window_y = 2;
@@ -174,7 +185,12 @@ fn f_init_spmv(level_id:u16) void {
 
     // Set hop-based communication parameters in the stencil module
     stencil_mod.setHopBasedParams(hops, factor, width, height);
-    reduce_mod.setReductionParams(width, height);
+    
+    // Configure windowed reduction: each window reduces independently
+    // Window size depends on the current level (2^(factor+1))
+    const window_w = @as(i16, restriction_window_width);
+    const window_h = @as(i16, restriction_window_height);
+    reduce_mod.setWindowedReductionParams(window_w, window_h);
 
     sys_mod.unblock_cmd_stream();
 }
@@ -205,12 +221,14 @@ fn f_restriction() void {
     // PE coordinates
     const pe_id_x: u16 = layout_mod.get_x_coord();
     const pe_id_y: u16 = layout_mod.get_y_coord(); 
-    if (is_top_left_of_restriction_window(pe_id_x, pe_id_y, width, height)) {
-    // if (layout_mod.get_x_coord() == @as(u16, width - 1) and layout_mod.get_y_coord() == @as(u16, height - 1)) {
+    
+    // Check if this PE is the top-left corner of its restriction window
+    if (is_top_left_of_restriction_window(pe_id_x, pe_id_y, restriction_window_width, restriction_window_height)) {
         var zindex: i16 = 0;
-        // var total_active_PEs = @as(f32, active_pes_in_restriction_window_x * active_pes_in_restriction_window_y);
-        var total_active_PEs = @as(f32, width * height);
-        // Divide all Z dimensions
+        // Total PEs in the restriction window (for now, sum all PEs in window)
+        // Later can be refined to only count active PEs
+        var total_active_PEs = @as(f32, restriction_window_width * restriction_window_height);
+        // Divide all Z dimensions by total PEs in window
         while(zindex < MAX_ZDIM) : (zindex +=1) {
             reduced_result[zindex] = reduced_result[zindex] / total_active_PEs ;
         }

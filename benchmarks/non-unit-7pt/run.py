@@ -215,7 +215,7 @@ def main():
   y_ref = np.zeros((height, width, pe_length), dtype=np.float32)
   # Use hop-based laplacian to match WSE implementation
   # Active PEs are determined by factor, neighbors are immediate (hops=1)
-  level_id = 0
+  level_id = 2
   factor = 2**level_id  # factor = 2 (determines which PEs are active)
   hops = factor  # immediate neighbors for 7-point stencil
   laplacian(stencil_coeff, zDim, x, y_ref, hops=hops, factor=factor)
@@ -329,7 +329,7 @@ def main():
   # positive zDim can be smaller than pe_length
   runner.launch("f_init_spmv", np.uint16(level_id), nonblock=False)
   runner.launch("f_reduction_top_left_pattern", np.int16(zDim), nonblock=False)
-  runner.launch("f_restriction", nonblock=False)
+  # runner.launch("f_restriction", nonblock=False)
   runner.launch("f_spmv", np.int16(zDim), nonblock=False)
 
   print("step 4: toc() records time_end")

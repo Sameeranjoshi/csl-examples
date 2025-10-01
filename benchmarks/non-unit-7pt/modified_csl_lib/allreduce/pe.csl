@@ -161,26 +161,55 @@ const math_lib = @import_module("<math>");
 const layout_mod = @import_module("<layout>");
 const simprint = @import_module("<simprint>", .{.enable = true});
 
-// Runtime-configurable reduction parameters (width/height and edge flags)
-// These mirror the params but can be updated at runtime similar to hop-based params in stencil
-var width_rt: i16 = 1;
-var height_rt: i16 = 1;
-var first_px_rt: bool = false; // (0 == px)
-var last_px_rt: bool = false;  // ((width_rt-1) == px)
-var first_py_rt: bool = false; // (0 == py)
-var last_py_rt: bool = false;  // ((height_rt-1) == py)
+
+// Windowed reduction parameters
+var window_st_x: i16 = 0;       // Window start x coordinate
+var window_st_y: i16 = 0;       // Window start y coordinate  
+var window_end_x: i16 = 0;      // Window end x coordinate (inclusive)
+var window_end_y: i16 = 0;      // Window end y coordinate (inclusive)
+var restriction_window_width: i16 = 1;
+var restriction_window_height: i16 = 1;
+var is_active_for_reduction: bool = true;  // Is this PE active in current reduction?
+var is_window_boundary_x_start: bool = false;  // PE is at window start in x
+var is_window_boundary_x_end: bool = false;    // PE is at window end in x
+var is_window_boundary_y_start: bool = false;  // PE is at window start in y
+var is_window_boundary_y_end: bool = false;    // PE is at window end in y
 
 // Configure runtime reduction parameters (call from kernel)
 // Sets width/height and per-PE edge flags; reduction then targets bottom-right PE
-fn setReductionParams(w: i16, h: i16) void {
-    width_rt = w;
-    height_rt = h;
+
+
+// Configure windowed reduction parameters for GMG restriction
+// Each window performs reduction independently, targeting its top-left corner
+// window_width, window_height: Size of each restriction window
+// factor: Determines window spacing (2^factor)
+fn setWindowedReductionParams(window_width: i16, window_height: i16) void {
+    restriction_window_width = window_width;
+    restriction_window_height = window_height;
+    
     const px: i16 = @as(i16, layout_mod.get_x_coord());
     const py: i16 = @as(i16, layout_mod.get_y_coord());
-    first_px_rt = (0 == px);
-    last_px_rt = (px == (w - 1));
-    first_py_rt = (0 == py);
-    last_py_rt = (py == (h - 1));
+    
+    // Calculate which window this PE belongs to
+    // Windows are tiled across the mesh: [0..win_w)[win_w..2*win_w)...
+    const window_idx_x: i16 = px / window_width;
+    const window_idx_y: i16 = py / window_height;
+    
+    // Calculate window boundaries
+    window_st_x = window_idx_x * window_width;
+    window_st_y = window_idx_y * window_height;
+    window_end_x = window_st_x + window_width - 1;
+    window_end_y = window_st_y + window_height - 1;
+    
+    // Check if PE is within its window (should always be true for tiled windows)
+    // is_active_for_reduction = (px >= window_st_x) and (px <= window_end_x) and
+    //                           (py >= window_st_y) and (py <= window_end_y);
+    
+    // Determine window boundary positions for this PE
+    is_window_boundary_x_start = (px == window_st_x);
+    is_window_boundary_x_end = (px == window_end_x);
+    is_window_boundary_y_start = (py == window_st_y);
+    is_window_boundary_y_end = (py == window_end_y);
 }
 
 // A new type for binary operators
@@ -495,11 +524,11 @@ task f_state_entry() void {
     }else if (STATE_ROW_REDUCE_REVERSE == cur_state){
         // Reverse row reduction: right-to-left (EAST to WEST)
         rowReduceReverse_configure();
-        // perform reverse row reduction and store the result to first PE (px=0)
-        // last PE (px=width-1) will send TD to turn C_ROUTE back to teardown mode
-        reduce_pes = width-1;
-        reduce_first_pe = last_px;   // rightmost PE sends first
-        reduce_last_pe = first_px;   // leftmost PE receives
+        // perform reverse row reduction and store the result to window start PE
+        // Window end PE sends TD to turn C_ROUTE back to teardown mode
+        reduce_pes = restriction_window_width - 1;
+        reduce_first_pe = is_window_boundary_x_end;   // window rightmost PE sends first
+        reduce_last_pe = is_window_boundary_x_start;  // window leftmost PE receives
         reduce( wvlts_per_pe );
 
         // prefetch next state which will be copied into cur_state in teardown handler
@@ -509,11 +538,11 @@ task f_state_entry() void {
     }else if (STATE_COL_REDUCE_REVERSE == cur_state){
         // Reverse column reduction: bottom-to-top (SOUTH to NORTH)
         colReduceReverse_configure();
-        // perform reverse column reduction and store the result to first PE (py=0)
-        // last PE (py=height-1) will send TD to turn C_ROUTE back to teardown mode
-        reduce_pes = height-1;
-        reduce_first_pe = last_py;   // bottommost PE sends first
-        reduce_last_pe = first_py;   // topmost PE receives
+        // perform reverse column reduction and store the result to window start PE
+        // Window end PE sends TD to turn C_ROUTE back to teardown mode
+        reduce_pes = restriction_window_height - 1;
+        reduce_first_pe = is_window_boundary_y_end;   // window bottommost PE sends first
+        reduce_last_pe = is_window_boundary_y_start;  // window topmost PE receives
         reduce( wvlts_per_pe );
 
         // prefetch next state which will be copied into cur_state in teardown handler
@@ -975,22 +1004,22 @@ fn colReduce_configure() void {
 
 
 // Reverse row reduction: right-to-left (EAST to WEST)
-// Final result in px=0 (leftmost PE)
+// Final result in window start x (leftmost PE of each window)
 fn rowReduceReverse_configure() void {
 
     // (1) setup the new routing first because the pos1 needs to inherit from pos0
     const addr = color_config.get_color_config_addr(C_ROUTE);
 
-    if (last_px){
-        // rightmost PE (px=width-1) sends data westward
+    if (is_window_boundary_x_end){
+        // window rightmost PE sends data westward
         // .rx = .{ RAMP },.tx = .{ WEST },
         color_config.reset_routes(addr, .{.tx = WEST, .rx = RAMP});
-    }else if (first_px){
-        // leftmost PE (px=0) only receives data from east
+    }else if (is_window_boundary_x_start){
+        // window leftmost PE only receives data from east
         // .rx = .{ EAST }, .tx = .{ RAMP },
         color_config.reset_routes(addr, .{.tx = RAMP, .rx = EAST});
     }else{
-        // middle PEs: receive from east, send to west
+        // middle PEs within window: receive from east, send to west
         // .rx = .{ EAST }, .tx = .{ WEST },
         color_config.reset_routes(addr, .{.tx = WEST, .rx = EAST});
     }
@@ -999,8 +1028,8 @@ fn rowReduceReverse_configure() void {
     switch_config.clear_current_position(C_ROUTE);
     switch_config.set_invalid_for_all_switch_positions(C_ROUTE);
 
-    if (first_px){
-        // leftmost PE (receiver) does not have pos1
+    if (is_window_boundary_x_start){
+        // window leftmost PE (receiver) or inactive PEs do not have pos1
     }else{
         // others have ".pos1 = .{ .rx = RAMP }"
         switch_config.set_rx_switch_pos1(C_ROUTE, RAMP);
@@ -1012,22 +1041,22 @@ fn rowReduceReverse_configure() void {
 
 
 // Reverse column reduction: bottom-to-top (SOUTH to NORTH)
-// Final result in py=0 (topmost PE)
+// Final result in window start y (topmost PE of each window)
 fn colReduceReverse_configure() void {
 
     // (1) setup the new routing first because the pos1 needs to inherit from pos0
     const addr = color_config.get_color_config_addr(C_ROUTE);
 
-    if (last_py){
-        // bottommost PE (py=height-1) sends data northward
+    if (is_window_boundary_y_end){
+        // window bottommost PE sends data northward
         // .rx = .{ RAMP },.tx = .{ NORTH },
         color_config.reset_routes(addr, .{.tx = NORTH, .rx = RAMP});
-    }else if (first_py){
-        // topmost PE (py=0) only receives data from south
+    }else if (is_window_boundary_y_start){
+        // window topmost PE only receives data from south
         // .rx = .{ SOUTH }, .tx = .{ RAMP },
         color_config.reset_routes(addr, .{.tx = RAMP, .rx = SOUTH});
     }else{
-        // middle PEs: receive from south, send to north
+        // middle PEs within window: receive from south, send to north
         // .rx = .{ SOUTH }, .tx = .{ NORTH },
         color_config.reset_routes(addr, .{.tx = NORTH, .rx = SOUTH});
     }
@@ -1036,8 +1065,8 @@ fn colReduceReverse_configure() void {
     switch_config.clear_current_position(C_ROUTE);
     switch_config.set_invalid_for_all_switch_positions(C_ROUTE);
 
-    if (first_py){
-        // topmost PE (receiver) does not have pos1
+    if (is_window_boundary_y_start){
+        // window topmost PE (receiver) or inactive PEs do not have pos1
     }else{
         // others have ".pos1 = .{ .rx = RAMP }"
         switch_config.set_rx_switch_pos1(C_ROUTE, RAMP);
