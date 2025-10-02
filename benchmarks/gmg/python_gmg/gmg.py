@@ -75,10 +75,10 @@ class SimpleGMG:
             
             grid = {
                 'nx': nx, 'ny': ny, 'nz': nz, 'h': h,
-                'u': np.ones((nz, ny, nx), dtype=DTYPE),      # Solution
-                'f': np.zeros((nz, ny, nx), dtype=DTYPE),      # Right-hand side
-                'r': np.zeros((nz, ny, nx), dtype=DTYPE),      # Residual
-                'Au': np.zeros((nz, ny, nx), dtype=DTYPE)      # A*u
+                'u': np.ones((nx, ny, nz), dtype=DTYPE),      # Solution
+                'f': np.zeros((nx, ny, nz), dtype=DTYPE),      # Right-hand side
+                'r': np.zeros((nx, ny, nz), dtype=DTYPE),      # Residual
+                'Au': np.zeros((nx, ny, nz), dtype=DTYPE)      # A*u
             }
             grids.append(grid)
             
@@ -95,7 +95,7 @@ class SimpleGMG:
 
         print("\nData Structures at Each Level:")
         print("=" * 120)
-        print(f"{'Level':<6} {'Grid Size (nx×ny×nz)':<22} {'u shape (nz,ny,nx)':<22} "
+        print(f"{'Level':<6} {'Grid Size (nx×ny×nz)':<22} {'u shape (nx,ny,nz)':<22} "
             f"{'f shape':<15} {'r shape':<15} {'Au shape':<15} {'Stencil':<20}")
         print("-" * 120)
 
@@ -112,7 +112,7 @@ class SimpleGMG:
 
         print("-" * 120)
         print("Legend:")
-        print("  Arrays are stored as (nz, ny, nx) = (z, y, x)")
+        print("  Arrays are stored as (nx, ny, nz) = (x, y, z)")
         print("-" * 120)
         print("Legend:")
         print("  u     = Solution vector (unknown)")
@@ -201,7 +201,7 @@ class SimpleGMG:
             x = np.linspace(0, 1, nx, dtype=DTYPE)
             y = np.linspace(0, 1, ny, dtype=DTYPE)
             z = np.linspace(0, 1, nz, dtype=DTYPE)
-            X, Y, Z = np.meshgrid(z, y, x, indexing='ij')
+            X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
             
             # Simple test function: f = sin(πx)sin(πy)sin(πz)
             pi = DTYPE(np.pi)
@@ -220,23 +220,23 @@ class SimpleGMG:
         # Clear Au
         Au.fill(0.0)
 
-        for k in range(nz):
+        for i in range(nx):
             for j in range(ny):
-                for i in range(nx):
-                    val = alpha * u[k, j, i]
+                for k in range(nz):
+                    val = alpha * u[i, j, k]
 
                     # west/east
-                    if i > 0:      val += beta * u[k, j, i-1]
-                    if i < nx-1:   val += beta * u[k, j, i+1]
+                    if i > 0:      val += beta * u[i-1, j, k]
+                    if i < nx-1:   val += beta * u[i+1, j, k]
 
                     # south/north
-                    if j > 0:      val += beta * u[k, j-1, i]
-                    if j < ny-1:   val += beta * u[k, j+1, i]
+                    if j > 0:      val += beta * u[i, j-1, k]
+                    if j < ny-1:   val += beta * u[i, j+1, k]
 
                     # bottom/top
-                    if k > 0:      val += beta * u[k-1, j, i]
-                    if k < nz-1:   val += beta * u[k+1, j, i]
-                    Au[k, j, i] = val / (h*h)
+                    if k > 0:      val += beta * u[i, j, k-1]
+                    if k < nz-1:   val += beta * u[i, j, k+1]
+                    Au[i, j, k] = val / (h*h)
 
 
     def compute_residual(self, level: int):
@@ -280,7 +280,7 @@ class SimpleGMG:
         fine = self.grids[fine_level]
         coarse = self.grids[fine_level + 1]
         
-        fine_r = fine['r'] # (nz, ny, nx)
+        fine_r = fine['r'] # (nx, ny, nz)
         coarse_f = coarse['f']
         
         # If same size, just copy
@@ -290,31 +290,19 @@ class SimpleGMG:
             coarse_f[:] = fine_r[:]
             return
         
-        # # Semicoarsening: average 4 fine points in 2D to 1 coarse point
-        # # Keep z dimension unchanged (no reduction in z)
-        # # Simple: reduce over x and y for all z dimensions
-        # for k in range(coarse['nz']):  # z dimension stays the same
-        #     for j in range(coarse['ny']):
-        #         for i in range(coarse['nx']):
-        #             fi, fj = 2*i, 2*j  # Only double x,y coordinates
-        #             fk = k  # z coordinate stays the same
-        #             print(f"Coarse: coarse_f[{k}, {j}, {i}]: {coarse_f[k, j, i]}")
-        #             print(f"Fine: fine_r[{fk}, {fj}, {fi}]: {fine_r[fk, fj, fi]}")
-        #             # Average 4 neighboring fine points in 2D (x,y plane)
-        #             coarse_f[k, j, i] = (
-        #                 fine_r[fk, fj, fi] + fine_r[fk, fj, fi+1] +
-        #                 fine_r[fk, fj+1, fi] + fine_r[fk, fj+1, fi+1]
-        #             ) / 4.0
-        Zdim, Ydim, Xdim = coarse_f.shape
-        fineY = 2*Ydim
+        # Semicoarsening: average 4 fine points in 2D to 1 coarse point
+        # Keep z dimension unchanged (no reduction in z)
+        # Simple: reduce over x and y for all z dimensions
+        Xdim, Ydim, Zdim = coarse_f.shape
         fineX = 2*Xdim
+        fineY = 2*Ydim
         # restrict only 2x2 blocks as in python side we make data dense.
         # Average 2x2 blocks in x,y for all z
         coarse_f[:] = (
-            fine_r[:, 0:fineY:2, 0:fineX:2] +
-            fine_r[:, 0:fineY:2, 1:fineX:2] +
-            fine_r[:, 1:fineY:2, 0:fineX:2] +
-            fine_r[:, 1:fineY:2, 1:fineX:2]
+            fine_r[0:fineX:2, 0:fineY:2, :] +
+            fine_r[0:fineX:2, 1:fineY:2, :] +
+            fine_r[1:fineX:2, 0:fineY:2, :] +
+            fine_r[1:fineX:2, 1:fineY:2, :]
         ) / 4.0
 
 
@@ -335,16 +323,16 @@ class SimpleGMG:
         
         # Semicoarsening interpolation: copy coarse value to 4 fine points in 2D
         # Keep z dimension unchanged (no interpolation in z)
-        for k in range(coarse['nz']):  # z dimension stays the same
+        for i in range(coarse['nx']):
             for j in range(coarse['ny']):
-                for i in range(coarse['nx']):
+                for k in range(coarse['nz']):
                     fi, fj = 2*i, 2*j  # Only double x,y coordinates
                     fk = k  # z coordinate stays the same
                     coarse_val = coarse_u[i, j, k]
                     
                     # Add coarse value to 4 fine points in 2D (x,y plane)
-                    for dj in [0, 1]:
-                        for di in [0, 1]:
+                    for di in [0, 1]:
+                        for dj in [0, 1]:
                             if (fi+di < fine['nx'] and fj+dj < fine['ny'] and fk < fine['nz']):
                                 fine_u[fi+di, fj+dj, fk] += coarse_val
 

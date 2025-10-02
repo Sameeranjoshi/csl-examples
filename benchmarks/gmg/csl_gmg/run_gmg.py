@@ -74,6 +74,31 @@ def csl_compile_core(
   else:
     print("\tuse pre-compile ELFs")
 
+def subsample_activenodes_only(input_array_2d, level=0):
+    """
+    Subsamples a 2D array (a single z-layer) based on a factor derived from the level.
+
+    An element at index (x, y) is kept if:
+    (x % factor == 0) and (y % factor == 0)
+
+    Args:
+        input_array_2d (np.ndarray): The 2D layer (nx, ny) to subsample.
+        level (int): The current level of resolution, used to calculate the factor.
+
+    Returns:
+        np.ndarray: The subsampled 2D array.
+    """
+    # 1. Calculate the factor
+    factor = 2**(level)
+    print(f"Calculated subsampling factor (2^(level)): {factor}")
+
+    # 2. Perform subsampling using NumPy slicing.
+    # [::factor] selects every 'factor'-th element starting from index 0.
+    # This precisely implements the (x % factor == 0) and (y % factor == 0) condition.
+    subsampled_array = input_array_2d[::factor, ::factor]
+
+    return subsampled_array
+
 def calculate_fabric_dimensions(args, width, height, width_west_buf, width_east_buf):
   """Calculate fabric dimensions based on core size and buffers"""
 
@@ -210,8 +235,6 @@ def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order
     # print the residual by memcpy_d2h
     print("Step 3: Print residual before its changed")
     residual_3d = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_r)
-    print(residual_3d[:, :, 0])
-    print("\n")
 
     # # Restriction (for now, just copy)
     print("Step 5: Restriction")
@@ -291,8 +314,8 @@ def main():
     # Initialize data
     print("Initializing data...")
     # device_grid = device_solver.get_grids() # Already has data filled and shapes initialized.
-    u_hwl = np.transpose(device_solver.grids[LEVEL_ID]['u'], (1, 2, 0))  # (ny, nx, nz) -> (height, width, zDim)
-    f_hwl = np.transpose(device_solver.grids[LEVEL_ID]['f'], (1, 2, 0))  # Change order because CSL expects (height, width, zDim), numpy is (zDim, height, width)
+    u_hwl = device_solver.grids[LEVEL_ID]['u']  # (nx, ny, nz) -> (height, width, zDim) - no transpose needed
+    f_hwl = device_solver.grids[LEVEL_ID]['f']  # (nx, ny, nz) -> (height, width, zDim) - no transpose needed
     # order: {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
     stencil_coeff = np.zeros((height, width, 7), dtype=DTYPE)  # 3D-7pt
     h = device_solver.grids[LEVEL_ID]['h']
@@ -342,27 +365,32 @@ def main():
     print("Copying results back...")
     u_result_3d, b_next_3d = copy_data_d2h_3d(width, height, zDim, memcpy_dtype, memcpy_order, simulator, 
     symbol_u, symbol_b_next)
+    # b needs special treatment as shapes reduce.
+    b_next_3d = subsample_activenodes_only(b_next_3d, LEVEL_ID + 1) # Why +1 because we want active nodes in the next level 
 
-  
-    # Verify
-    first_smooth_u = np.transpose(first_smooth_u, (1, 2, 0))
-    first_residual = np.transpose(first_residual, (1, 2, 0))
-    second_b_next = np.transpose(second_b_next, (1, 2, 0))
-    np.testing.assert_allclose(u_result_3d, first_smooth_u, atol=1e-4, rtol=1e-4)
-    np.testing.assert_allclose(r_result_3d, first_residual, atol=1e-4, rtol=1e-4)
-    # np.testing.assert_allclose(b_next_3d, second_b_next, atol=1e-4, rtol=1e-4)
+    # Verify - no transposes needed since we're using consistent (nx, ny, nz) ordering
+    np.testing.assert_allclose(u_result_3d, first_smooth_u, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(r_result_3d, first_residual, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(b_next_3d, second_b_next, atol=1e-5, rtol=1e-5)
 
-    # Print only the first layer (k=0) for u_result_3d, r_result_3d, and b_next_3d
+    # print("u_result_3d (first z-layer, k=0):")
+    # print(u_result_3d[:, :, 0])
+    # print("\n")
 
-    print("b_next_3d (layer 0):")
+    # print("r_result_3d (first z-layer, k=0):")
+    # print(r_result_3d[:, :, 0])
+    # print("\n")
+
+    print("b_next_3d (first z-layer, k=0):")
     print(b_next_3d[:, :, 0])
     print("\n")
 
-    print("second_b_next (layer 0):")
-    print(second_b_next[:, :, 0])
-    print("\n")
 
     print("SUCCESS!")
+
+    # print(first_smooth_u[:, :, 0])
+    # print(first_residual[:, :, 0])
+    print(second_b_next[:, :, 0])
       # clean up
     simulator.stop()
 
