@@ -283,7 +283,7 @@ def main():
     # # Compile the kernel
     # layout_file = "./src/layout_gmg.csl"
     # # This is used when user doesn't use a compile command first.
-    # csl_compile_core(cslc=cslc, width=width, height=height, pe_length=pe_length, blockSize=args.blockSize, file_config=layout_file,
+    # csl_compile_core(=cslc, width=width, height=height, pe_length=pe_length, blockSize=args.blockSize, file_config=layout_file,
     #     elf_dir=logs_dir, fabric_width=fabric_width, fabric_height=fabric_height, core_fabric_offset_x=core_fabric_offset_x, core_fabric_offset_y=core_fabric_offset_y, use_precompile=args.run_only,
     #     arch=args.arch if args.arch else "wse2", C0=0, C1=1, C2=2, C3=3, C4=4, C5=5, C6=6, C7=7, C8=8, channels=args.channels, 
     #     width_west_buf=args.width_west_buf, width_east_buf=args.width_east_buf, levels=args.levels)
@@ -312,7 +312,7 @@ def main():
     # Create simulator
     memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
     memcpy_order = MemcpyOrder.COL_MAJOR
-    simulator = SdkRuntime(logs_dir, cmaddr=args.cmaddr)
+    simulator = SdkRuntime(logs_dir, cmaddr=args.cmaddr, msg_level="INFO")
 
     # Get symbols
     symbol_u = simulator.get_id("u")  # solution vector
@@ -353,24 +353,9 @@ def main():
     # np.testing.assert_allclose(b_next_3d, second_b_next, atol=1e-4, rtol=1e-4)
 
     # Print only the first layer (k=0) for u_result_3d, r_result_3d, and b_next_3d
-    print("u_result_3d (layer 0):")
-    print(u_result_3d[:, :, 0])
-    print("\n")
-
-    print("r_result_3d (layer 0):")
-    print(r_result_3d[:, :, 0])
-    print("\n")
 
     print("b_next_3d (layer 0):")
     print(b_next_3d[:, :, 0])
-    print("\n")
-
-    print("first_smooth_u (layer 0):")
-    print(first_smooth_u[:, :, 0])
-    print("\n")
-
-    print("first_residual (layer 0):")
-    print(first_residual[:, :, 0])
     print("\n")
 
     print("second_b_next (layer 0):")
