@@ -90,7 +90,6 @@ def subsample_activenodes_only(input_array_2d, level=0):
     """
     # 1. Calculate the factor
     factor = 2**(level)
-    print(f"Calculated subsampling factor (2^(level)): {factor}")
 
     # 2. Perform subsampling using NumPy slicing.
     # [::factor] selects every 'factor'-th element starting from index 0.
@@ -232,8 +231,7 @@ def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order
     print("Step 2: Compute residual")
     residual_operator(simulator)
 
-    # print the residual by memcpy_d2h
-    print("Step 3: Print residual before its changed")
+    # get the residual by memcpy_d2h before changed by restrict operator
     residual_3d = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_r)
 
     # # Restriction (for now, just copy)
@@ -368,10 +366,13 @@ def main():
     # b needs special treatment as shapes reduce.
     b_next_3d = subsample_activenodes_only(b_next_3d, LEVEL_ID + 1) # Why +1 because we want active nodes in the next level 
 
+    # clean up
+    simulator.stop()
+
     # Verify - no transposes needed since we're using consistent (nx, ny, nz) ordering
-    np.testing.assert_allclose(u_result_3d, first_smooth_u, atol=1e-5, rtol=1e-5)
-    np.testing.assert_allclose(r_result_3d, first_residual, atol=1e-5, rtol=1e-5)
-    np.testing.assert_allclose(b_next_3d, second_b_next, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(u_result_3d, first_smooth_u, atol=0, rtol=1e-5)
+    np.testing.assert_allclose(r_result_3d, first_residual, atol=0, rtol=1e-5)
+    np.testing.assert_allclose(b_next_3d, second_b_next, atol=0, rtol=1e-5)
 
     # print("u_result_3d (first z-layer, k=0):")
     # print(u_result_3d[:, :, 0])
@@ -391,8 +392,7 @@ def main():
     # print(first_smooth_u[:, :, 0])
     # print(first_residual[:, :, 0])
     print(second_b_next[:, :, 0])
-      # clean up
-    simulator.stop()
+
 
 if __name__ == "__main__":
     main()
