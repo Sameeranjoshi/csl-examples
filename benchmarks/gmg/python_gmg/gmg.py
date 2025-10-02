@@ -60,14 +60,15 @@ class SimpleGMG:
             self._print_initialization_info()
         
     def _create_grids(self):
-        """Create simple grid hierarchy"""
+        """Create simple grid hierarchy with semicoarsening (z dimension preserved)"""
         grids = []
         
         for level in range(self.num_levels):
             # Calculate dimensions for this level
+            # Semicoarsening: only reduce x and y dimensions, keep z dimension
             nx = max(1, self.nx // (2 ** level))
             ny = max(1, self.ny // (2 ** level))
-            nz = max(1, self.nz // (2 ** level))
+            nz = self.nz  # Keep z dimension unchanged for semicoarsening
             
             # Grid spacing
             h = 1.0 / max(nx - 1, 1)
@@ -89,32 +90,29 @@ class SimpleGMG:
         print("=" * 50)
         for level, grid in enumerate(self.grids):
             print(f"Level {level:2d}: {grid['nx']:3d} x {grid['ny']:3d} x {grid['nz']:3d} "
-                  f"(h = {grid['h']:.6f}, points = {grid['nx']*grid['ny']*grid['nz']:,})")
+                f"(h = {grid['h']:.6f}, points = {grid['nx']*grid['ny']*grid['nz']:,})")
         print("=" * 50)
-        
+
         print("\nData Structures at Each Level:")
         print("=" * 120)
-        print(f"{'Level':<6} {'Grid Size':<12} {'u (solution)':<15} {'f (RHS)':<15} {'r (residual)':<15} {'Au (operator)':<15} {'Stencil':<20}")
+        print(f"{'Level':<6} {'Grid Size (nx×ny×nz)':<22} {'u shape (nz,ny,nx)':<22} "
+            f"{'f shape':<15} {'r shape':<15} {'Au shape':<15} {'Stencil':<20}")
         print("-" * 120)
-        
+
         for level, grid in enumerate(self.grids):
             nx, ny, nz = grid['nx'], grid['ny'], grid['nz']
             grid_size = f"{nx}×{ny}×{nz}"
-            
-            # Data structure shapes
-            u_shape = f"({nx},{ny},{nz})"
-            f_shape = f"({nx},{ny},{nz})"
-            r_shape = f"({nx},{ny},{nz})"
-            au_shape = f"({nx},{ny},{nz})"
-            
-            # Stencil information
-            if level == 0:
-                stencil_info = "7-point Poisson"
-            else:
-                stencil_info = "7-point Poisson"
-            
-            print(f"{level:<6} {grid_size:<12} {u_shape:<15} {f_shape:<15} {r_shape:<15} {au_shape:<15} {stencil_info:<20}")
-        
+            u_shape  = str(grid['u'].shape)
+            f_shape  = str(grid['f'].shape)
+            r_shape  = str(grid['r'].shape)
+            au_shape = str(grid['Au'].shape)
+            stencil_info = "7-point Poisson"
+            print(f"{level:<6} {grid_size:<22} {u_shape:<22} {f_shape:<15} "
+                f"{r_shape:<15} {au_shape:<15} {stencil_info:<20}")
+
+        print("-" * 120)
+        print("Legend:")
+        print("  Arrays are stored as (nz, ny, nx) = (z, y, x)")
         print("-" * 120)
         print("Legend:")
         print("  u     = Solution vector (unknown)")
@@ -203,7 +201,7 @@ class SimpleGMG:
             x = np.linspace(0, 1, nx, dtype=DTYPE)
             y = np.linspace(0, 1, ny, dtype=DTYPE)
             z = np.linspace(0, 1, nz, dtype=DTYPE)
-            X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
+            X, Y, Z = np.meshgrid(z, y, x, indexing='ij')
             
             # Simple test function: f = sin(πx)sin(πy)sin(πz)
             pi = DTYPE(np.pi)
@@ -278,11 +276,11 @@ class SimpleGMG:
             u[:] += update[:]  # update all cells, boundary handled by apply_operator
     
     def restrict(self, fine_level: int):
-        """Full weighting restriction"""
+        """Semicoarsening restriction - only reduce in 2D (x,y), keep z dimension"""
         fine = self.grids[fine_level]
         coarse = self.grids[fine_level + 1]
         
-        fine_r = fine['r']
+        fine_r = fine['r'] # (nz, ny, nx)
         coarse_f = coarse['f']
         
         # If same size, just copy
@@ -292,26 +290,36 @@ class SimpleGMG:
             coarse_f[:] = fine_r[:]
             return
         
-        # Full weighting: average 8 fine points to 1 coarse point
-        for k in range(coarse['nz']):
-            for j in range(coarse['ny']):
-                for i in range(coarse['nx']):
-                    fi, fj, fk = 2*i, 2*j, 2*k
-                    
-                    # Average 8 neighboring fine points
-                    # only interior points
-                    if (fi+1 < fine['nx'] and fj+1 < fine['ny'] and fk+1 < fine['nz']):
-                        coarse_f[k, j, i] = (
-                            fine_r[fk, fj, fi] + fine_r[fk, fj, fi+1] +
-                            fine_r[fk, fj+1, fi] + fine_r[fk, fj+1, fi+1] +
-                            fine_r[fk+1, fj, fi] + fine_r[fk+1, fj, fi+1] +
-                            fine_r[fk+1, fj+1, fi] + fine_r[fk+1, fj+1, fi+1]
-                        ) / 8.0
-                    else:
-                        coarse_f[k, j, i] = fine_r[fk, fj, fi]
-    
+        # # Semicoarsening: average 4 fine points in 2D to 1 coarse point
+        # # Keep z dimension unchanged (no reduction in z)
+        # # Simple: reduce over x and y for all z dimensions
+        # for k in range(coarse['nz']):  # z dimension stays the same
+        #     for j in range(coarse['ny']):
+        #         for i in range(coarse['nx']):
+        #             fi, fj = 2*i, 2*j  # Only double x,y coordinates
+        #             fk = k  # z coordinate stays the same
+        #             print(f"Coarse: coarse_f[{k}, {j}, {i}]: {coarse_f[k, j, i]}")
+        #             print(f"Fine: fine_r[{fk}, {fj}, {fi}]: {fine_r[fk, fj, fi]}")
+        #             # Average 4 neighboring fine points in 2D (x,y plane)
+        #             coarse_f[k, j, i] = (
+        #                 fine_r[fk, fj, fi] + fine_r[fk, fj, fi+1] +
+        #                 fine_r[fk, fj+1, fi] + fine_r[fk, fj+1, fi+1]
+        #             ) / 4.0
+        Zdim, Ydim, Xdim = coarse_f.shape
+        fineY = 2*Ydim
+        fineX = 2*Xdim
+        # restrict only 2x2 blocks as in python side we make data dense.
+        # Average 2x2 blocks in x,y for all z
+        coarse_f[:] = (
+            fine_r[:, 0:fineY:2, 0:fineX:2] +
+            fine_r[:, 0:fineY:2, 1:fineX:2] +
+            fine_r[:, 1:fineY:2, 0:fineX:2] +
+            fine_r[:, 1:fineY:2, 1:fineX:2]
+        ) / 4.0
+
+
     def interpolate(self, coarse_level: int):
-        """Linear interpolation"""
+        """Semicoarsening interpolation - only interpolate in 2D (x,y), keep z dimension"""
         coarse = self.grids[coarse_level]
         fine = self.grids[coarse_level - 1]
         
@@ -325,19 +333,39 @@ class SimpleGMG:
             fine_u[:] += coarse_u[:]
             return
         
-        # Linear interpolation: copy coarse value to 8 fine points
-        for k in range(coarse['nz']):
+        # Semicoarsening interpolation: copy coarse value to 4 fine points in 2D
+        # Keep z dimension unchanged (no interpolation in z)
+        for k in range(coarse['nz']):  # z dimension stays the same
             for j in range(coarse['ny']):
                 for i in range(coarse['nx']):
-                    fi, fj, fk = 2*i, 2*j, 2*k
-                    coarse_val = coarse_u[k, j, i]
+                    fi, fj = 2*i, 2*j  # Only double x,y coordinates
+                    fk = k  # z coordinate stays the same
+                    coarse_val = coarse_u[i, j, k]
                     
-                    # Add coarse value to 8 fine points
-                    for dk in [0, 1]:
-                        for dj in [0, 1]:
-                            for di in [0, 1]:
-                                if (fi+di < fine['nx'] and fj+dj < fine['ny'] and fk+dk < fine['nz']):
-                                    fine_u[fk+dk, fj+dj, fi+di] += coarse_val
+                    # Add coarse value to 4 fine points in 2D (x,y plane)
+                    for dj in [0, 1]:
+                        for di in [0, 1]:
+                            if (fi+di < fine['nx'] and fj+dj < fine['ny'] and fk < fine['nz']):
+                                fine_u[fi+di, fj+dj, fk] += coarse_val
+
+    # def interpolate(self, coarse_level: int):
+    #     """Semicoarsening interpolation: expand in x,y by 2, keep z unchanged."""
+    #     coarse = self.grids[coarse_level]     # (nz, Ny, Nx)
+    #     fine   = self.grids[coarse_level - 1] # (nz, ny, nx)
+
+    #     coarse_u = coarse['u']
+    #     fine_u   = fine['u']
+
+    #     # If sizes match, just add and return
+    #     if (fine['nx'] == coarse['nx'] and fine['ny'] == coarse['ny'] and fine['nz'] == coarse['nz']):
+    #         fine_u[:] += coarse_u[:]
+    #         return
+
+    #     Nz, Ny, Nx = coarse_u.shape
+
+    #     # Make a 2x upsampled block in y and x, then add into the matching fine region
+    #     up_yx = coarse_u.repeat(2, axis=1).repeat(2, axis=2)   # (nz, 2*Ny, 2*Nx)
+    #     fine_u[:, :2*Ny, :2*Nx] += up_yx
     
     def solve_coarse(self, level: int):
         """Solve on coarsest level using Jacobi"""

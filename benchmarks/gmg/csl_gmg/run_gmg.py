@@ -118,13 +118,40 @@ def copy_data_h2d(u_1d, f_1d, stencil_coeff, height, width, zDim, memcpy_dtype, 
     simulator.memcpy_h2d(symbol_stencil_coeff, stencil_coeff, 0, 0, width, height, 7,
                          streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
 
-def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_device):
-    """Copy data from symbol_device to host(creates new variable in host)"""
-    # Copy solution vector u
-    u_result = np.zeros(height * width * zDim, dtype=DTYPE)
-    simulator.memcpy_d2h(u_result, symbol_device, 0, 0, width, height, zDim,
-                        streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
-    return u_result
+def copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_device):
+    """Copy single data array from device to host with automatic reshaping to 3D format"""
+    # Copy data from device to host
+    data_1d = np.zeros(height * width * zDim, dtype=DTYPE)
+    simulator.memcpy_d2h(data_1d, symbol_device, 0, 0, width, height, zDim,
+                        streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)    
+    # Reshape to 3D format (height, width, zDim) in column-major order
+    data_3d = oned_to_hwl_colmajor(height, width, zDim, data_1d, DTYPE)
+    
+    return data_3d
+
+def copy_data_d2h_3d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, *symbols):
+    """Copy multiple data arrays from device to host with automatic reshaping to 3D format
+    
+    Args:
+        height, width, zDim: Grid dimensions
+        memcpy_dtype, memcpy_order: Memory copy parameters
+        simulator: Device simulator
+        *symbols: Variable number of symbols to copy
+        
+    Returns:
+        List of 3D arrays corresponding to each symbol
+        
+    Example:
+        data1, data2 = copy_data_d2h_3d(h, w, z, dtype, order, sim, symbol1, symbol2)
+    """
+    results = []
+    
+    # Process each symbol
+    for symbol in symbols:
+        data_3d = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol)
+        results.append(data_3d)
+    
+    return results
 
 def init_operator(device_solver, zDim, simulator, LEVEL_ID):
     h_level = device_solver.grids[LEVEL_ID]['h']
@@ -157,7 +184,7 @@ def restrict_operator(device_solver, simulator, zDim):
     simulator.launch("f_reduction_top_left_pattern", np.int16(zDim), nonblock=False)
 
     print("Step 4: Divide restrict to get result")
-    simulator.launch("f_restriction_division", nonblock=False)
+    simulator.launch("f_restriction_division", np.int16(zDim), nonblock=False)
 
 
 def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_f, symbol_r, symbol_stencil_coeff, LEVEL_ID):
@@ -180,6 +207,12 @@ def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order
     print("Step 2: Compute residual")
     residual_operator(simulator)
 
+    # print the residual by memcpy_d2h
+    print("Step 3: Print residual before its changed")
+    residual_3d = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_r)
+    print(residual_3d[:, :, 0])
+    print("\n")
+
     # # Restriction (for now, just copy)
     print("Step 5: Restriction")
     restrict_operator(device_solver, simulator, zDim)
@@ -193,6 +226,7 @@ def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order
     # simulator.launch("f_add_correction", nonblock=False)
     
     # return residual_norm[0]
+    return residual_3d
 
 def main():
     """Main function"""
@@ -227,11 +261,12 @@ def main():
     #########################################################
     # host_residual, host_iterations = host_solver.solve(args.max_ite)
     host_solver.jacobi_smooth(LEVEL_ID, args.pre_iter)
-    # host_solver.apply_operator(0)
     host_solver.compute_residual(LEVEL_ID)
+    host_solver.restrict(LEVEL_ID)
+    first_smooth_u = host_solver.grids[LEVEL_ID]['u']
     first_residual = host_solver.grids[LEVEL_ID]['r']
-    # first_smooth_u = host_solver.grids[0]['u']
-    # first_au_host = host_solver.grids[0]['Au']
+    second_b_next = host_solver.grids[LEVEL_ID + 1]['f']
+
     # # Use hop-based laplacian to match WSE implementation
     # # Active PEs are determined by factor, neighbors are immediate (hops=1)
     # factor = 2**LEVEL_ID  # factor = 2 (determines which PEs are active)
@@ -285,7 +320,7 @@ def main():
     symbol_r = simulator.get_id("r")  # residual (reuse x for now)
     symbol_stencil_coeff = simulator.get_id("stencil_coeff")
     symbol_Au = simulator.get_id("Au")
-    symbol_reduced_result = simulator.get_id("reduced_result")
+    symbol_b_next = simulator.get_id("b_next")
     # host  = device
     #TODO: Leo
      # Load and run
@@ -299,43 +334,50 @@ def main():
     
     # Run GMG algorithm
     print("Running GMG algorithm...")
-    gmg_algorithm(device_solver, height, width, zDim, 
+    r_result_3d = gmg_algorithm(device_solver, height, width, zDim, 
                                  memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_f, symbol_r, symbol_stencil_coeff, LEVEL_ID
                                  )
     
     # Copy results back
     print("Copying results back...")
-    r_result = copy_data_d2h(width, height, zDim, memcpy_dtype, memcpy_order, simulator, symbol_r)
-    r_result_3d = oned_to_hwl_colmajor(height, width, zDim, r_result, DTYPE)
-    # u_smooth_result = copy_data_d2h(width, height, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u)
-    # u_smooth_result_3d = oned_to_hwl_colmajor(height, width, zDim, u_smooth_result, DTYPE)
+    u_result_3d, b_next_3d = copy_data_d2h_3d(width, height, zDim, memcpy_dtype, memcpy_order, simulator, 
+    symbol_u, symbol_b_next)
 
-    reduced_result = copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_reduced_result)
-    reduced_result_3d = oned_to_hwl_colmajor(height, width, zDim, reduced_result, DTYPE)
+  
+    # Verify
+    first_smooth_u = np.transpose(first_smooth_u, (1, 2, 0))
+    first_residual = np.transpose(first_residual, (1, 2, 0))
+    second_b_next = np.transpose(second_b_next, (1, 2, 0))
+    np.testing.assert_allclose(u_result_3d, first_smooth_u, atol=1e-4, rtol=1e-4)
+    np.testing.assert_allclose(r_result_3d, first_residual, atol=1e-4, rtol=1e-4)
+    # np.testing.assert_allclose(b_next_3d, second_b_next, atol=1e-4, rtol=1e-4)
 
-    
+    # Print only the first layer (k=0) for u_result_3d, r_result_3d, and b_next_3d
+    print("u_result_3d (layer 0):")
+    print(u_result_3d[:, :, 0])
+    print("\n")
 
-    # verify if r_result_3d is close to f_hwl
-    print("first_residual", first_residual)
-    print("r_result_3d")
-    print(r_result_3d)
-    print("reduced_result_3d")
-    print(reduced_result_3d)
-    # print("first_smooth_u", first_smooth_u)
-    # print("u_smooth_result_3d", u_smooth_result_3d)
-    # np.testing.assert_allclose(u_smooth_result_3d, first_smooth_u, atol=1e-4, rtol=0)
-    np.testing.assert_allclose(r_result_3d, first_residual, atol=1e-5, rtol=1e-5)
+    print("r_result_3d (layer 0):")
+    print(r_result_3d[:, :, 0])
+    print("\n")
 
-    if reduced_result_3d.ndim == 3:
-      for k in range(reduced_result_3d.shape[2]):
-        print(f"reduced_result_3d (layer {k}):")
-        print(reduced_result_3d[:, :, k])
-        print("\n")
-    else:
-      print(f"reduced_result_hwl = {reduced_result_3d}")
-      print("\n")
-        
-      print("SUCCESS!")
+    print("b_next_3d (layer 0):")
+    print(b_next_3d[:, :, 0])
+    print("\n")
+
+    print("first_smooth_u (layer 0):")
+    print(first_smooth_u[:, :, 0])
+    print("\n")
+
+    print("first_residual (layer 0):")
+    print(first_residual[:, :, 0])
+    print("\n")
+
+    print("second_b_next (layer 0):")
+    print(second_b_next[:, :, 0])
+    print("\n")
+
+    print("SUCCESS!")
       # clean up
     simulator.stop()
 

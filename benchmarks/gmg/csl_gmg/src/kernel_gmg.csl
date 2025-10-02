@@ -80,14 +80,16 @@ var active_pes_in_restriction_window_y: u16 = 2;
 const rectangle = @get_rectangle();
 const width: u16 = rectangle.width; // This should be passed as a parameter or retrieved from somewhere
 const height: u16 = rectangle.height; // This should be passed as a parameter or retrieved from somewhere  
-var reduced_result = @zeros([MAX_ZDIM]f32);
+var b_next = @zeros([MAX_ZDIM]f32);
 var current_level_id: u16 = 0;
+var is_active_pe: bool = true;
 
 // DSDs for memory access
 var mem_u_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> u[i] });
 var mem_f_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> f[i] });
 var mem_r_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r[i] });
 var mem_Au_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> Au[i] });
+var mem_b_next_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> b_next[i] });
 var mem_residual_temp_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> residual_temp[i] });
 // var mem_r_coarse_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r_coarse[i] });
 // var mem_u_coarse_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> u_coarse[i] });
@@ -102,7 +104,7 @@ var ptr_Au: [*]f32 = &Au;
 // var ptr_u_coarse: [*]f32 = &u_coarse;
 // var ptr_correction: [*]f32 = &correction;
 var ptr_stencil_coeff: [*]f32 = &stencil_coeff;
-var ptr_reduced_result: [*]f32 = &reduced_result;
+var ptr_b_next: [*]f32 = &b_next;
 // TODO: Leo
 // var ptr_time_buf_u16: [*]u16 = &time_buf_u16;
 // var ptr_time_ref: [*]u16 = &time_ref_u16;
@@ -123,7 +125,9 @@ fn is_top_left_of_restriction_window(px: u16, py: u16, window_width: u16, window
     // Check if this PE is at the window's top-left corner
     return (px == window_st_x) and (py == window_st_y);
 }
-
+fn isActivePE(px: i16, py: i16, factor: u16) bool {
+    return (px % @as(i16, factor)) == 0 and (py % @as(i16, factor)) == 0;
+}
 // level - done
 // factor - done
 // window size - done
@@ -149,12 +153,12 @@ fn f_init_spmv_and_reduce(level_id:u16) void {
 
     // Configure reduction module runtime params (use current layout width/height)
     // Todo: Remove this initialization later.  It is only for debugging.   
-    // set reduced_result to 1.0 in only 1st layer.
-    var row: i16 = 0;
-    while(row < MAX_ZDIM) : (row +=1) {
-        reduced_result[row] = @as(f32, 1.0);
-    }
-
+    // set b_next to 1.0 in only 1st layer.
+    // var row: i16 = 0;
+    // while(row < MAX_ZDIM) : (row +=1) {
+    //     b_next[row] = @as(f32, 1.0);
+    // }
+    is_active_pe = isActivePE(@as(i16, pe_id_x), @as(i16, pe_id_y), factor);    // resetting basically
     // Set hop-based communication parameters in the stencil module
     stencil_mod.setHopBasedParams(hops, factor, width, height);
     
@@ -176,13 +180,13 @@ fn f_reduction_top_left_pattern(n:i16) void {
         // 2.3. The final answer is now stored in top-left PE (0,0).
     // result ends in top-left PE
     
-    reduce_mod.reduce_row_col_top_left(n, &reduced_result, reduce_mod.TYPE_BINARY_OP.ADD);
+    reduce_mod.reduce_row_col_top_left(n, &r, reduce_mod.TYPE_BINARY_OP.ADD);
     // The code triggers a callback when done.
     // sys_mod.unblock_cmd_stream();
 }
 
 // 2.4. Divide it by total number of active PEs in the window.
-fn f_restriction_division() void {
+fn f_restriction_division(n:i16) void {
     // PE coordinates
     const pe_id_x: u16 = layout_mod.get_x_coord();
     const pe_id_y: u16 = layout_mod.get_y_coord(); 
@@ -193,9 +197,13 @@ fn f_restriction_division() void {
         // Use precomputed count of active PEs in the window
         const total_active_PEs = @as(f32, active_pes_in_restriction_window_x * active_pes_in_restriction_window_y);
         // Divide all Z dimensions by total active PEs in window
-        while(zindex < MAX_ZDIM) : (zindex +=1) {
-            reduced_result[zindex] = reduced_result[zindex] / total_active_PEs ;
+        // n = zDim(passed at runtime and not MAX_ZDIM)
+        while(zindex < n) : (zindex +=1) {  // This can be @fmuls()
+            b_next[zindex] = r[zindex] / total_active_PEs ;
         }
+    } else{
+        // 0
+        @fmovs(mem_b_next_dsd, 0.0);
     }
     sys_mod.unblock_cmd_stream();
 }
@@ -210,6 +218,7 @@ fn f_gmg_init(size: i16, level_id: u16, h: f32) void {
     mem_f_dsd = @set_dsd_length(mem_f_dsd, @bitcast(u16,n));
     mem_r_dsd = @set_dsd_length(mem_r_dsd, @bitcast(u16,n));
     mem_Au_dsd = @set_dsd_length(mem_Au_dsd, @bitcast(u16,n));
+    mem_b_next_dsd = @set_dsd_length(mem_b_next_dsd, @bitcast(u16,n));
     mem_residual_temp_dsd = @set_dsd_length(mem_residual_temp_dsd, @bitcast(u16,n));
     // mem_u_smooth_dsd = @set_dsd_length(mem_u_smooth_dsd, @bitcast(u16,n));
     // mem_r_coarse_dsd = @set_dsd_length(mem_r_coarse_dsd, @bitcast(u16,n));
@@ -258,13 +267,6 @@ fn f_jacobi_smooth(smooth_iterations: i16, JACOBI_COEFF_PER_LEVEL: f32) void {
     f_trigger_state_machine();
 }
 
-// // Full weighting restriction: average 8 fine points to 1 coarse point
-// fn f_restrict() void {
-//     // For now, implement simple injection restriction
-//     // TODO: Implement full weighting restriction
-//     @fmovs(mem_r_coarse_dsd, mem_r_dsd);
-//     sys_mod.unblock_cmd_stream();
-// }
 
 // // Linear interpolation: copy coarse value to 8 fine points
 // fn f_interpolate() void {
@@ -334,7 +336,7 @@ comptime {
     // @export_symbol(ptr_time_buf_u16, "time_buf_u16");
     // @export_symbol(ptr_time_ref, "time_ref");
     // @export_symbol(ptr_residual_norm, "residual_norm");
-    @export_symbol(ptr_reduced_result, "reduced_result");
+    @export_symbol(ptr_b_next, "b_next");
 }
 
 comptime {
