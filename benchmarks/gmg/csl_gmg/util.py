@@ -163,6 +163,87 @@ def laplacian(stencil_coeff, zDim, x, y):
                      c_bottom*bottom_buf + c_top*top_buf + \
                      c_center*center_buf
 
+def laplacian_modified(stencil_coeff, zDim, x, y, hops=1, factor=1):
+  (height, width, pe_length) = x.shape
+  assert zDim <= pe_length
+  # y and x must have the same dimensions
+  (m, n, k) = y.shape
+  assert m == height
+  assert n == width
+  assert pe_length == k
+  # stencil_coeff must be (h,w,7)
+  (m, n, k) = stencil_coeff.shape
+  assert m == height
+  assert n == width
+  assert 7 == k
+
+#          North
+#           j
+#        +------+
+# West i |      | East
+#        +------+
+#          south
+  for i in range(height):
+    for j in range(width):
+      # Check if this PE is active (matches WSE logic)
+      is_active_pe = (i % factor == 0) and (j % factor == 0)
+      
+      for k in range(zDim):
+        c_west = stencil_coeff[(i,j,0)]
+        c_east = stencil_coeff[(i,j,1)]
+        c_south = stencil_coeff[(i,j,2)]
+        c_north = stencil_coeff[(i,j,3)]
+        c_bottom = stencil_coeff[(i,j,4)]
+        c_top = stencil_coeff[(i,j,5)]
+        c_center = stencil_coeff[(i,j,6)]
+
+        # Use hop-based neighbors instead of immediate neighbors
+        west_buf = 0
+        if j >= hops:  # Check if west neighbor is within bounds
+          west_neighbor_j = j - hops
+          # Check if west neighbor is also active
+          if (i % factor == 0) and (west_neighbor_j % factor == 0):
+            west_buf = x[(i, west_neighbor_j, k)]
+            
+        east_buf = 0
+        if j < width - hops:  # Check if east neighbor is within bounds
+          east_neighbor_j = j + hops
+          # Check if east neighbor is also active
+          if (i % factor == 0) and (east_neighbor_j % factor == 0):
+            east_buf = x[(i, east_neighbor_j, k)]
+            
+        north_buf = 0
+        if i >= hops:  # Check if north neighbor is within bounds
+          north_neighbor_i = i - hops
+          # Check if north neighbor is also active
+          if (north_neighbor_i % factor == 0) and (j % factor == 0):
+            north_buf = x[(north_neighbor_i, j, k)]
+            
+        south_buf = 0
+        if i < height - hops:  # Check if south neighbor is within bounds
+          south_neighbor_i = i + hops
+          # Check if south neighbor is also active
+          if (south_neighbor_i % factor == 0) and (j % factor == 0):
+            south_buf = x[(south_neighbor_i, j, k)]
+            
+        # Z-direction neighbors remain immediate (no hop-based logic for Z)
+        bottom_buf = 0
+        if 0 < k:
+          bottom_buf = x[(i,j,k-1)]
+        top_buf = 0
+        if k < zDim-1:
+          top_buf = x[(i,j,k+1)]
+        center_buf = x[(i,j,k)]
+        
+        # Only compute stencil for active PEs
+        if is_active_pe:
+          y[(i,j,k)] = c_west*west_buf + c_east*east_buf + \
+                        c_south*south_buf + c_north*north_buf + \
+                        c_bottom*bottom_buf + c_top*top_buf + \
+                        c_center*center_buf
+        else:
+          y[(i,j,k)] = 0  # Non-active PEs produce zero
+
 
 # Given a 7-point stencil, generate sparse matrix A.
 # A is represented by CSR.

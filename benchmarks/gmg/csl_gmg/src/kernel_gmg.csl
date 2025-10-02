@@ -15,7 +15,7 @@ const math_lib = @import_module("<math>");
 // const blas_lib = @import_module("blas.csl");
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
 // allreduce uses input queue/output queue 1
-const reduce_mod = @import_module("../../../csl-libs/allreduce/pe.csl", @concat_structs(reduceParams, .{
+const reduce_mod = @import_module("../../../non-unit-7pt/modified_csl_lib/allreduce/pe.csl", @concat_structs(reduceParams, .{
      .f_callback = f_trigger_state_machine,
      .queues = [1]u16{2},
      .dest_dsr_ids = [1]u16{1},
@@ -23,7 +23,7 @@ const reduce_mod = @import_module("../../../csl-libs/allreduce/pe.csl", @concat_
      .src1_dsr_ids = [1]u16{1}
      }));
 // output queue cannot overlap input queues
-const stencil_mod = @import_module("../../../csl-libs/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
+const stencil_mod = @import_module("../../../non-unit-7pt/modified_csl_lib/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
      .f_callback = f_trigger_state_machine,
      .input_queues = [4]u16{4, 5, 6, 7},
      .output_queues = if (@is_arch("wse3")) [4]u16{4, 5, 6, 7} else [1]u16{3},
@@ -34,7 +34,7 @@ const stencil_mod = @import_module("../../../csl-libs/stencil_3d_7pts/pe.csl", @
      .src1_dsr_ids = [2]u16{2,3}
      }));
 const simprint = @import_module("<simprint>", .{ .enable = true });
-const layout_module = @import_module("<layout>");
+const layout_mod = @import_module("<layout>");
 
 // GMG data structures
 var u = @zeros([MAX_ZDIM]f32); // solution vector
@@ -70,6 +70,18 @@ var n: i16 = 0;
 // var nz: i16 = 0;
 // var num_smooth_iter: i16 = 0;
 
+// Modified stencil and allreduce ported
+var factor: u16 = 1;   // at least 1
+var hops: u16 = 1;  // The least hops between active PEs
+var restriction_window_width: u16 = 1;
+var restriction_window_height: u16 = 1; // starting size of the window.
+var active_pes_in_restriction_window_x: u16 = 2;
+var active_pes_in_restriction_window_y: u16 = 2;
+const rectangle = @get_rectangle();
+const width: u16 = rectangle.width; // This should be passed as a parameter or retrieved from somewhere
+const height: u16 = rectangle.height; // This should be passed as a parameter or retrieved from somewhere  
+var reduced_result = @zeros([MAX_ZDIM]f32);
+var current_level_id: u16 = 0;
 
 // DSDs for memory access
 var mem_u_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> u[i] });
@@ -90,14 +102,108 @@ var ptr_Au: [*]f32 = &Au;
 // var ptr_u_coarse: [*]f32 = &u_coarse;
 // var ptr_correction: [*]f32 = &correction;
 var ptr_stencil_coeff: [*]f32 = &stencil_coeff;
+var ptr_reduced_result: [*]f32 = &reduced_result;
 // TODO: Leo
 // var ptr_time_buf_u16: [*]u16 = &time_buf_u16;
 // var ptr_time_ref: [*]u16 = &time_ref_u16;
 // var ptr_residual_norm: [*]f32 = &residual_norm;
 
+// Stencil and allreduce ported
+// Check if this PE is the top-left corner of its restriction window
+// Each window is tiled across the mesh
+fn is_top_left_of_restriction_window(px: u16, py: u16, window_width: u16, window_height: u16) bool {
+    // Calculate which window this PE belongs to
+    const window_idx_x: u16 = px / window_width;
+    const window_idx_y: u16 = py / window_height;
+    
+    // Calculate window start position
+    const window_st_x: u16 = window_idx_x * window_width;
+    const window_st_y: u16 = window_idx_y * window_height;
+    
+    // Check if this PE is at the window's top-left corner
+    return (px == window_st_x) and (py == window_st_y);
+}
+
+// level - done
+// factor - done
+// window size - done
+// total pe hXW - not done
+// hops across x and y - done
+// total active PEs inside the window - done
+fn f_init_spmv_and_reduce(level_id:u16) void {
+    // PE coordinates
+    const pe_id_x: u16 = layout_mod.get_x_coord();
+    const pe_id_y: u16 = layout_mod.get_y_coord();       
+    // Get width and height from layout parameters (assuming they're available)
+    // factor
+    var const_2: f16 = 2.0;
+    factor = @as(u16, math_lib.pow(const_2, @as(f16, level_id)));    // stride = 2^level_id
+    // hops - keep as immediate neighbors for 7-point stencil
+    hops = factor;
+    // window(restriction window)
+    restriction_window_width = @as(u16, math_lib.pow(const_2, @as(f16, level_id + 1))); // window size = 2^(factor + 1)
+    restriction_window_height = @as(u16, math_lib.pow(const_2, @as(f16, level_id + 1)));    
+    // total active inside window(always fixed)
+    active_pes_in_restriction_window_x = 2;
+    active_pes_in_restriction_window_y = 2;
+
+    // Configure reduction module runtime params (use current layout width/height)
+    // Todo: Remove this initialization later.  It is only for debugging.   
+    // set reduced_result to 1.0 in only 1st layer.
+    var row: i16 = 0;
+    while(row < MAX_ZDIM) : (row +=1) {
+        reduced_result[row] = @as(f32, 1.0);
+    }
+
+    // Set hop-based communication parameters in the stencil module
+    stencil_mod.setHopBasedParams(hops, factor, width, height);
+    
+    // Configure windowed reduction: each window reduces independently
+    // Window size depends on the current level (2^(factor+1))
+    const window_w = @as(i16, restriction_window_width);
+    const window_h = @as(i16, restriction_window_height);
+    reduce_mod.setWindowedReductionParams(window_w, window_h, factor, active_pes_in_restriction_window_x, active_pes_in_restriction_window_y);
+
+}
+
+// restriction pattern is top-left, changes per level and the restriction keeps the z dimension the same.
+fn f_reduction_top_left_pattern(n:i16) void {
+    // Semi-coarsening: Reduces only 2 dimensions and not the z dimension.
+    // 1. Make sure the code is aware of the new window size at this level and total_active PEs inside the window.(f_init_spmv)
+    // 2. Now inside the restriction window:
+        // 2.1. Reduce rows across x dimension from right to left (east-to-west).
+        // 2.2. Reduce column from bottom to top (south-to-north).
+        // 2.3. The final answer is now stored in top-left PE (0,0).
+    // result ends in top-left PE
+    
+    reduce_mod.reduce_row_col_top_left(n, &reduced_result, reduce_mod.TYPE_BINARY_OP.ADD);
+    // The code triggers a callback when done.
+    // sys_mod.unblock_cmd_stream();
+}
+
+// 2.4. Divide it by total number of active PEs in the window.
+fn f_restriction() void {
+    // PE coordinates
+    const pe_id_x: u16 = layout_mod.get_x_coord();
+    const pe_id_y: u16 = layout_mod.get_y_coord(); 
+    
+    // Check if this PE is the top-left corner of its restriction window
+    if (is_top_left_of_restriction_window(pe_id_x, pe_id_y, restriction_window_width, restriction_window_height)) {
+        var zindex: i16 = 0;
+        // Use precomputed count of active PEs in the window
+        const total_active_PEs = @as(f32, active_pes_in_restriction_window_x * active_pes_in_restriction_window_y);
+        // Divide all Z dimensions by total active PEs in window
+        while(zindex < MAX_ZDIM) : (zindex +=1) {
+            reduced_result[zindex] = reduced_result[zindex] / total_active_PEs ;
+        }
+    }
+    sys_mod.unblock_cmd_stream();
+}
+
 // GMG initialization
-fn f_gmg_init(size: i16, h: f32) void {
+fn f_gmg_init(size: i16, level_id: u16, h: f32) void {
     n = size;   // This will be the zDim
+    current_level_id = level_id;
     h_level = h;
     // Set the length of all DSDs
     mem_u_dsd = @set_dsd_length(mem_u_dsd, @bitcast(u16,n));
@@ -109,6 +215,8 @@ fn f_gmg_init(size: i16, h: f32) void {
     // mem_r_coarse_dsd = @set_dsd_length(mem_r_coarse_dsd, @bitcast(u16,n));
     // mem_u_coarse_dsd = @set_dsd_length(mem_u_coarse_dsd, @bitcast(u16,n));
     // mem_correction_dsd = @set_dsd_length(mem_correction_dsd, @bitcast(u16,n));
+
+    f_init_spmv_and_reduce(current_level_id);
     
     sys_mod.unblock_cmd_stream();
 }
@@ -226,6 +334,7 @@ comptime {
     // @export_symbol(ptr_time_buf_u16, "time_buf_u16");
     // @export_symbol(ptr_time_ref, "time_ref");
     // @export_symbol(ptr_residual_norm, "residual_norm");
+    @export_symbol(ptr_reduced_result, "reduced_result");
 }
 
 comptime {
@@ -242,5 +351,10 @@ comptime {
     // @export_symbol(f_restrict);
     // @export_symbol(f_interpolate);
     // @export_symbol(f_add_correction);
+
+    // Ported
+    @export_symbol(f_reduction_top_left_pattern);
+    @export_symbol(f_restriction);
+    @export_symbol(f_init_spmv_and_reduce);
 }
 

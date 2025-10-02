@@ -30,7 +30,7 @@ from cmd_parser import parse_args, print_arguments
 from util import (
     hwl_2_oned_colmajor,
     oned_to_hwl_colmajor,
-    laplacian,
+    laplacian_modified,
     csr_7_pt_stencil,
 )
 # Import Cerebras SDK
@@ -126,9 +126,9 @@ def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
     return u_result
 
-def init_operator(device_solver, zDim, simulator):
-    print("Step 0: Initialize GMG")
-    simulator.launch("f_gmg_init", np.int16(zDim), np.float32(device_solver.grids[0]['h']), nonblock=False)
+def init_operator(device_solver, zDim, simulator, LEVEL_ID):
+    h_level = device_solver.grids[LEVEL_ID]['h']
+    simulator.launch("f_gmg_init", np.int16(zDim), np.uint16(LEVEL_ID), np.float32(h_level), nonblock=False)
 
 def residual_operator(simulator):
 
@@ -145,7 +145,7 @@ def jacobi_smoothing_operator(device_solver, simulator):
 
   for i in range(device_solver.PRE_SMOOTH_ITER):
     # Jacobi smoothing
-    print(f"Step {i+3}: Jacobi smoothing")
+    print(f"Iteration {i+1}: Jacobi smoothing")
     JACOBI_COEFF_PER_LEVEL = -1.0 * (device_solver.grids[0]['h'] * device_solver.grids[0]['h']) / 12.0;
 
     simulator.launch("f_apply_operator", nonblock=False) # applyOp = A*u
@@ -153,7 +153,7 @@ def jacobi_smoothing_operator(device_solver, simulator):
     simulator.launch("f_jacobi_smooth", np.int16(1), np.float32(JACOBI_COEFF_PER_LEVEL), nonblock=False)
     
 
-def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_f, symbol_r, symbol_stencil_coeff):
+def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_f, symbol_r, symbol_stencil_coeff, LEVEL_ID):
     """Main GMG algorithm"""
     print("=" * 50)
     print(f"\nHardware : grid size {height}x{width}")
@@ -163,7 +163,7 @@ def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order
 
     # Initialize GMG
     print("Step 0: Initialize GMG")
-    init_operator(device_solver, zDim, simulator)
+    init_operator(device_solver, zDim, simulator, LEVEL_ID)
     
     # Jacobi smoothing
     print("Step 1: Jacobi smoothing operator")
@@ -172,6 +172,13 @@ def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order
     # Compute residual
     print("Step 2: Compute residual")
     residual_operator(simulator)
+
+    # print("Step 3: Reduction top left pattern")
+    # simulator.launch("f_reduction_top_left_pattern", np.int16(zDim), nonblock=False)
+
+    # print("Step 4: Restriction")
+    # simulator.launch("f_restriction", nonblock=False)
+
     # # Restriction (for now, just copy)
     # print("Step 5: Restriction")
     # simulator.launch("f_restrict", nonblock=False)
@@ -189,6 +196,7 @@ def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order
 def main():
     """Main function"""
     np.random.seed(2)
+    LEVEL_ID = 0
 
     # parse arguments
     args, logs_dir = parse_args()
@@ -215,15 +223,21 @@ def main():
 
 
     # Host GMG for validation
-    
+    #########################################################
     # host_residual, host_iterations = host_solver.solve(args.max_ite)
-    host_solver.jacobi_smooth(0, args.pre_iter)
+    host_solver.jacobi_smooth(LEVEL_ID, args.pre_iter)
     # host_solver.apply_operator(0)
-    host_solver.compute_residual(0)
-    first_residual = host_solver.grids[0]['r']
+    host_solver.compute_residual(LEVEL_ID)
+    first_residual = host_solver.grids[LEVEL_ID]['r']
     # first_smooth_u = host_solver.grids[0]['u']
     # first_au_host = host_solver.grids[0]['Au']
+    # # Use hop-based laplacian to match WSE implementation
+    # # Active PEs are determined by factor, neighbors are immediate (hops=1)
+    # factor = 2**LEVEL_ID  # factor = 2 (determines which PEs are active)
+    # hops = factor  # immediate neighbors for 7-point stencil
+    # laplacian_modified(stencil_coeff, zDim, u_hwl, f_hwl, hops=hops, factor=factor)   
 
+    #########################################################
 
     # Device side
     # Calculate fabric dimensions
@@ -241,11 +255,11 @@ def main():
     # Initialize data
     print("Initializing data...")
     # device_grid = device_solver.get_grids() # Already has data filled and shapes initialized.
-    u_hwl = np.transpose(device_solver.grids[0]['u'], (1, 2, 0))  # (ny, nx, nz) -> (height, width, zDim)
-    f_hwl = np.transpose(device_solver.grids[0]['f'], (1, 2, 0))  # Change order because CSL expects (height, width, zDim), numpy is (zDim, height, width)
+    u_hwl = np.transpose(device_solver.grids[LEVEL_ID]['u'], (1, 2, 0))  # (ny, nx, nz) -> (height, width, zDim)
+    f_hwl = np.transpose(device_solver.grids[LEVEL_ID]['f'], (1, 2, 0))  # Change order because CSL expects (height, width, zDim), numpy is (zDim, height, width)
     # order: {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
     stencil_coeff = np.zeros((height, width, 7), dtype=DTYPE)  # 3D-7pt
-    h = device_solver.grids[0]['h']
+    h = device_solver.grids[LEVEL_ID]['h']
     stencil_coeff[:, :, 0] = device_solver.BETA/h**2 # west(-1)
     stencil_coeff[:, :, 1] = device_solver.BETA/h**2 # east(-1)
     stencil_coeff[:, :, 2] = device_solver.BETA/h**2 # south(-1)
@@ -270,6 +284,7 @@ def main():
     symbol_r = simulator.get_id("r")  # residual (reuse x for now)
     symbol_stencil_coeff = simulator.get_id("stencil_coeff")
     symbol_Au = simulator.get_id("Au")
+    symbol_reduced_result = simulator.get_id("reduced_result")
     # host  = device
     #TODO: Leo
      # Load and run
@@ -284,7 +299,7 @@ def main():
     # Run GMG algorithm
     print("Running GMG algorithm...")
     gmg_algorithm(device_solver, height, width, zDim, 
-                                 memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_f, symbol_r, symbol_stencil_coeff
+                                 memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_f, symbol_r, symbol_stencil_coeff, LEVEL_ID
                                  )
     
     # Copy results back
@@ -293,18 +308,34 @@ def main():
     r_result_3d = oned_to_hwl_colmajor(height, width, zDim, r_result, DTYPE)
     # u_smooth_result = copy_data_d2h(width, height, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u)
     # u_smooth_result_3d = oned_to_hwl_colmajor(height, width, zDim, u_smooth_result, DTYPE)
+
+    reduced_result = copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_reduced_result)
+    reduced_result_3d = oned_to_hwl_colmajor(height, width, zDim, reduced_result, DTYPE)
+
     
 
     # verify if r_result_3d is close to f_hwl
     print("first_residual", first_residual)
     print("r_result_3d")
     print(r_result_3d)
+    print("reduced_result_3d")
+    print(reduced_result_3d)
     # print("first_smooth_u", first_smooth_u)
     # print("u_smooth_result_3d", u_smooth_result_3d)
     # np.testing.assert_allclose(u_smooth_result_3d, first_smooth_u, atol=1e-4, rtol=0)
     np.testing.assert_allclose(r_result_3d, first_residual, atol=1e-5, rtol=1e-6)
-    print("SUCCESS!")
-    # clean up
+
+    if reduced_result_3d.ndim == 3:
+      for k in range(reduced_result_3d.shape[2]):
+        print(f"reduced_result_3d (layer {k}):")
+        print(reduced_result_3d[:, :, k])
+        print("\n")
+    else:
+      print(f"reduced_result_hwl = {reduced_result_3d}")
+      print("\n")
+        
+      print("SUCCESS!")
+      # clean up
     simulator.stop()
 
 if __name__ == "__main__":
