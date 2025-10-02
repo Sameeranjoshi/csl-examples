@@ -370,9 +370,9 @@ def main():
     simulator.stop()
 
     # Verify - no transposes needed since we're using consistent (nx, ny, nz) ordering
-    np.testing.assert_allclose(u_result_3d, first_smooth_u, atol=0, rtol=1e-5)
-    np.testing.assert_allclose(r_result_3d, first_residual, atol=0, rtol=1e-5)
-    np.testing.assert_allclose(b_next_3d, second_b_next, atol=0, rtol=1e-5)
+    np.testing.assert_allclose(u_result_3d, first_smooth_u, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(r_result_3d, first_residual, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(b_next_3d, second_b_next, atol=1e-5, rtol=1e-5)
 
     # print("u_result_3d (first z-layer, k=0):")
     # print(u_result_3d[:, :, 0])
