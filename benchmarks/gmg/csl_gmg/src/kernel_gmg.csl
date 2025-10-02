@@ -182,7 +182,7 @@ fn f_reduction_top_left_pattern(n:i16) void {
 }
 
 // 2.4. Divide it by total number of active PEs in the window.
-fn f_restriction() void {
+fn f_restriction_division() void {
     // PE coordinates
     const pe_id_x: u16 = layout_mod.get_x_coord();
     const pe_id_y: u16 = layout_mod.get_y_coord(); 
@@ -354,7 +354,7 @@ comptime {
 
     // Ported
     @export_symbol(f_reduction_top_left_pattern);
-    @export_symbol(f_restriction);
+    @export_symbol(f_restriction_division);
     @export_symbol(f_init_spmv_and_reduce);
 }
 

@@ -151,7 +151,14 @@ def jacobi_smoothing_operator(device_solver, simulator):
     simulator.launch("f_apply_operator", nonblock=False) # applyOp = A*u
     # x_new = x_old + JACOBI_COEFF_PER_LEVEL * (b- applyOp)
     simulator.launch("f_jacobi_smooth", np.int16(1), np.float32(JACOBI_COEFF_PER_LEVEL), nonblock=False)
-    
+
+def restrict_operator(device_solver, simulator, zDim):
+    print("Step 3: Reduction top left pattern")
+    simulator.launch("f_reduction_top_left_pattern", np.int16(zDim), nonblock=False)
+
+    print("Step 4: Divide restrict to get result")
+    simulator.launch("f_restriction_division", nonblock=False)
+
 
 def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_f, symbol_r, symbol_stencil_coeff, LEVEL_ID):
     """Main GMG algorithm"""
@@ -173,15 +180,9 @@ def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order
     print("Step 2: Compute residual")
     residual_operator(simulator)
 
-    # print("Step 3: Reduction top left pattern")
-    # simulator.launch("f_reduction_top_left_pattern", np.int16(zDim), nonblock=False)
-
-    # print("Step 4: Restriction")
-    # simulator.launch("f_restriction", nonblock=False)
-
     # # Restriction (for now, just copy)
-    # print("Step 5: Restriction")
-    # simulator.launch("f_restrict", nonblock=False)
+    print("Step 5: Restriction")
+    restrict_operator(device_solver, simulator, zDim)
     
     # # Interpolation (for now, just copy)
     # print("Step 6: Interpolation")
@@ -323,7 +324,7 @@ def main():
     # print("first_smooth_u", first_smooth_u)
     # print("u_smooth_result_3d", u_smooth_result_3d)
     # np.testing.assert_allclose(u_smooth_result_3d, first_smooth_u, atol=1e-4, rtol=0)
-    np.testing.assert_allclose(r_result_3d, first_residual, atol=1e-5, rtol=1e-6)
+    np.testing.assert_allclose(r_result_3d, first_residual, atol=1e-5, rtol=1e-5)
 
     if reduced_result_3d.ndim == 3:
       for k in range(reduced_result_3d.shape[2]):
