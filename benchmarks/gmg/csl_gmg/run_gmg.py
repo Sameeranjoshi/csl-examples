@@ -153,6 +153,56 @@ def copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simula
     
     return data_3d
 
+def copy_scalar_d2h(memcpy_dtype, memcpy_order, simulator, symbol_device):
+    """Copy a single scalar value from device to host
+    
+    Args:
+        memcpy_dtype: Memory copy data type (e.g., MemcpyDataType.MEMCPY_32BIT)
+        memcpy_order: Memory copy order (e.g., MemcpyOrder.COL_MAJOR)
+        simulator: Device simulator
+        symbol_device: Symbol for the scalar on device
+        
+    Returns:
+        float: The scalar value
+        
+    Example:
+        xi_value = copy_scalar_d2h(memcpy_dtype, memcpy_order, simulator, symbol_xi)
+    """
+    # Create a 1-element array to hold the scalar
+    scalar_array = np.zeros(1, dtype=np.float32)
+    
+    # Copy from device to host (only from PE at position 0,0)
+    simulator.memcpy_d2h(scalar_array, symbol_device, 0, 0, 1, 1, 1,
+                        streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+    
+    # Return the scalar value
+    return scalar_array[0]
+
+def calculate_rho(residual_3d):
+    """Calculate the L2 norm squared of the residual vector
+    
+    This function computes ||r||² where r is the residual vector.
+    This is equivalent to the xi calculation in the CSL code.
+    
+    Args:
+        residual_3d: 3D numpy array of shape (height, width, zDim) containing residual values
+        
+    Returns:
+        float: The L2 norm squared of the residual vector
+        
+    Example:
+        rho = calculate_rho(residual_3d_first)
+    """
+    rho = np.dot(residual_3d.flatten(), residual_3d.flatten())
+    # Flatten the 3D array to 1D vector
+    # residual_1d = residual_3d.flatten()
+    
+    # Compute L2 norm squared: ||r||² = Σ(r[i]²)
+    # rho = np.sum(residual_1d * residual_1d)
+    
+    return rho
+    
+
 def copy_data_d2h_3d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, *symbols):
     """Copy multiple data arrays from device to host with automatic reshaping to 3D format
     
@@ -183,11 +233,11 @@ def init_operator(device_solver, zDim, simulator, LEVEL_ID):
 
 def residual_operator(simulator):
 
-    print("Step 1: Apply operator")
+    print("\tStep 1: Apply operator(A*u) only on active PEs")
     # Au = A*u(laplacian)
     simulator.launch("f_apply_operator", nonblock=False)
     # # Compute residual
-    print("Step 2: Compute residual")
+    print("\tStep 2: Compute residual(b- Au) only on active PEs")
     # r = b- au
     simulator.launch("f_residual", nonblock=False)
 
@@ -196,7 +246,7 @@ def jacobi_smoothing_operator(device_solver, simulator):
 
   for i in range(device_solver.PRE_SMOOTH_ITER):
     # Jacobi smoothing
-    print(f"Iteration {i+1}: Jacobi smoothing")
+    # print(f"Iteration {i+1}: Jacobi smoothing")
     JACOBI_COEFF_PER_LEVEL = -1.0 * (device_solver.grids[0]['h'] * device_solver.grids[0]['h']) / 12.0;
 
     simulator.launch("f_apply_operator", nonblock=False) # applyOp = A*u
@@ -204,14 +254,14 @@ def jacobi_smoothing_operator(device_solver, simulator):
     simulator.launch("f_jacobi_smooth", np.int16(1), np.float32(JACOBI_COEFF_PER_LEVEL), nonblock=False)
 
 def restrict_operator(device_solver, simulator, zDim):
-    print("Step 3: Reduction top left pattern")
+    print("\tStep *.1: Reduction top left pattern")
     simulator.launch("f_reduction_top_left_pattern", np.int16(zDim), nonblock=False)
 
-    print("Step 4: Divide restrict to get result")
+    print("\tStep *.2: Divide restrict to get result")
     simulator.launch("f_restriction_division", np.int16(zDim), nonblock=False)
 
 
-def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_f, symbol_r, symbol_b_next, symbol_stencil_coeff, LEVEL_ID):
+def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_f, symbol_r, symbol_b_next, symbol_xi, symbol_stencil_coeff, LEVEL_ID):
     """Main GMG algorithm"""
     print("=" * 50)
     print(f"\nHardware : grid size {height}x{width}")
@@ -232,17 +282,18 @@ def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order
 
     # copy residual at level 0
     residual_3d_first = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_r)
-    # print(f"residual_3d_level0 shape: {residual_3d_first[:, :, 0]}")
+    xi_first = calculate_rho(residual_3d_first)
+    # xi_first = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_xi)
 
     # # Restriction (for now, just copy)
-    print(f"Step 5: Restriction LEVEL_ID = {LEVEL_ID}")
+    print(f"Step 3: Restriction LEVEL_ID = {LEVEL_ID}")
     restrict_operator(device_solver, simulator, zDim)
 
     # copy residual at level 1
     restrict_3d_first = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_f)
-    # print(f"restrict_3d_first shape: {restrict_3d_first[:, :, 0]}")
     
   #########################################################
+    print("\n")
     # Initialize GMG
     print(f"Step 0: Initialize GMG LEVEL_ID = {LEVEL_ID +1 }")
     init_operator(device_solver, zDim, simulator, LEVEL_ID + 1)
@@ -255,16 +306,17 @@ def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order
 
     # get the residual by memcpy_d2h before changed by restrict operator
     residual_3d_second = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_r)
-    # print(f"residual_3d_level1 shape: {residual_3d_second[:, :, 0]}")
+    xi_second = calculate_rho(residual_3d_second)
 
     # # Restriction (for now, just copy)
-    print(f"Step 5: Restriction LEVEL_ID = {LEVEL_ID + 1}")
+    print(f"Step 3: Restriction LEVEL_ID = {LEVEL_ID + 1}")
     restrict_operator(device_solver, simulator, zDim)
     restrict_3d_second = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_f)
 
-#########################################################
 
-    # # level 2
+#########################################################
+    print("\n")
+    # level 2
     print(f"Step 0: Initialize GMG LEVEL_ID = {LEVEL_ID + 2}")
     init_operator(device_solver, zDim, simulator, LEVEL_ID + 2)
     # Jacobi smoothing
@@ -275,13 +327,34 @@ def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order
     residual_operator(simulator)
     # get the residual by memcpy_d2h before changed by restrict operator
     residual_3d_third = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_r)
+    xi_third = calculate_rho(residual_3d_third)
     # print(f"residual_3d_level2 shape: {residual_3d_third[:, :, 0]}")
     # # Restriction (for now, just copy)
-    print(f"Step 5: Restriction LEVEL_ID = {LEVEL_ID + 2}")
+    print(f"Step 3: Restriction LEVEL_ID = {LEVEL_ID + 2}")
     restrict_operator(device_solver, simulator, zDim)
     restrict_3d_third = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_f)
 
 #########################################################
+    # level 3
+    print("\n")
+    print(f"Step 0: Initialize GMG LEVEL_ID = {LEVEL_ID + 3}")
+    init_operator(device_solver, zDim, simulator, LEVEL_ID + 3)
+    # Jacobi smoothing
+    print(f"Step 1: Jacobi smoothing operator LEVEL_ID = {LEVEL_ID + 3}")
+    jacobi_smoothing_operator(device_solver, simulator)
+    # Compute residual
+    print(f"Step 2: Compute residual LEVEL_ID = {LEVEL_ID + 3}")
+    residual_operator(simulator)
+    # get the residual by memcpy_d2h before changed by restrict operator
+    residual_3d_fourth = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_r)
+    xi_fourth = calculate_rho(residual_3d_fourth)
+    # print(f"residual_3d_level3 shape: {residual_3d_fourth[:, :, 0]}")
+    # # Restriction (for now, just copy)
+    print(f"Step 3: Restriction LEVEL_ID = {LEVEL_ID + 3}")
+    restrict_operator(device_solver, simulator, zDim)
+    restrict_3d_fourth = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_f)
+#########################################################
+
     # # Interpolation (for now, just copy)
     # print("Step 6: Interpolation")
     # simulator.launch("f_interpolate", nonblock=False)
@@ -291,7 +364,7 @@ def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order
     # simulator.launch("f_add_correction", nonblock=False)
     
     # return residual_norm[0]
-    return residual_3d_first, restrict_3d_first, residual_3d_second, restrict_3d_second, residual_3d_third, restrict_3d_third
+    return residual_3d_first, restrict_3d_first, xi_first, residual_3d_second, restrict_3d_second, xi_second, residual_3d_third, restrict_3d_third, xi_third, residual_3d_fourth, restrict_3d_fourth, xi_fourth    
 
 def main():
     """Main function"""
@@ -331,35 +404,45 @@ def main():
     host_solver.restrict(LEVEL_ID)
     host_solver.grids[LEVEL_ID + 1]['u'].fill(0.0)
 
-    # # level 1
+    # # # level 1
     host_solver.jacobi_smooth(LEVEL_ID + 1, args.pre_iter)
     host_solver.compute_residual(LEVEL_ID + 1)
     host_solver.restrict(LEVEL_ID + 1)
     host_solver.grids[LEVEL_ID + 2]['u'].fill(0.0)
 
-    # # level 2
+    # # # level 2
     host_solver.jacobi_smooth(LEVEL_ID + 2, args.pre_iter)
     host_solver.compute_residual(LEVEL_ID + 2)
     host_solver.restrict(LEVEL_ID + 2)
     host_solver.grids[LEVEL_ID + 3]['u'].fill(0.0)
 
+    # level 3
+    host_solver.jacobi_smooth(LEVEL_ID + 3, args.pre_iter)
+    host_solver.compute_residual(LEVEL_ID + 3)
+    host_solver.restrict(LEVEL_ID + 3)
+    host_solver.grids[LEVEL_ID + 4]['u'].fill(0.0)
+
     first_smooth_u = host_solver.grids[LEVEL_ID]['u']
     first_residual = host_solver.grids[LEVEL_ID]['r']
     first_b_next = host_solver.grids[LEVEL_ID + 1]['f']
-
+    first_xi = calculate_rho(first_residual)
+    
     second_smooth_u = host_solver.grids[LEVEL_ID + 1]['u']
     second_residual = host_solver.grids[LEVEL_ID + 1]['r']
     second_b_next = host_solver.grids[LEVEL_ID + 2]['f']
+    second_xi = calculate_rho(second_residual)
 
     # third
     third_smooth_u = host_solver.grids[LEVEL_ID + 2]['u']
     third_residual = host_solver.grids[LEVEL_ID + 2]['r']
     third_b_next = host_solver.grids[LEVEL_ID + 3]['f']
+    third_xi = calculate_rho(third_residual)
 
-    # print values at level 0 and level 1 for residual
-    # print(f"first_residual shape: {first_residual[:, :, 0]}")
-    
-
+    # fourth
+    fourth_smooth_u = host_solver.grids[LEVEL_ID + 3]['u']
+    fourth_residual = host_solver.grids[LEVEL_ID + 3]['r']
+    fourth_b_next = host_solver.grids[LEVEL_ID + 4]['f']
+    fourth_xi = calculate_rho(fourth_residual)
     # # Use hop-based laplacian to match WSE implementation
     # # Active PEs are determined by factor, neighbors are immediate (hops=1)
     # factor = 2**LEVEL_ID  # factor = 2 (determines which PEs are active)
@@ -414,6 +497,7 @@ def main():
     symbol_stencil_coeff = simulator.get_id("stencil_coeff")
     symbol_Au = simulator.get_id("Au")
     symbol_b_next = simulator.get_id("b_next")
+    symbol_xi = simulator.get_id("xi")
     # host  = device
     #TODO: Leo
      # Load and run
@@ -427,51 +511,70 @@ def main():
     
     # Run GMG algorithm
     print("Running GMG algorithm...")
-    residual_3d_first, restrict_3d_first, residual_3d_second, restrict_3d_second, residual_3d_third, restrict_3d_third = gmg_algorithm(device_solver, height, width, zDim, 
-                                 memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_f, symbol_r, symbol_b_next, symbol_stencil_coeff, LEVEL_ID
+    residual_3d_first, restrict_3d_first, xi_first, residual_3d_second, restrict_3d_second, xi_second, residual_3d_third, restrict_3d_third, xi_third, residual_3d_fourth, restrict_3d_fourth, xi_fourth = gmg_algorithm(device_solver, height, width, zDim, 
+                                 memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_f, symbol_r, symbol_b_next, symbol_xi, symbol_stencil_coeff, LEVEL_ID
                                  )
    
 
     # Copy results back
     print("Copying results back...")
-    # u_result_3d, b_next_3d = copy_data_d2h_3d(width, height, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_b_next)
 
     # b needs special treatment as shapes reduce.
     residual_3d_first = subsample_activenodes_only(residual_3d_first, LEVEL_ID)
     residual_3d_second = subsample_activenodes_only(residual_3d_second, LEVEL_ID + 1)
     residual_3d_third = subsample_activenodes_only(residual_3d_third, LEVEL_ID + 2)
+    residual_3d_fourth = subsample_activenodes_only(residual_3d_fourth, LEVEL_ID + 3)
     restrict_3d_first = subsample_activenodes_only(restrict_3d_first, LEVEL_ID + 1) # Why +1 because we want active nodes in the next level 
     restrict_3d_second = subsample_activenodes_only(restrict_3d_second, LEVEL_ID + 2) # Why +2 because we want active nodes in the next level 
     restrict_3d_third = subsample_activenodes_only(restrict_3d_third, LEVEL_ID + 3)
+    restrict_3d_fourth = subsample_activenodes_only(restrict_3d_fourth, LEVEL_ID + 4)
 
  # print shapes of all arrays
-    print(f"residual_3d_first shape: {residual_3d_first.shape}")
-    print(f"restrict_3d_first shape: {restrict_3d_first.shape}")
-    print(f"residual_3d_second shape: {residual_3d_second.shape}")
-    print(f"restrict_3d_second shape: {restrict_3d_second.shape}")
-    print(f"restrict_3d_third shape: {restrict_3d_third.shape}")
-    print(f"residual_3d_third shape: {residual_3d_third.shape}")
-    # print shapes of first_residual, 
-    print(f"first_residual shape: {first_residual.shape}")
-    print(f"first_b_next shape: {first_b_next.shape}")
-    print(f"second_residual shape: {second_residual.shape}")
-    print(f"second_b_next shape: {second_b_next.shape}")
-    print(f"third_residual shape: {third_residual.shape}")
-    print(f"third_b_next shape: {third_b_next.shape}")
+    # print(f"residual_3d_first shape: {residual_3d_first.shape}")
+    # print(f"restrict_3d_first shape: {restrict_3d_first.shape}")
+    # print(f"residual_3d_second shape: {residual_3d_second.shape}")
+    # print(f"restrict_3d_second shape: {restrict_3d_second.shape}")
+    # print(f"restrict_3d_third shape: {restrict_3d_third.shape}")
+    # print(f"residual_3d_third shape: {residual_3d_third.shape}")
+    # # print shapes of first_residual, 
+    # print(f"first_residual shape: {first_residual.shape}")
+    # print(f"first_b_next shape: {first_b_next.shape}")
+    # print(f"second_residual shape: {second_residual.shape}")
+    # print(f"second_b_next shape: {second_b_next.shape}")
+    # print(f"third_residual shape: {third_residual.shape}")
+    # print(f"third_b_next shape: {third_b_next.shape}")
 
 
 
     # clean up
     simulator.stop()
 
-    # print residual and restrict at level 0 and level 1
-    print(f"residual_3d_first shape: {residual_3d_first[:, :, 0]}")
-    print(f"residual_3d_second shape: {residual_3d_second[:, :, 0]}")
-    print(f"residual_3d_third shape: {residual_3d_third[:, :, 0]}")
-    print(f"restrict_3d_first shape: {restrict_3d_first[:, :, 0]}")
-    print(f"restrict_3d_second shape: {restrict_3d_second[:, :, 0]}")
-    print(f"restrict_3d_third shape: {restrict_3d_third[:, :, 0]}")
+    # # print residual and restrict at level 0 and level 1
+    # print(f"residual_3d_first shape: {residual_3d_first[:, :, 0]}")
+    # # print(f"residual_3d_second shape: {residual_3d_second[:, :, 0]}")
+    # # print(f"residual_3d_third shape: {residual_3d_third[:, :, 0]}")
+    # print(f"restrict_3d_first shape: {restrict_3d_first[:, :, 0]}")
+    # # print(f"restrict_3d_second shape: {restrict_3d_second[:, :, 0]}")
+    # # print(f"restrict_3d_third shape: {restrict_3d_third[:, :, 0]}")
 
+
+    # # print residual
+    print("Host")
+    print(f"first_xi (host): {first_xi:.6e}")
+    print(f"second_xi (host): {second_xi:.6e}")
+    print(f"third_xi (host): {third_xi:.6e}")
+    print(f"fourth_xi (host): {fourth_xi:.6e}")
+
+    print("Device")
+    print(f"xi_first (device): {xi_first:.6e}")
+    print(f"xi_second (device): {xi_second:.6e}")
+    print(f"xi_third (device): {xi_third:.6e}")
+    print(f"xi_fourth (device): {xi_fourth:.6e}")
+
+    # print(f"residual_3d_first (device): {residual_3d_first[:, :, 0]}")
+    # print(f"residual_3d_second (device): {residual_3d_second[:, :, 0]}")
+    # print(f"residual_3d_third (device): {residual_3d_third[:, :, 0]}")
+    # print(f"residual_3d_fourth (device): {residual_3d_fourth[:, :, 0]}")
     # Verify - no transposes needed since we're using consistent (nx, ny, nz) ordering
     # np.testing.assert_allclose(u_result_3d, first_smooth_u, atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(residual_3d_first, first_residual, atol=1e-5, rtol=1e-5)
@@ -480,12 +583,8 @@ def main():
     np.testing.assert_allclose(restrict_3d_second, second_b_next, atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(residual_3d_third, third_residual, atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(restrict_3d_third, third_b_next, atol=1e-5, rtol=1e-5)
-    
-    # print("u_result_3d (first z-layer, k=0):")
-    # print(u_result_3d[:, :, 0])
-    # print("\n")
-
-
+    np.testing.assert_allclose(residual_3d_fourth, fourth_residual, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(restrict_3d_fourth, fourth_b_next, atol=1e-5, rtol=1e-5)
     print("SUCCESS!")
 
 if __name__ == "__main__":

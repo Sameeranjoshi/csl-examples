@@ -12,7 +12,7 @@ param BLOCK_SIZE: i16; // size of temporary buffers for communication
 // libraries
 const timestamp = @import_module("<time>");
 const math_lib = @import_module("<math>");
-// const blas_lib = @import_module("blas.csl");
+const blas_lib = @import_module("blas.csl");
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
 // allreduce uses input queue/output queue 1
 const reduce_mod = @import_module("../../../non-unit-7pt/modified_csl_lib/allreduce/pe.csl", @concat_structs(reduceParams, .{
@@ -43,9 +43,7 @@ var r = @zeros([MAX_ZDIM]f32); // residual
 var Au = @zeros([MAX_ZDIM]f32); // A*u (operator applied to solution)
 var b_next = @zeros([MAX_ZDIM]f32);
 var residual_temp = @zeros([MAX_ZDIM]f32); // residual temporary
-// var r_coarse = @zeros([MAX_ZDIM]f32); // coarse residual
-// var u_coarse = @zeros([MAX_ZDIM]f32); // coarse solution
-// var correction = @zeros([MAX_ZDIM]f32); // correction from coarse level
+var xi = @zeros([1]f32);
 
 // GMG parameters
 var omega: f32 = @as(f32, 0.5); // Jacobi relaxation parameters
@@ -92,18 +90,13 @@ var mem_r_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r[i] });
 var mem_Au_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> Au[i] });
 var mem_b_next_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> b_next[i] });
 var mem_residual_temp_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> residual_temp[i] });
-// var mem_r_coarse_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r_coarse[i] });
-// var mem_u_coarse_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> u_coarse[i] });
-// var mem_correction_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> correction[i] });
 
 // Export symbols for host access
 var ptr_u: [*]f32 = &u;
 var ptr_f: [*]f32 = &f;
 var ptr_r: [*]f32 = &r;
 var ptr_Au: [*]f32 = &Au;
-// var ptr_r_coarse: [*]f32 = &r_coarse;
-// var ptr_u_coarse: [*]f32 = &u_coarse;
-// var ptr_correction: [*]f32 = &correction;
+var ptr_xi: [*]f32 = &xi;
 var ptr_stencil_coeff: [*]f32 = &stencil_coeff;
 var ptr_b_next: [*]f32 = &b_next;
 // TODO: Leo
@@ -230,6 +223,7 @@ fn f_gmg_init(size: i16, level_id: u16, h: f32) void {
 
     // reset dsds to 0.0 if needed.
     @fmovs(mem_u_dsd, 0.0); // Why? Before we start any level we have to reset u to 0.0
+    @fmovs(mem_r_dsd, 0.0);
 
     
     sys_mod.unblock_cmd_stream();
@@ -248,10 +242,24 @@ fn f_residual() void {
     // First apply operator to get Au
     // f_apply_operator();
     // Then compute residual: r = f - Au
-    // print Au
+
+    // It's important to make residual=0 in non active PEs because the allreduce
+    // module reduces to bottom-right PE then broadcasts to all PEs.
+    // So correct answer will be sum of only active PEs, so inactive must be 0.
     if (is_active_pe) {
         @fsubs(mem_r_dsd, mem_f_dsd, mem_Au_dsd);
+        // xi[0] = blas_lib.dot(n, &r, &r);
+    // } else {
+        // @fmovs(mem_r_dsd, 0.0);
+        // xi[0] = 0.0;
+    // } else{
+    //     @fmovs(mem_r_dsd, 0.0);
     }
+
+
+    // reduce(|r|^2)
+    // This can be optimized as it works on all PEs and doesn't understand active/inactive PEs.
+    // reduce_mod.allreduce(1, &xi, reduce_mod.TYPE_BINARY_OP.ADD);
 
     sys_mod.unblock_cmd_stream();
 }
@@ -344,6 +352,7 @@ comptime {
     // @export_symbol(ptr_time_ref, "time_ref");
     // @export_symbol(ptr_residual_norm, "residual_norm");
     @export_symbol(ptr_b_next, "b_next");
+    @export_symbol(ptr_xi, "xi");
 }
 
 comptime {

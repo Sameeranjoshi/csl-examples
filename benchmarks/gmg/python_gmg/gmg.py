@@ -136,11 +136,11 @@ class SimpleGMG:
             points = grid['nx'] * grid['ny'] * grid['nz']
             total_points += points
             bytes_per_elem = self.grids[0]['u'].dtype.itemsize  # f32
-            memory_mb = (points * 4 * bytes_per_elem) / (1024 * 1024)
-            print(f"  Level {level}: {points:,} points × 4 arrays = {memory_mb:.2f} MB")
+            memory_mb = (points * 4 * bytes_per_elem)/1024
+            print(f"  Level {level}: {points:,} points × 4 arrays = {memory_mb:.2f} KB")
         total_bytes_per_elem = self.grids[0]['u'].dtype.itemsize
-        total_memory = (total_points * 4 * total_bytes_per_elem) / (1024 * 1024)
-        print(f"  Total: {total_points:,} points × 4 arrays = {total_memory:.2f} MB")
+        total_memory = (total_points * 4 * total_bytes_per_elem)/1024
+        print(f"  Total: {total_points:,} points × 4 arrays = {total_memory:.2f} KB")
         print("-" * 50)
         print()
     
