@@ -381,13 +381,24 @@ class SimpleGMG:
     #     up_yx = coarse_u.repeat(2, axis=1).repeat(2, axis=2)   # (nz, 2*Ny, 2*Nx)
     #     fine_u[:, :2*Ny, :2*Nx] += up_yx
     
-    def solve_coarse(self, level: int):
+    def solve_coarse(self):
         """Solve on coarsest level using Jacobi"""
-        grid = self.grids[level]
+
+        # if level != self.num_levels - 1:
+        #     raise ValueError("solve_coarse can only be called on the coarsest level")
+        #     return
+        coarse_level = self.num_levels - 1
+        grid = self.grids[coarse_level]
         
         # Many Jacobi iterations on coarsest level
         # for _ in range(50):
-        self.jacobi_smooth(level, self.BOTTOM_SOLVER_ITER)
+        self.jacobi_smooth(coarse_level, self.BOTTOM_SOLVER_ITER)
+
+                # Compute residual
+        self.compute_residual(coarse_level)
+
+        self.grids[coarse_level]['rho'] = self.calculate_rho(self.grids[coarse_level]['r'])
+        
     
     def v_cycle(self, level: int = 0):
         """V-cycle multigrid"""

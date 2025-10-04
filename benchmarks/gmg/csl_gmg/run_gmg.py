@@ -129,17 +129,39 @@ def calculate_fabric_dimensions(args, width, height, width_west_buf, width_east_
 
   return fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y
 
-def copy_data_h2d(u_1d, f_1d, stencil_coeff, height, width, zDim, memcpy_dtype, memcpy_order, simulator, 
-                  symbol_u, symbol_f, symbol_stencil_coeff):
+def copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, 
+                  symbol_u, symbol_f, symbol_stencil_coeff, device_solver):                  
     """Copy data from host to device"""
+
+    LEVEL_ZERO = 0
+
+    u_hwl = device_solver.grids[LEVEL_ZERO]['u']  # (nx, ny, nz) -> (height, width, zDim) - no transpose needed
+    f_hwl = device_solver.grids[LEVEL_ZERO]['f']  # (nx, ny, nz) -> (height, width, zDim) - no transpose needed
+    h = device_solver.grids[LEVEL_ZERO]['h']
+    # order: {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
+    stencil_coeff = np.zeros((height, width, 7), dtype=DTYPE)  # 3D-7pt
+    stencil_coeff[:, :, 0] = device_solver.BETA/h**2 # west(-1)
+    stencil_coeff[:, :, 1] = device_solver.BETA/h**2 # east(-1)
+    stencil_coeff[:, :, 2] = device_solver.BETA/h**2 # south(-1)
+    stencil_coeff[:, :, 3] = device_solver.BETA/h**2 # north(-1)
+    stencil_coeff[:, :, 4] = device_solver.BETA/(h**2) # bottom(-1)
+    stencil_coeff[:, :, 5] = device_solver.BETA/(h**2) # top(-1)
+    stencil_coeff[:, :, 6] = device_solver.ALPHA/(h**2)  # center (-6)
+
+    # Flatten the data    
+    u_1d_level_0 = hwl_2_oned_colmajor(height, width, zDim, u_hwl, DTYPE)
+    f_1d_level_0 = hwl_2_oned_colmajor(height, width, zDim, f_hwl, DTYPE)    
+    stencil_coeff_1d = hwl_2_oned_colmajor(height, width, 7, stencil_coeff, DTYPE)
+
+
     # # Copy solution vector u
-    simulator.memcpy_h2d(symbol_u, u_1d, 0, 0, width, height, zDim,
+    simulator.memcpy_h2d(symbol_u, u_1d_level_0, 0, 0, width, height, zDim,
                          streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
     # Copy right-hand side f
-    simulator.memcpy_h2d(symbol_f, f_1d, 0, 0, width, height, zDim,
+    simulator.memcpy_h2d(symbol_f, f_1d_level_0, 0, 0, width, height, zDim,
                          streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
     # Copy stencil coefficients
-    simulator.memcpy_h2d(symbol_stencil_coeff, stencil_coeff, 0, 0, width, height, 7,
+    simulator.memcpy_h2d(symbol_stencil_coeff, stencil_coeff_1d, 0, 0, width, height, 7,
                          streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
 
 def copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_device):
@@ -218,15 +240,16 @@ def residual_operator(simulator):
     simulator.launch("f_residual", nonblock=False)
 
 # x_new = x_old + JACOBI_COEFF_PER_LEVEL * (b- Ax)
-def jacobi_smoothing_operator(device_solver, simulator):
+def jacobi_smoothing_operator(device_solver, simulator, iterations):
 
-  for i in range(device_solver.PRE_SMOOTH_ITER):
+  for i in range(iterations):
     # Jacobi smoothing
     # print(f"Iteration {i+1}: Jacobi smoothing")
     JACOBI_COEFF_PER_LEVEL = -1.0 * (device_solver.grids[0]['h'] * device_solver.grids[0]['h']) / 12.0;
 
     simulator.launch("f_apply_operator", nonblock=False) # applyOp = A*u
     # x_new = x_old + JACOBI_COEFF_PER_LEVEL * (b- applyOp)
+    # 1 here means loop only once, we perform the loop as of now on the host, need to move to device later.
     simulator.launch("f_jacobi_smooth", np.int16(1), np.float32(JACOBI_COEFF_PER_LEVEL), nonblock=False)
 
 def restrict_operator(device_solver, simulator, zDim):
@@ -237,14 +260,14 @@ def restrict_operator(device_solver, simulator, zDim):
     simulator.launch("f_restriction_division", np.int16(zDim), nonblock=False)
 
 
-def process_single_level(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, 
+def process_single_level_down(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, 
                         symbol_r, symbol_f, current_level):
     """Process a single level of the GMG algorithm"""
     print(f"Step 0: Initialize GMG LEVEL_ID = {current_level}")
     init_operator(device_solver, zDim, simulator, current_level)
     
     print(f"Step 1: Jacobi smoothing operator LEVEL_ID = {current_level}")
-    jacobi_smoothing_operator(device_solver, simulator)
+    jacobi_smoothing_operator(device_solver, simulator, device_solver.PRE_SMOOTH_ITER)
     
     print(f"Step 2: Compute residual LEVEL_ID = {current_level}")
     residual_operator(simulator)
@@ -256,14 +279,27 @@ def process_single_level(device_solver, height, width, zDim, memcpy_dtype, memcp
     # Copy restriction result from device to host
     restrict_3d = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_f)
     
-    device_solver.grids[current_level]['r'] = subsample_activenodes_only(residual_3d, current_level)
     rho_level = device_solver.calculate_rho(residual_3d)
-    device_solver.grids[current_level]['rho'] = rho_level
-    device_solver.grids[current_level + 1]['f'] = subsample_activenodes_only(restrict_3d, current_level + 1)
     
     return residual_3d, restrict_3d, rho_level
 
-def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_f, symbol_r, symbol_b_next, symbol_xi, symbol_stencil_coeff, LEVEL_ID, args):
+def process_coarse_level(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_f, symbol_r, current_level):
+    """Process the coarse level"""
+    print(f"Step 0: Initialize GMG LEVEL_ID = {current_level}")
+    init_operator(device_solver, zDim, simulator, current_level)
+    
+    print(f"Step 1: Jacobi smoothing operator LEVEL_ID = {current_level}")
+    jacobi_smoothing_operator(device_solver, simulator, device_solver.BOTTOM_SOLVER_ITER)
+
+    # residual extra step don't count in time.
+    print(f"Step 2: Compute residual LEVEL_ID = {current_level}")
+    residual_operator(simulator)
+    residual_3d_coarse = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_r)
+    rho_level_coarse = device_solver.calculate_rho(residual_3d_coarse)
+    
+    return residual_3d_coarse, rho_level_coarse
+
+def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_f, symbol_r, args):
     """Main GMG algorithm"""
     print("=" * 50)
     print(f"\nHardware : grid size {height}x{width}")
@@ -272,40 +308,32 @@ def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order
     device_solver._print_initialization_info()
 
     # Process each level using a loop
-    num_levels = args.levels - 1  # levels 0, 1, 2, 3
-    level_data = {}
-    
-    for i in range(num_levels):
-        current_level = LEVEL_ID + i
+    for i in range(args.levels - 1):
+        current_level = i
         print(f"\nProcessing Level {i} (LEVEL_ID = {current_level})")
         
         # Process the current level
-        residual_3d, restrict_3d, rho_level = process_single_level(
+        residual_3d, restrict_3d, rho_level = process_single_level_down(
             device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator,
             symbol_r, symbol_f, current_level
         )
-        
-        # Store data for validation (subsampled to match host data)
-        level_data[f'level_{i}'] = {
-            'residual': device_solver.grids[current_level]['r'],  # subsampled residual
-            'restrict': device_solver.grids[current_level + 1]['f'],  # subsampled restriction
-            'rho': rho_level
-        }
+        device_solver.grids[current_level]['r'] = subsample_activenodes_only(residual_3d, current_level)
+        device_solver.grids[current_level]['rho'] = rho_level
+        device_solver.grids[current_level + 1]['f'] = subsample_activenodes_only(restrict_3d, current_level + 1)
+    
+    # solve coarse level
+    print(f"\nProcessing Level {args.levels - 1}(COARSE) (LEVEL_ID = {args.levels - 1})")
+    residual_3d_coarse, rho_level_coarse = process_coarse_level(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_f, symbol_r, args.levels - 1)
+    device_solver.grids[args.levels - 1]['r'] = subsample_activenodes_only(residual_3d_coarse, args.levels - 1)
+    device_solver.grids[args.levels - 1]['rho'] = rho_level_coarse
 
-    # # Interpolation (for now, just copy)
-    # print("Step 6: Interpolation")
-    # simulator.launch("f_interpolate", nonblock=False)
-    
-    # # Add correction
-    # print("Step 7: Add correction")
-    # simulator.launch("f_add_correction", nonblock=False)
-    
-    return level_data
+
+def get_exponent(A: int) -> int:
+    return int(math.log2(A))
 
 def main():
     """Main function"""
     np.random.seed(2)
-    LEVEL_ID = 0
 
     # parse arguments
     args, logs_dir = parse_args()
@@ -320,21 +348,23 @@ def main():
     width = args.n
     pe_length = args.k  # This seems like the max size the 3rd dimension can be
     zDim = args.zDim
+    max_possible_levels = get_exponent(height)  # pick any randome dimension
+    if (args.levels > max_possible_levels):
+        raise ValueError(f"ERROR: args.levels ({args.levels}) is greater than max_possible_levels ({max_possible_levels}) levels for this problem size. We stop at 2x2 coarse grid size.")
 
     # perform argument checks
     assert pe_length >= 2, "the maximum size of z must be greater than 1"
     assert zDim >= 2, "the minimum size of zDim must be greater than 1"
     assert zDim <= pe_length, "[0, zDim) cannot exceed the storage"
 
+    # Host GMG for validation
+    #########################################################
     # Initialize solver data.
     host_solver = SimpleGMG(width, height, zDim, args.levels, args.verbose, args.tolerance, args.pre_iter, args.post_iter, args.bottom_iter)
     device_solver = copy.deepcopy(host_solver)    # Before solving make sure to make a deep copy as python might modify the data in the original object.
-
-
-    # Host GMG for validation
-    #########################################################
     # host_residual, host_iterations = host_solver.solve(args.max_ite)
-    host_solver.only_down_cycle(LEVEL_ID)
+    host_solver.only_down_cycle()
+    host_solver.solve_coarse()
 
     # fourth_xi = calculate_rho(fourth_residual)
     # # Use hop-based laplacian to match WSE implementation
@@ -358,33 +388,12 @@ def main():
     #     arch=args.arch if args.arch else "wse2", C0=0, C1=1, C2=2, C3=3, C4=4, C5=5, C6=6, C7=7, C8=8, channels=args.channels, 
     #     width_west_buf=args.width_west_buf, width_east_buf=args.width_east_buf, levels=args.levels)
     
-    # Initialize data
+    ### Initialize data
     print("Initializing data...")
-    # device_grid = device_solver.get_grids() # Already has data filled and shapes initialized.
-    u_hwl = device_solver.grids[LEVEL_ID]['u']  # (nx, ny, nz) -> (height, width, zDim) - no transpose needed
-    f_hwl = device_solver.grids[LEVEL_ID]['f']  # (nx, ny, nz) -> (height, width, zDim) - no transpose needed
-    # order: {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
-    stencil_coeff = np.zeros((height, width, 7), dtype=DTYPE)  # 3D-7pt
-    h = device_solver.grids[LEVEL_ID]['h']
-    stencil_coeff[:, :, 0] = device_solver.BETA/h**2 # west(-1)
-    stencil_coeff[:, :, 1] = device_solver.BETA/h**2 # east(-1)
-    stencil_coeff[:, :, 2] = device_solver.BETA/h**2 # south(-1)
-    stencil_coeff[:, :, 3] = device_solver.BETA/h**2 # north(-1)
-    stencil_coeff[:, :, 4] = device_solver.BETA/(h**2) # bottom(-1)
-    stencil_coeff[:, :, 5] = device_solver.BETA/(h**2) # top(-1)
-    stencil_coeff[:, :, 6] = device_solver.ALPHA/(h**2)  # center (-6)
-
-    # Flatten the data    
-    u_1d_level_0 = hwl_2_oned_colmajor(height, width, zDim, u_hwl, DTYPE)
-    f_1d_level_0 = hwl_2_oned_colmajor(height, width, zDim, f_hwl, DTYPE)    
-    stencil_coeff_1d = hwl_2_oned_colmajor(height, width, 7, stencil_coeff, DTYPE)
-
     # Create simulator
     memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
     memcpy_order = MemcpyOrder.COL_MAJOR
-    simulator = SdkRuntime(logs_dir, cmaddr=args.cmaddr, msg_level="INFO")
-
-    # Get symbols
+    simulator = SdkRuntime(logs_dir, cmaddr=args.cmaddr)
     symbol_u = simulator.get_id("u")  # solution vector
     symbol_f = simulator.get_id("f")  # right-hand side
     symbol_r = simulator.get_id("r")  # residual (reuse x for now)
@@ -392,57 +401,43 @@ def main():
     symbol_Au = simulator.get_id("Au")
     symbol_b_next = simulator.get_id("b_next")
     symbol_xi = simulator.get_id("xi")
-    # host  = device
-    #TODO: Leo
-     # Load and run
     simulator.load()
     simulator.run()
 
+    ### Run GMG algorithm on device
     # Copy data to device
     print("Copying data to device...")
-    copy_data_h2d(u_1d_level_0, f_1d_level_0, stencil_coeff_1d, height, width, zDim, memcpy_dtype, memcpy_order, simulator,
-                  symbol_u, symbol_f, symbol_stencil_coeff)
-    
+    copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator,
+                  symbol_u, symbol_f, symbol_stencil_coeff, device_solver)
     # Run GMG algorithm
     print("Running GMG algorithm...")
-    device_data = gmg_algorithm(device_solver, height, width, zDim, 
-                                 memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_f, symbol_r, symbol_b_next, symbol_xi, symbol_stencil_coeff, LEVEL_ID, args)
-   
-
-    # Copy results back
+    gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_f, symbol_r, args)
     print("Copying results back...")
 
     # clean up
     simulator.stop()
 
-
+    ### Verification
     # Extract host data for all levels using a loop
-    host_data = {}
-    for i in range(args.levels - 1):  # levels 0, 1, 2, 3
-        level = LEVEL_ID + i
-        host_data[f'level_{i}'] = {
-            'residual': host_solver.grids[level]['r'],
-            'restrict': host_solver.grids[level + 1]['f'],
-            'rho': host_solver.grids[level]['rho']
-        }
-
-    # Print xi values using a loop
-    print("Host")
-    level_names = [f'level_{i}' for i in range(args.levels - 1)]
-    for i, name in enumerate(level_names):
-        print(f"{name}_rho (host): {host_data[name]['rho']:.6e}")
-    print("Device")
-    level_names = [f'level_{i}' for i in range(args.levels - 1)]
-    for i, name in enumerate(level_names):
-        print(f"{name}_rho (device): {device_data[name]['rho']:.6e}")
+    print("Host rho")
+    for level_index in range(args.levels):  # levels 0, 1, 2, 3
+        if level_index == args.levels - 1:
+            print(f"Level {level_index}(coarse): {host_solver.grids[level_index]['rho']:.6e}")
+        else:
+            print(f"Level {level_index}: {host_solver.grids[level_index]['rho']:.6e}")
     
-    # Convert assertions to a loop
-    level_names = [f'level_{i}' for i in range(args.levels - 1)]
-    for i, name in enumerate(level_names):
-        host_level = host_data[name]
-        device_level = device_data[name]
-        np.testing.assert_allclose(device_level['residual'], host_level['residual'], atol=1e-5, rtol=1e-5)
-        np.testing.assert_allclose(device_level['restrict'], host_level['restrict'], atol=1e-5, rtol=1e-5)
+    print("Device rho")
+    for level_index in range(args.levels):  # levels 0, 1, 2, 3
+        if level_index == args.levels - 1:
+            print(f"Level {level_index}(coarse): {device_solver.grids[level_index]['rho']:.6e}")
+        else:
+            print(f"Level {level_index}: {device_solver.grids[level_index]['rho']:.6e}")
+
+    for level_index in range(args.levels):  # levels 0, 1, 2, 3
+        np.testing.assert_allclose(device_solver.grids[level_index]['r'], host_solver.grids[level_index]['r'], atol=1e-5, rtol=1e-5)
+        if level_index != args.levels - 1:  # There is no restrict at coarse level
+            np.testing.assert_allclose(device_solver.grids[level_index + 1]['f'], host_solver.grids[level_index + 1]['f'], atol=1e-5, rtol=1e-5)
+
     print("SUCCESS!")
 
 if __name__ == "__main__":
