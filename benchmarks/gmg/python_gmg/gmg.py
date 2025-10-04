@@ -78,7 +78,8 @@ class SimpleGMG:
                 'u': np.zeros((nx, ny, nz), dtype=DTYPE),      # Solution
                 'f': np.zeros((nx, ny, nz), dtype=DTYPE),      # Right-hand side
                 'r': np.zeros((nx, ny, nz), dtype=DTYPE),      # Residual
-                'Au': np.zeros((nx, ny, nz), dtype=DTYPE)      # A*u
+                'Au': np.zeros((nx, ny, nz), dtype=DTYPE),      # A*u
+                'rho': 0.0                                    # L2 norm squared of the residual
             }
             grids.append(grid)
             
@@ -206,7 +207,32 @@ class SimpleGMG:
             # Simple test function: f = sin(πx)sin(πy)sin(πz)
             pi = DTYPE(np.pi)
             grid['f'] = np.sin(pi * X) * np.sin(pi * Y) * np.sin(pi * Z)
-    
+
+
+    def calculate_rho(self, residual_3d):
+        """Calculate the L2 norm squared of the residual vector
+        
+        This function computes ||r||² where r is the residual vector.
+        This is equivalent to the xi calculation in the CSL code.
+        
+        Args:
+            residual_3d: 3D numpy array of shape (height, width, zDim) containing residual values
+            
+        Returns:
+            float: The L2 norm squared of the residual vector
+            
+        Example:
+            rho = self.calculate_rho(residual_3d_first)
+        """
+        rho = np.dot(residual_3d.flatten(), residual_3d.flatten())
+        # Flatten the 3D array to 1D vector
+        # residual_1d = residual_3d.flatten()
+        
+        # Compute L2 norm squared: ||r||² = Σ(r[i]²)
+        # rho = np.sum(residual_1d * residual_1d)
+        
+        return rho
+
     def apply_operator(self, level: int):
         """Apply 7-point Laplacian operator"""
         grid = self.grids[level]
@@ -360,8 +386,8 @@ class SimpleGMG:
         grid = self.grids[level]
         
         # Many Jacobi iterations on coarsest level
-        for _ in range(50):
-            self.jacobi_smooth(level, self.BOTTOM_SOLVER_ITER)
+        # for _ in range(50):
+        self.jacobi_smooth(level, self.BOTTOM_SOLVER_ITER)
     
     def v_cycle(self, level: int = 0):
         """V-cycle multigrid"""
@@ -431,7 +457,30 @@ class SimpleGMG:
         
         return residual, iterations
 
+    def only_down_cycle(self, level: int = 0):
+        """Only down cycle multigrid"""
+        if level == self.num_levels - 1:
+            # Coarsest level: solve directly
+            # self.solve_coarse(level)
+            return
+        
+        # Pre-smooth
+        self.jacobi_smooth(level, self.PRE_SMOOTH_ITER)
+        
+        # Compute residual
+        self.compute_residual(level)
 
+        self.grids[level]['rho'] = self.calculate_rho(self.grids[level]['r'])
+        
+        # Restrict residual to coarser level
+        self.restrict(level)
+        
+        # Initialize coarse solution
+        self.grids[level + 1]['u'].fill(0.0)
+        
+        # Recursive call to coarser level
+        self.only_down_cycle(level + 1)
+    
 def main():
     """Main function"""
     import argparse
