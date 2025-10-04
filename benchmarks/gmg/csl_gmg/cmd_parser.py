@@ -57,7 +57,7 @@ def parse_args():
   parser.add_argument("-k", default=1, type=int, help="size of local tensor, no less than 2")
   parser.add_argument("--zDim", default=2, type=int, help="[0 zDim-1) is the domain of Laplacian")
   parser.add_argument("--max-ite", default=1, type=int, help="maximum number of iterations of GMG")
-  parser.add_argument('-l', '--levels', type=int, default=2, help='Number of multigrid levels (default: 2)')
+  parser.add_argument('-l', '--levels', type=int, default=2, help='Maximum number of multigrid levels (default: 2)')
   parser.add_argument('-v', '--verbose', action='store_true', help='Print detailed level information')
   parser.add_argument('--tolerance', type=float, default=1e-6, help='Convergence tolerance (default: 1e-6)')
   parser.add_argument('--pre-iter', type=int, default=6, help='Number of pre-smoothing iterations (default: 6)')

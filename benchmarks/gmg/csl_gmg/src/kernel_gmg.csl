@@ -41,6 +41,7 @@ var u = @zeros([MAX_ZDIM]f32); // solution vector
 var f = @zeros([MAX_ZDIM]f32); // right-hand side
 var r = @zeros([MAX_ZDIM]f32); // residual
 var Au = @zeros([MAX_ZDIM]f32); // A*u (operator applied to solution)
+var b_next = @zeros([MAX_ZDIM]f32);
 var residual_temp = @zeros([MAX_ZDIM]f32); // residual temporary
 // var r_coarse = @zeros([MAX_ZDIM]f32); // coarse residual
 // var u_coarse = @zeros([MAX_ZDIM]f32); // coarse solution
@@ -80,7 +81,7 @@ var active_pes_in_restriction_window_y: u16 = 2;
 const rectangle = @get_rectangle();
 const width: u16 = rectangle.width; // This should be passed as a parameter or retrieved from somewhere
 const height: u16 = rectangle.height; // This should be passed as a parameter or retrieved from somewhere  
-var b_next = @zeros([MAX_ZDIM]f32);
+
 var current_level_id: u16 = 0;
 var is_active_pe: bool = true;
 
@@ -199,11 +200,11 @@ fn f_restriction_division(n:i16) void {
         // Divide all Z dimensions by total active PEs in window
         // n = zDim(passed at runtime and not MAX_ZDIM)
         while(zindex < n) : (zindex +=1) {  // This can be @fmuls()
-            b_next[zindex] = r[zindex] / total_active_PEs ;
+            f[zindex] = r[zindex] / total_active_PEs ;
         }
     } else{
         // 0
-        @fmovs(mem_b_next_dsd, 0.0);
+        @fmovs(mem_f_dsd, 0.0);
     }
     sys_mod.unblock_cmd_stream();
 }
@@ -226,6 +227,10 @@ fn f_gmg_init(size: i16, level_id: u16, h: f32) void {
     // mem_correction_dsd = @set_dsd_length(mem_correction_dsd, @bitcast(u16,n));
 
     f_init_spmv_and_reduce(current_level_id);
+
+    // reset dsds to 0.0 if needed.
+    @fmovs(mem_u_dsd, 0.0); // Why? Before we start any level we have to reset u to 0.0
+
     
     sys_mod.unblock_cmd_stream();
 }
@@ -244,8 +249,9 @@ fn f_residual() void {
     // f_apply_operator();
     // Then compute residual: r = f - Au
     // print Au
-    
-    @fsubs(mem_r_dsd, mem_f_dsd, mem_Au_dsd);
+    if (is_active_pe) {
+        @fsubs(mem_r_dsd, mem_f_dsd, mem_Au_dsd);
+    }
 
     sys_mod.unblock_cmd_stream();
 }
@@ -260,10 +266,11 @@ fn f_jacobi_smooth(smooth_iterations: i16, JACOBI_COEFF_PER_LEVEL: f32) void {
         // 2. Au = A*u
         // f_apply_operator(); // Answer is in mem_Au_dsd
         // 3. residual_temp = f - Au
-        @fsubs(mem_residual_temp_dsd, mem_f_dsd, mem_Au_dsd); // residual_temp = f - Au
-        // 4. u = u + JACOBI_COEFF_PER_LEVEL * residual_temp
-        @fmacs(mem_u_dsd, mem_u_dsd, mem_residual_temp_dsd, JACOBI_COEFF_PER_LEVEL);
-    // }
+        if (is_active_pe) {
+            @fsubs(mem_residual_temp_dsd, mem_f_dsd, mem_Au_dsd); // residual_temp = f - Au
+            // 4. u = u + JACOBI_COEFF_PER_LEVEL * residual_temp
+            @fmacs(mem_u_dsd, mem_u_dsd, mem_residual_temp_dsd, JACOBI_COEFF_PER_LEVEL);
+        }
     f_trigger_state_machine();
 }
 

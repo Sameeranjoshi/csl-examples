@@ -75,7 +75,7 @@ class SimpleGMG:
             
             grid = {
                 'nx': nx, 'ny': ny, 'nz': nz, 'h': h,
-                'u': np.ones((nx, ny, nz), dtype=DTYPE),      # Solution
+                'u': np.zeros((nx, ny, nz), dtype=DTYPE),      # Solution
                 'f': np.zeros((nx, ny, nz), dtype=DTYPE),      # Right-hand side
                 'r': np.zeros((nx, ny, nz), dtype=DTYPE),      # Residual
                 'Au': np.zeros((nx, ny, nz), dtype=DTYPE)      # A*u
