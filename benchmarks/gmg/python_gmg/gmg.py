@@ -79,7 +79,8 @@ class SimpleGMG:
                 'f': np.zeros((nx, ny, nz), dtype=DTYPE),      # Right-hand side
                 'r': np.zeros((nx, ny, nz), dtype=DTYPE),      # Residual
                 'Au': np.zeros((nx, ny, nz), dtype=DTYPE),      # A*u
-                'rho': 0.0                                    # L2 norm squared of the residual
+                'rho': 0.0,                                    # L2 norm squared of the residual
+                'rho_up': 0.0                                   # L2 norm squared of the residual after up cycle
             }
             grids.append(grid)
             
@@ -331,11 +332,10 @@ class SimpleGMG:
             fine_r[1:fineX:2, 1:fineY:2, :]
         ) / 4.0
 
-
-    def interpolate(self, coarse_level: int):
+    def interpolate(self, fine_level: int):
         """Semicoarsening interpolation - only interpolate in 2D (x,y), keep z dimension"""
-        coarse = self.grids[coarse_level]
-        fine = self.grids[coarse_level - 1]
+        fine = self.grids[fine_level]
+        coarse = self.grids[fine_level + 1]
         
         coarse_u = coarse['u']
         fine_u = fine['u']
@@ -355,56 +355,18 @@ class SimpleGMG:
                     fi, fj = 2*i, 2*j  # Only double x,y coordinates
                     fk = k  # z coordinate stays the same
                     coarse_val = coarse_u[i, j, k]
-                    
-                    # Add coarse value to 4 fine points in 2D (x,y plane)
-                    for di in [0, 1]:
-                        for dj in [0, 1]:
-                            if (fi+di < fine['nx'] and fj+dj < fine['ny'] and fk < fine['nz']):
-                                fine_u[fi+di, fj+dj, fk] += coarse_val
-
-    # def interpolate(self, coarse_level: int):
-    #     """Semicoarsening interpolation: expand in x,y by 2, keep z unchanged."""
-    #     coarse = self.grids[coarse_level]     # (nz, Ny, Nx)
-    #     fine   = self.grids[coarse_level - 1] # (nz, ny, nx)
-
-    #     coarse_u = coarse['u']
-    #     fine_u   = fine['u']
-
-    #     # If sizes match, just add and return
-    #     if (fine['nx'] == coarse['nx'] and fine['ny'] == coarse['ny'] and fine['nz'] == coarse['nz']):
-    #         fine_u[:] += coarse_u[:]
-    #         return
-
-    #     Nz, Ny, Nx = coarse_u.shape
-
-    #     # Make a 2x upsampled block in y and x, then add into the matching fine region
-    #     up_yx = coarse_u.repeat(2, axis=1).repeat(2, axis=2)   # (nz, 2*Ny, 2*Nx)
-    #     fine_u[:, :2*Ny, :2*Nx] += up_yx
-    
-    def solve_coarse(self):
-        """Solve on coarsest level using Jacobi"""
-
-        # if level != self.num_levels - 1:
-        #     raise ValueError("solve_coarse can only be called on the coarsest level")
-        #     return
-        coarse_level = self.num_levels - 1
-        grid = self.grids[coarse_level]
-        
-        # Many Jacobi iterations on coarsest level
-        # for _ in range(50):
-        self.jacobi_smooth(coarse_level, self.BOTTOM_SOLVER_ITER)
-
-                # Compute residual
-        self.compute_residual(coarse_level)
-
-        self.grids[coarse_level]['rho'] = self.calculate_rho(self.grids[coarse_level]['r'])
-        
+                    # Add val to four fine points in (x,y) plane at same z
+                    if fi + 1 < fine['nx'] and fj + 1 < fine['ny']:
+                        fine_u[fi,   fj,   fk] += coarse_val
+                        fine_u[fi+1, fj,   fk] += coarse_val
+                        fine_u[fi,   fj+1, fk] += coarse_val
+                        fine_u[fi+1, fj+1, fk] += coarse_val
     
     def v_cycle(self, level: int = 0):
         """V-cycle multigrid"""
         if level == self.num_levels - 1:
             # Coarsest level: solve directly
-            self.solve_coarse(level)
+            self.solve_coarse()
             return
         
         # Pre-smooth
@@ -423,50 +385,10 @@ class SimpleGMG:
         self.v_cycle(level + 1)
                 
         # Interpolate correction
-        self.interpolate(level + 1)
+        self.interpolate(level)
         
         # Post-smooth
         self.jacobi_smooth(level, self.POST_SMOOTH_ITER)
-    
-    def solve(self, max_iter: int = 20):
-        """Solve using V-cycles"""
-        # Initialize solution
-        for grid in self.grids:
-            grid['u'].fill(0.0)
-        
-        print(f"Starting GMG solve with {max_iter} max iterations")
-        print(f"Grid size: {self.nx}x{self.ny}x{self.nz}, Levels: {self.num_levels}")
-        print(f"Tolerance: {self.tolerance}")
-        print("-" * 50)
-        
-        start_time = time.time()
-        iterations = 0
-        residual = 100.0
-        
-        while residual > self.tolerance and iterations < max_iter:
-            # Perform V-cycle
-            cycle_start = time.time()
-            self.v_cycle()
-            cycle_time = time.time() - cycle_start
-            
-            # Check convergence
-            self.compute_residual(0)
-            residual = np.max(np.abs(self.grids[0]['r']))
-            iterations += 1
-            
-            print(f"Iteration {iterations:2d}: Residual = {residual:.6e}, Time = {cycle_time:.4f}s")
-        
-        total_time = time.time() - start_time
-        
-        print("-" * 50)
-        print(f"After {iterations} iterations")
-        print(f"Final residual: {residual:.6e}")
-        print(f"Tolerance: {self.tolerance:.6e}")
-        converged = "Yes" if residual < self.tolerance else "No"
-        print(f"Converged: {converged}")
-        print(f"Total time: {total_time:.4f}s")
-        
-        return residual, iterations
 
     def only_down_cycle(self, level: int = 0):
         """Only down cycle multigrid"""
@@ -491,49 +413,130 @@ class SimpleGMG:
         
         # Recursive call to coarser level
         self.only_down_cycle(level + 1)
-    
-def main():
-    """Main function"""
-    import argparse
-    
-    parser = argparse.ArgumentParser(description='Simple GMG Solver')
-    parser.add_argument('-s', '--size', default='32,32,32', 
-                       help='Grid size as nx,ny,nz (default: 32,32,32)')
-    parser.add_argument('-l', '--levels', type=int, default=4,
-                       help='Number of multigrid levels (default: 4)')
-    parser.add_argument('-n', '--max_iter', type=int, default=20,
-                       help='Maximum iterations (default: 20)')
-    parser.add_argument('-v', '--verbose', action='store_true',
-                       help='Print detailed level information')
-    parser.add_argument('--tolerance', type=float, default=1e-6,
-                       help='Convergence tolerance (default: 1e-6)')
-    parser.add_argument('--pre-iter', type=int, default=6,
-                       help='Number of pre-smoothing iterations (default: 6)')
-    parser.add_argument('--post-iter', type=int, default=6,
-                       help='Number of post-smoothing iterations (default: 6)')
-    parser.add_argument('--bottom-iter', type=int, default=100,
-                       help='Number of bottom solver iterations (default: 100)')
-    
-    args = parser.parse_args()
-    
-    # Parse grid size
-    size_parts = args.size.split(',')
-    if len(size_parts) != 3:
-        raise ValueError("Grid size must be in format nx,ny,nz")
-    
-    nx, ny, nz = map(int, size_parts)
-    
-    print("=" * 60)
-    print("Simple Geometric Multigrid Solver")
-    print("=" * 60)
-    
-    # Create and run solver
-    solver = SimpleGMG(nx, ny, nz, args.levels, args.verbose, args.tolerance, args.pre_iter, args.post_iter, args.bottom_iter)
-    residual, iterations = solver.solve(args.max_iter)
-    
-    print(f"Final residual: {residual:.6e}")
-    print(f"Iterations: {iterations}")
+    # Note level must be (coarse_level - 2)
+    def only_up_cycle(self, level: int):
+            """Only up cycle multigrid"""
+            if level == -1:
+                return
+            
+            # Interpolate correction
+            self.interpolate(level)
+            
+            # Post-smooth
+            self.jacobi_smooth(level, self.POST_SMOOTH_ITER)
 
+            # residual
+            self.compute_residual(level)
+            self.grids[level]['rho_up'] = self.calculate_rho(self.grids[level]['r'])
 
-if __name__ == "__main__":
-    main()
+            # Recursive call to finer level
+            self.only_up_cycle(level - 1)
+
+    def solve_coarse(self):
+        """Solve on coarsest level using Jacobi"""
+
+        # if level != self.num_levels - 1:
+        #     raise ValueError("solve_coarse can only be called on the coarsest level")
+        #     return
+        coarse_level = self.num_levels - 1
+        grid = self.grids[coarse_level]
+        
+        # Many Jacobi iterations on coarsest level
+        # for _ in range(50):
+        self.jacobi_smooth(coarse_level, self.BOTTOM_SOLVER_ITER)
+
+                # Compute residual
+        self.compute_residual(coarse_level)
+
+        self.grids[coarse_level]['rho'] = self.calculate_rho(self.grids[coarse_level]['r'])
+
+    #########################################################
+    ## User facing functions
+    #########################################################
+
+    # recursive version
+    def solve(self, max_iter: int = 20):
+        """Solve using V-cycles"""
+        # Initialize solution
+        for grid in self.grids:
+            grid['u'].fill(0.0)
+        
+        print(f"Starting GMG solve with {max_iter} max iterations")
+        print(f"Grid size: {self.nx}x{self.ny}x{self.nz}, Levels: {self.num_levels}")
+        print(f"Tolerance: {self.tolerance}")
+        print("-" * 50)
+        
+        start_time = time.time()
+        iterations = 0
+        residual = 0.0
+        
+        # while residual > self.tolerance and iterations < max_iter:
+        while iterations < max_iter:
+            # Perform V-cycle
+            cycle_start = time.time()
+            self.v_cycle()
+            cycle_time = time.time() - cycle_start
+            
+            # Check convergence
+            self.compute_residual(0)
+            residual = self.calculate_rho(self.grids[0]['r'])
+            iterations += 1
+            
+            print(f"Iteration {iterations:2d}: Residual = {residual:.6e}, Time = {cycle_time:.4f}s")
+        
+        total_time = time.time() - start_time
+        
+        print("-" * 50)
+        print(f"After {iterations} iterations")
+        print(f"Final residual: {residual:.6e}")
+        print(f"Tolerance: {self.tolerance:.6e}")
+        converged = "Yes" if residual < self.tolerance else "No"
+        print(f"Converged: {converged}")
+        print(f"Total time: {total_time:.4f}s")
+        
+        return residual, iterations
+  
+    def solve_iterative(self, max_iter: int = 20):
+        """Solve using iterative version"""
+        # Initialize solution
+        for grid in self.grids:
+            grid['u'].fill(0.0)
+        
+        print(f"Starting GMG solve with {max_iter} max iterations")
+        print(f"Grid size: {self.nx}x{self.ny}x{self.nz}, Levels: {self.num_levels}")
+        print(f"Tolerance: {self.tolerance}")
+        print("-" * 50)
+        
+        start_time = time.time()
+        iterations = 0
+        residual = 100.0
+        
+        # while residual > self.tolerance and iterations < max_iter:
+        while iterations < max_iter:
+            # Perform V-cycle
+            cycle_start = time.time()
+            self.only_down_cycle()
+            self.solve_coarse()
+            self.only_up_cycle(self.num_levels - 2)
+            cycle_time = time.time() - cycle_start
+            
+            # Check convergence
+            self.compute_residual(0)
+            residual = self.calculate_rho(self.grids[0]['r'])
+            iterations += 1
+            
+            print(f"Iteration {iterations:2d}: Residual = {residual:.6e}, Time = {cycle_time:.4f}s")
+        
+        total_time = time.time() - start_time
+        
+        print("-" * 50)
+        print(f"After {iterations} iterations")
+        print(f"Final residual: {residual:.6e}")
+        print(f"Tolerance: {self.tolerance:.6e}")
+        converged = "Yes" if residual < self.tolerance else "No"
+        print(f"Converged: {converged}")
+        print(f"Total time: {total_time:.4f}s")
+        
+        return residual, iterations
+
+    #########################################################

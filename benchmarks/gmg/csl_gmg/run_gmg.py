@@ -362,9 +362,11 @@ def main():
     # Initialize solver data.
     host_solver = SimpleGMG(width, height, zDim, args.levels, args.verbose, args.tolerance, args.pre_iter, args.post_iter, args.bottom_iter)
     device_solver = copy.deepcopy(host_solver)    # Before solving make sure to make a deep copy as python might modify the data in the original object.
-    # host_residual, host_iterations = host_solver.solve(args.max_ite)
-    host_solver.only_down_cycle()
-    host_solver.solve_coarse()
+    host_residual, host_iterations = host_solver.solve(args.max_ite)
+    host_solver.solve_iterative(args.max_ite)
+    # host_solver.only_down_cycle()
+    # host_solver.solve_coarse()
+    # host_solver.only_up_cycle(args.levels - 2)
 
     # fourth_xi = calculate_rho(fourth_residual)
     # # Use hop-based laplacian to match WSE implementation
@@ -425,7 +427,14 @@ def main():
             print(f"Level {level_index}(coarse): {host_solver.grids[level_index]['rho']:.6e}")
         else:
             print(f"Level {level_index}: {host_solver.grids[level_index]['rho']:.6e}")
-    
+    print("Host rho_up")
+    for level_index in reversed(range(args.levels)):  # Print from bottom (coarse) to top (fine)
+        if level_index == args.levels - 1:
+            print(f"Level {level_index}(coarse): {host_solver.grids[level_index]['rho_up']:.6e}")
+        else:
+            print(f"Level {level_index}: {host_solver.grids[level_index]['rho_up']:.6e}")
+
+
     print("Device rho")
     for level_index in range(args.levels):  # levels 0, 1, 2, 3
         if level_index == args.levels - 1:

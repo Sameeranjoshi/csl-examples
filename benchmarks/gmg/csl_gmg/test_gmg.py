@@ -30,17 +30,8 @@ def test_down_cycle_only(nx, ny, nz, num_levels, tolerance, pre_iter, post_iter,
     print()
     
     # Use the existing only_down_cycle function
-    solver.only_down_cycle()
-    
-    # Print residual norms at all levels after down cycle
-    print("Residual norms at all levels after down cycle:")
-    for level in range(num_levels):
-        # Compute residual at each level
-        r_level = solver.grids[level]['r']
-        residual_norm = np.dot(r_level.flatten(), r_level.flatten())
-        grid_shape = solver.grids[level]['r'].shape
-        total_points = np.prod(grid_shape)
-        print(f"  Level {level}: residual norm: {residual_norm:.6e} (grid: {grid_shape}, points: {total_points})")
+    # solver.only_down_cycle()
+    solver.solve(max_iter=1)
     
     print("=" * 60)
     print("Down cycle test completed!")
@@ -50,8 +41,8 @@ def test_down_cycle_only(nx, ny, nz, num_levels, tolerance, pre_iter, post_iter,
 if __name__ == "__main__":
     # test_stencil_coefficients()
     # Test parameters
-    nx, ny, nz = 16, 16, 16
-    num_levels = 5
+    nx, ny, nz = 8, 8, 8
+    num_levels = 3
     tolerance = 1e-6
     pre_iter = 6
     post_iter = 6
