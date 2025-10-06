@@ -371,42 +371,95 @@ def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order
     device_solver._print_level_info()
     device_solver._print_initialization_info()
 
-    # DOWN CYCLE: Process each level using a loop
-    for i in range(args.levels - 1):
-        current_level = i
-        print(f"\nDOWN CYCLE - Processing Level {i} (LEVEL_ID = {current_level})")
-        
-        # Process the current level
-        residual_3d, restrict_3d, rho_level = process_single_level_down(
-            device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator,
-            symbol_r, symbol_f, current_level
-        )
-        device_solver.grids[current_level]['r'] = subsample_activenodes_only(residual_3d, current_level)
-        device_solver.grids[current_level]['rho'] = rho_level
-        device_solver.grids[current_level + 1]['f'] = subsample_activenodes_only(restrict_3d, current_level + 1)
+    # Initialize solution
+    for grid in device_solver.grids:
+        grid['u'].fill(0.0)
     
-    # solve coarse level
-    print(f"\nDOWN CYCLE - Processing Level {args.levels - 1}(COARSE) (LEVEL_ID = {args.levels - 1})")
-    residual_3d_coarse, rho_level_coarse = process_coarse_level(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_f, symbol_r, symbol_u, args.levels - 1)
-    device_solver.grids[args.levels - 1]['r'] = subsample_activenodes_only(residual_3d_coarse, args.levels - 1)
-    device_solver.grids[args.levels - 1]['rho'] = rho_level_coarse
-    device_solver.grids[args.levels - 1]['rho_up'] = rho_level_coarse
+    max_iter = args.max_ite
+    print(f"Starting GMG solve with {max_iter} max iterations")
+    print(f"Grid size: {height}x{width}x{zDim}, Levels: {args.levels}")
+    print(f"Tolerance: {args.tolerance}")
+    print("-" * 50)
+    
+    import time
+    #   start_time = time.time()
+    iterations = 0
+    residual = 100.0
+    
+    # while residual > args.tolerance and iterations < max_iter:
+    while iterations < max_iter or residual > args.tolerance:
+        # CRITICAL FIX: Copy updated solution to device at start of each iteration
+        if iterations > 0:  # Skip for first iteration since data is already copied
+            print("Copying updated solution to device for iteration...")
+            u_1d_level_0 = hwl_2_oned_colmajor(height, width, zDim, device_solver.grids[0]['u'], DTYPE)
+            simulator.memcpy_h2d(symbol_u, u_1d_level_0, 0, 0, width, height, zDim,
+                               streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+        
+        # Perform V-cycle
+        
+        # DOWN CYCLE: Process each level using a loop
+        for i in range(args.levels - 1):
+            current_level = i
+            print(f"\nDOWN CYCLE - Processing Level {i} (LEVEL_ID = {current_level})")
+            
+            # Process the current level
+            residual_3d, restrict_3d, rho_level = process_single_level_down(
+                device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator,
+                symbol_r, symbol_f, current_level
+            )
+            device_solver.grids[current_level]['r'] = subsample_activenodes_only(residual_3d, current_level)
+            device_solver.grids[current_level]['rho'] = rho_level
+            device_solver.grids[current_level + 1]['f'] = subsample_activenodes_only(restrict_3d, current_level + 1)
+        
+        # solve coarse level
+        print(f"\nDOWN CYCLE - Processing Level {args.levels - 1}(COARSE) (LEVEL_ID = {args.levels - 1})")
+        residual_3d_coarse, rho_level_coarse = process_coarse_level(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_f, symbol_r, symbol_u, args.levels - 1)
+        device_solver.grids[args.levels - 1]['r'] = subsample_activenodes_only(residual_3d_coarse, args.levels - 1)
+        device_solver.grids[args.levels - 1]['rho'] = rho_level_coarse
+        device_solver.grids[args.levels - 1]['rho_up'] = rho_level_coarse
 
-    # UP CYCLE: Process each level in reverse order (interpolation)
-    for i in reversed(range(args.levels - 1)):
-        current_level = i
-        print(f"\nUP CYCLE - Processing Level {i} (LEVEL_ID = {current_level})")
+        # UP CYCLE: Process each level in reverse order (interpolation)
+        for i in reversed(range(args.levels - 1)):
+            current_level = i
+            print(f"\nUP CYCLE - Processing Level {i} (LEVEL_ID = {current_level})")
 
-        # Process the current level (interpolation + post-smoothing)
-        correction_3d, residual_3d, rho_level = process_single_level_up(
-            device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator,
-            symbol_u, symbol_r, current_level
-        )
-        # print(f"Step 1: Interpolation result: \n {correction_3d[:, :, 0]}")
-        device_solver.grids[current_level]['u'] = subsample_activenodes_only(correction_3d, current_level)
-        # print(f"Step 2: Interpolation result(subsampled): \n {device_solver.grids[current_level]['u'][:, :, 0]}")
-        device_solver.grids[current_level]['r'] = subsample_activenodes_only(residual_3d, current_level)
-        device_solver.grids[current_level]['rho_up'] = rho_level
+            # Process the current level (interpolation + post-smoothing)
+            correction_3d, residual_3d, rho_level = process_single_level_up(
+                device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator,
+                symbol_u, symbol_r, current_level
+            )
+            # print(f"Step 1: Interpolation result: \n {correction_3d[:, :, 0]}")
+            device_solver.grids[current_level]['u'] = subsample_activenodes_only(correction_3d, current_level)
+            # print(f"Step 2: Interpolation result(subsampled): \n {device_solver.grids[current_level]['u'][:, :, 0]}")
+            device_solver.grids[current_level]['r'] = subsample_activenodes_only(residual_3d, current_level)
+            device_solver.grids[current_level]['rho_up'] = rho_level
+        
+        
+        # Check convergence
+        print(f"Step 3: Compute residual LEVEL_ID = {0}")
+        residual_operator(simulator)
+        residual_3d = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_r)
+        residual = device_solver.calculate_rho(residual_3d)
+        iterations += 1
+        
+        print(f"Iteration {iterations:2d}: Residual = {residual:.6e}")
+        print("-" * 50)
+        
+        # CRITICAL FIX: Synchronize device data back to host after each V-cycle
+        # This ensures the host-side device_solver.grids are updated with the device state
+        if iterations < max_iter and residual > args.tolerance:
+            print("Synchronizing device data to host for next iteration...")
+            # Copy the updated solution u from device to host
+            u_3d = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u)
+            # Update the host-side device_solver with the current device state
+            device_solver.grids[0]['u'] = u_3d  # Update the fine level solution
+    
+
+    print(f"After {iterations} iterations")
+    print(f"Final residual: {residual:.6e}")
+    print(f"Tolerance: {args.tolerance:.6e}")
+    converged = "Yes" if residual < args.tolerance else "No"
+    print(f"Converged: {converged}")
 
 
 def get_exponent(A: int) -> int:
@@ -504,30 +557,16 @@ def main():
     # Extract host data for all levels using a loop
     print("Host rho")
     for level_index in range(args.levels):  # levels 0, 1, 2, 3
-        if level_index == args.levels - 1:
-            print(f"Level {level_index}(coarse): {host_solver.grids[level_index]['rho']:.6e}")
-        else:
-            print(f"Level {level_index}: {host_solver.grids[level_index]['rho']:.6e}")
-    print("Host rho_up")
+        print(f"Level {level_index}: {host_solver.grids[level_index]['rho']:.6e}")
     for level_index in reversed(range(args.levels)):  # Print from bottom (coarse) to top (fine)
-        if level_index == args.levels - 1:
-            print(f"Level {level_index}(coarse): {host_solver.grids[level_index]['rho_up']:.6e}")
-        else:
-            print(f"Level {level_index}: {host_solver.grids[level_index]['rho_up']:.6e}")
+        print(f"Level {level_index}: {host_solver.grids[level_index]['rho_up']:.6e}")
 
 
     print("Device rho")
     for level_index in range(args.levels):  # levels 0, 1, 2, 3
-        if level_index == args.levels - 1:
-            print(f"Level {level_index}(coarse): {device_solver.grids[level_index]['rho']:.6e}")
-        else:
-            print(f"Level {level_index}: {device_solver.grids[level_index]['rho']:.6e}")
-    print("Device rho_up")
+        print(f"Level {level_index}: {device_solver.grids[level_index]['rho']:.6e}")
     for level_index in reversed(range(args.levels)):  # Print from bottom (coarse) to top (fine)
-        if level_index == args.levels - 1:
-            print(f"Level {level_index}(coarse): {device_solver.grids[level_index]['rho_up']:.6e}")
-        else:
-            print(f"Level {level_index}: {device_solver.grids[level_index]['rho_up']:.6e}")
+        print(f"Level {level_index}: {device_solver.grids[level_index]['rho_up']:.6e}")
 
     for level_index in range(args.levels):  # levels 0, 1, 2, 3
         # np.testing.assert_allclose(device_solver.grids[level_index]['r'], host_solver.grids[level_index]['r'], atol=1e-5, rtol=1e-5)
