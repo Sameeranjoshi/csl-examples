@@ -29,4 +29,4 @@ cslc ./src/layout_gmg.csl --arch wse3 --fabric-dims=16,10 --fabric-offsets=4,1 \
 --params=C6_ID:6 --params=C7_ID:7 --params=C8_ID:8 --params=LEVELS:2 -o=out \
 --memcpy --channels=1 --width-west-buf=0 --width-east-buf=0 --max-inlined-iterations=1000000
 cs_python ./run_gmg.py -m=4 -n=4 -k=4 --latestlink out --channels=1 \
---width-west-buf=0 --width-east-buf=0 --zDim=4 --run-only --levels=2
+--width-west-buf=0 --width-east-buf=0 --zDim=4 --run-only --levels=2 --max-ite=1

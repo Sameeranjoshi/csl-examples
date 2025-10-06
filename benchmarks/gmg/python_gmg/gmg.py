@@ -524,6 +524,8 @@ class SimpleGMG:
             cycle_start = time.time()
             self.only_down_cycle()
             self.solve_coarse()
+            # temporary fix.
+            self.grids[self.num_levels - 1]['rho_up'] = self.grids[self.num_levels - 1]['rho']
             self.only_up_cycle(self.num_levels - 2)
             cycle_time = time.time() - cycle_start
             
