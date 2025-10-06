@@ -250,6 +250,7 @@ const STATE_DONE: i16 = 5;
 // New states for reverse reduction (targeting top-left PE)
 const STATE_ROW_REDUCE_REVERSE: i16 = 6;  // right-to-left (east-to-west)
 const STATE_COL_REDUCE_REVERSE: i16 = 7;  // bottom-to-top (south-to-north)
+const STATE_BCAST_FROM_TOP_LEFT: i16 = 8; // broadcast from top-left to all PEs in window
 
 // allreduce(ADD/MAX) has four states
 // allreduce_nrm2 has 9 states
@@ -343,6 +344,23 @@ fn reduce_row_col_top_left( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP ) void
    state_seq[0] = STATE_ROW_REDUCE_REVERSE;
    state_seq[1] = STATE_COL_REDUCE_REVERSE;
    state_seq[2] = STATE_DONE;
+
+   state_idx = 0;
+   cur_state = state_seq[0];
+   @activate(C_STATE_ENTRY);
+}
+
+// Broadcast from top-left PE to all PEs in the window
+fn broadcast_from_top_left( n: i16, in_tensor: [*]f32 ) void {
+   x = in_tensor;
+//    functor = op;
+
+   @assert(n > 0);
+   wvlts_per_pe = @bitcast(u16, n);
+
+   // setup state sequence: broadcast from top-left -> done
+   state_seq[0] = STATE_BCAST_FROM_TOP_LEFT;
+   state_seq[1] = STATE_DONE;
 
    state_idx = 0;
    cur_state = state_seq[0];
@@ -575,6 +593,16 @@ task f_state_entry() void {
         state_idx += 1;
         next_state = state_seq[state_idx];
 
+    }else if (STATE_BCAST_FROM_TOP_LEFT == cur_state){
+        // bcast_from_top_left_configure() reconfigures pos0 and disables pos1
+        bcast_from_top_left_configure();
+        // top-left PE broadcasts the data to others and also sends TD
+        broadcast_to_all_inside_window( wvlts_per_pe );
+
+        // prefetch next state which will be copied into cur_state in teardown handler
+        state_idx += 1;
+        next_state = state_seq[state_idx];
+
     }else if (STATE_SCALE_AND_SQUARE == cur_state){
         // Assume allreduce(MAX) is done
         // x[0] = xmax = max({|xj|})
@@ -684,6 +712,36 @@ fn broadcast_to_all( n: u16 ) void {
         // other PEs receive data and wait for TD
         // unblock LOCK after data is received, T29 will activate LOCK
         //@mov32(mem_x_buf_dsd, fab_recv_wdsd, .{.async=true, .unblock=C_LOCK} );
+        @load_to_dsr(dest_dsr, mem_x_buf_dsd);
+        @load_to_dsr(src1_dsr, fab_recv_wdsd, .{.async=true, .unblock=C_LOCK} );
+        @mov32(dest_dsr, src1_dsr, .{.async=true} );
+    }
+}
+
+// TODO: Room for improvement: We can skip somehow the inactive PEs.
+// Broadcast from top-left PE to all PEs in the window
+// This is the reverse of the standard broadcast - starts from top-left instead of bottom-right
+fn broadcast_to_all_inside_window( n: u16 ) void {
+
+    // WARNING: block LOCK in the beginning and only
+    // unblock LOCK when "broadcast" finishes
+    @block(C_LOCK);
+
+    mem_x_buf_dsd = @set_dsd_base_addr(mem_x_buf_dsd, x);
+    mem_x_buf_dsd = @set_dsd_length(mem_x_buf_dsd, n);
+    fab_recv_wdsd = @set_dsd_length(fab_recv_wdsd, n);
+    fab_trans_x_wdsd = @set_dsd_length(fab_trans_x_wdsd, n);
+
+    // Check if this PE is the top-left corner of its restriction window
+    if (is_window_boundary_x_start and is_window_boundary_y_start) {
+        // Top-left PE sends data and then f_send_ctrl sends a TD
+        // f_send_ctrl() will unblock LOCK
+        @load_to_dsr(dest_dsr, fab_trans_x_wdsd, .{.async=true, .activate=f_send_ctrl} );
+        @load_to_dsr(src1_dsr, mem_x_buf_dsd);
+        @mov32(dest_dsr, src1_dsr, .{.async=true} );
+    } else {
+        // other PEs receive data and wait for TD
+        // unblock LOCK after data is received, T29 will activate LOCK
         @load_to_dsr(dest_dsr, mem_x_buf_dsd);
         @load_to_dsr(src1_dsr, fab_recv_wdsd, .{.async=true, .unblock=C_LOCK} );
         @mov32(dest_dsr, src1_dsr, .{.async=true} );
@@ -1171,6 +1229,51 @@ fn bcast_configure() void {
 
     // (3) clear teardown-in-progress bit
     // config_reg[c] ^= mask where mask = 1 << 14
+    tile_config.teardown.exit(C_ROUTE);
+}
+
+// Broadcast from top-left configuration
+// This is the reverse of the standard broadcast - starts from top-left instead of bottom-right
+// Pattern: Top-left PE sends data to last column towards south, then all PEs in last column send data to west
+//
+// over restriction window boundary
+//  x --> x --> x
+//  |           
+//  V            
+//  x --> x --> x
+//  |            
+//  V            
+//  x --> x --> x
+//
+fn bcast_from_top_left_configure() void {
+
+    // (1) setup the new routing first because the pos1 needs to inherit from pos0
+    const addr = color_config.get_color_config_addr(C_ROUTE);
+
+    if (is_window_boundary_x_start){ // senders
+        if (is_window_boundary_y_start){
+            // Top-left PE: send to east and south, { .rx = .{RAMP}, .tx = .{EAST, SOUTH} } }
+            color_config.reset_routes(addr, .{.tx = [2]direction{EAST, SOUTH}, .rx = RAMP});
+        } else if (is_window_boundary_y_end){
+            // first row, last PE. recv from north, send to east, send to ramp
+            color_config.reset_routes(addr, .{.tx = [2]direction{EAST, RAMP}, .rx = NORTH});
+        } else {
+            // first column, middle PE. recv from north, send to east and south
+            color_config.reset_routes(addr, .{.tx = [3]direction{EAST, RAMP, SOUTH}, .rx = NORTH});
+        }
+    } else if (is_window_boundary_x_end){
+        // Last column: receive from west, send to south
+        color_config.reset_routes(addr, .{.tx = RAMP, .rx = WEST});
+    } else {
+        // Middle columns: receive from west, send to east and south
+        color_config.reset_routes(addr, .{.tx = [2]direction{EAST, RAMP}, .rx = WEST});
+    }
+    
+    // (2) setup switch according to config parameters
+    switch_config.clear_current_position(C_ROUTE);
+    switch_config.set_invalid_for_all_switch_positions(C_ROUTE);
+
+    // (3) clear teardown-in-progress bit
     tile_config.teardown.exit(C_ROUTE);
 }
 

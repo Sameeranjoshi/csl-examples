@@ -441,9 +441,16 @@ class SimpleGMG:
         coarse_level = self.num_levels - 1
         grid = self.grids[coarse_level]
         
+        # # print before smooth
+        # print(f"Before smooth LEVEL_ID = {coarse_level} u: \n {self.grids[coarse_level]['u'][:, :, 0]}")
+
+        # # print f before smooth
+        # print(f"Before smooth LEVEL_ID = {coarse_level} f: \n {self.grids[coarse_level]['f'][:, :, 0]}")
         # Many Jacobi iterations on coarsest level
         # for _ in range(50):
         self.jacobi_smooth(coarse_level, self.BOTTOM_SOLVER_ITER)
+        # print after smooth
+        # print(f"After smooth LEVEL_ID = {coarse_level} u: \n {self.grids[coarse_level]['u'][:, :, 0]}")
 
                 # Compute residual
         self.compute_residual(coarse_level)

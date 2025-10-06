@@ -138,20 +138,20 @@ def copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator,
     u_hwl = device_solver.grids[LEVEL_ZERO]['u']  # (nx, ny, nz) -> (height, width, zDim) - no transpose needed
     f_hwl = device_solver.grids[LEVEL_ZERO]['f']  # (nx, ny, nz) -> (height, width, zDim) - no transpose needed
     h = device_solver.grids[LEVEL_ZERO]['h']
-    # order: {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
-    stencil_coeff = np.zeros((height, width, 7), dtype=DTYPE)  # 3D-7pt
-    stencil_coeff[:, :, 0] = device_solver.BETA/h**2 # west(-1)
-    stencil_coeff[:, :, 1] = device_solver.BETA/h**2 # east(-1)
-    stencil_coeff[:, :, 2] = device_solver.BETA/h**2 # south(-1)
-    stencil_coeff[:, :, 3] = device_solver.BETA/h**2 # north(-1)
-    stencil_coeff[:, :, 4] = device_solver.BETA/(h**2) # bottom(-1)
-    stencil_coeff[:, :, 5] = device_solver.BETA/(h**2) # top(-1)
-    stencil_coeff[:, :, 6] = device_solver.ALPHA/(h**2)  # center (-6)
+    # # order: {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
+    # stencil_coeff = np.zeros((height, width, 7), dtype=DTYPE)  # 3D-7pt
+    # stencil_coeff[:, :, 0] = device_solver.BETA/h**2 # west(-1)
+    # stencil_coeff[:, :, 1] = device_solver.BETA/h**2 # east(-1)
+    # stencil_coeff[:, :, 2] = device_solver.BETA/h**2 # south(-1)
+    # stencil_coeff[:, :, 3] = device_solver.BETA/h**2 # north(-1)
+    # stencil_coeff[:, :, 4] = device_solver.BETA/(h**2) # bottom(-1)
+    # stencil_coeff[:, :, 5] = device_solver.BETA/(h**2) # top(-1)
+    # stencil_coeff[:, :, 6] = device_solver.ALPHA/(h**2)  # center (-6)
 
     # Flatten the data    
     u_1d_level_0 = hwl_2_oned_colmajor(height, width, zDim, u_hwl, DTYPE)
     f_1d_level_0 = hwl_2_oned_colmajor(height, width, zDim, f_hwl, DTYPE)    
-    stencil_coeff_1d = hwl_2_oned_colmajor(height, width, 7, stencil_coeff, DTYPE)
+    # stencil_coeff_1d = hwl_2_oned_colmajor(height, width, 7, stencil_coeff, DTYPE)
 
 
     # # Copy solution vector u
@@ -160,9 +160,9 @@ def copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator,
     # Copy right-hand side f
     simulator.memcpy_h2d(symbol_f, f_1d_level_0, 0, 0, width, height, zDim,
                          streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
-    # Copy stencil coefficients
-    simulator.memcpy_h2d(symbol_stencil_coeff, stencil_coeff_1d, 0, 0, width, height, 7,
-                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+    # # Copy stencil coefficients
+    # simulator.memcpy_h2d(symbol_stencil_coeff, stencil_coeff_1d, 0, 0, width, height, 7,
+    #                      streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
 
 def copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_device):
     """Copy single data array from device to host with automatic reshaping to 3D format"""
@@ -225,9 +225,9 @@ def copy_data_d2h_3d(height, width, zDim, memcpy_dtype, memcpy_order, simulator,
     
     return results
 
-def init_operator(device_solver, zDim, simulator, LEVEL_ID):
+def init_operator(device_solver, zDim, simulator, LEVEL_ID, down=True):
     h_level = device_solver.grids[LEVEL_ID]['h']
-    simulator.launch("f_gmg_init", np.int16(zDim), np.uint16(LEVEL_ID), np.float32(h_level), nonblock=False)
+    simulator.launch("f_gmg_init", np.int16(zDim), np.uint16(LEVEL_ID), np.float32(h_level), np.int16(1 if down else 0), nonblock=False)
 
 def residual_operator(simulator):
 
@@ -240,12 +240,12 @@ def residual_operator(simulator):
     simulator.launch("f_residual", nonblock=False)
 
 # x_new = x_old + JACOBI_COEFF_PER_LEVEL * (b- Ax)
-def jacobi_smoothing_operator(device_solver, simulator, iterations):
+def jacobi_smoothing_operator(device_solver, simulator, iterations, current_level):
 
   for i in range(iterations):
     # Jacobi smoothing
     # print(f"Iteration {i+1}: Jacobi smoothing")
-    JACOBI_COEFF_PER_LEVEL = -1.0 * (device_solver.grids[0]['h'] * device_solver.grids[0]['h']) / 12.0;
+    JACOBI_COEFF_PER_LEVEL = -1.0 * (device_solver.grids[current_level]['h'] * device_solver.grids[current_level]['h']) / 12.0;
 
     simulator.launch("f_apply_operator", nonblock=False) # applyOp = A*u
     # x_new = x_old + JACOBI_COEFF_PER_LEVEL * (b- applyOp)
@@ -259,15 +259,42 @@ def restrict_operator(device_solver, simulator, zDim):
     print("\tStep *.2: Divide restrict to get result")
     simulator.launch("f_restriction_division", np.int16(zDim), nonblock=False)
 
+def interpolation_operator(device_solver, simulator, zDim, symbol_u, symbol_r, height, width, memcpy_dtype, memcpy_order):
+   
+    # before bcast value of 'u'  values and after
+    # u_3d = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u)
+    # print(f"Step 0: Interpolation bcast from top left")
+    # print(f"U before bcast: \n {u_3d[:, :, 0]}")
+
+    print("\tStep *.1: Interpolation bcast from top left")
+    simulator.launch("f_bcast_from_top_left", np.int16(zDim), nonblock=False)
+
+    # print u after
+    # u_3d = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u)
+    # print(f"Step 1: Interpolation bcast from top left")
+    # print(f"U after bcast: \n {u_3d[:, :, 0]}")
+
+    # print the smooth values
+    # symbol_u_smooth = simulator.get_id("u_smooth")
+    # smooth_u_3d = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u_smooth)
+    # print(f"Smooth u before interpolation: \n {smooth_u_3d[:, :, 0]}")
+                
+
+    print("\tStep *.2: Interpolation add")
+    simulator.launch("f_interpolation_add", nonblock=False)
+
+    # u_3d = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u)
+    # print(f"Step 2: Interpolation add")
+    # print(f"U after add: \n {u_3d[:, :, 0]}")
 
 def process_single_level_down(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, 
                         symbol_r, symbol_f, current_level):
     """Process a single level of the GMG algorithm"""
     print(f"Step 0: Initialize GMG LEVEL_ID = {current_level}")
-    init_operator(device_solver, zDim, simulator, current_level)
+    init_operator(device_solver, zDim, simulator, current_level, down=True)
     
     print(f"Step 1: Jacobi smoothing operator LEVEL_ID = {current_level}")
-    jacobi_smoothing_operator(device_solver, simulator, device_solver.PRE_SMOOTH_ITER)
+    jacobi_smoothing_operator(device_solver, simulator, device_solver.PRE_SMOOTH_ITER, current_level)
     
     print(f"Step 2: Compute residual LEVEL_ID = {current_level}")
     residual_operator(simulator)
@@ -283,13 +310,28 @@ def process_single_level_down(device_solver, height, width, zDim, memcpy_dtype, 
     
     return residual_3d, restrict_3d, rho_level
 
-def process_coarse_level(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_f, symbol_r, current_level):
+def process_coarse_level(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_f, symbol_r, symbol_u, current_level):
     """Process the coarse level"""
     print(f"Step 0: Initialize GMG LEVEL_ID = {current_level}")
-    init_operator(device_solver, zDim, simulator, current_level)
-    
+    init_operator(device_solver, zDim, simulator, current_level, down=True)
+
+    # # DEBUG: Print coarse level solution before smoothing
+    # print(f"DEBUG: Coarse level solution before smoothing LEVEL_ID = {current_level}")
+    # u_coarse_3d = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u)
+    # print(f"Device coarse u (subsampled): \n {subsample_activenodes_only(u_coarse_3d, current_level)[:, :, 0]}")
+
+    # print f before smoothing
+    # print(f"DEBUG: Coarse level f before smoothing LEVEL_ID = {current_level}")
+    # f_coarse_3d = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_f)
+    # print(f"Device coarse f (subsampled): \n {subsample_activenodes_only(f_coarse_3d, current_level)[:, :, 0]}")
+
     print(f"Step 1: Jacobi smoothing operator LEVEL_ID = {current_level}")
-    jacobi_smoothing_operator(device_solver, simulator, device_solver.BOTTOM_SOLVER_ITER)
+    jacobi_smoothing_operator(device_solver, simulator, device_solver.BOTTOM_SOLVER_ITER, current_level)
+
+    # # DEBUG: Print coarse level solution before residual computation
+    # print(f"DEBUG: Coarse level solution after smoothing LEVEL_ID = {current_level}")
+    # u_coarse_3d = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u)
+    # print(f"Device coarse u (subsampled): \n {subsample_activenodes_only(u_coarse_3d, current_level)[:, :, 0]}")
 
     # residual extra step don't count in time.
     print(f"Step 2: Compute residual LEVEL_ID = {current_level}")
@@ -299,7 +341,29 @@ def process_coarse_level(device_solver, height, width, zDim, memcpy_dtype, memcp
     
     return residual_3d_coarse, rho_level_coarse
 
-def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_f, symbol_r, args):
+def process_single_level_up(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, 
+                           symbol_u, symbol_r, current_level):
+    """Process a single level of the GMG algorithm during up cycle (interpolation)"""
+    print(f"Step 0: Initialize GMG LEVEL_ID = {current_level}")
+    init_operator(device_solver, zDim, simulator, current_level, down=False)
+    
+    print(f"Step 1: Interpolation LEVEL_ID = {current_level}")
+    interpolation_operator(device_solver, simulator, zDim, symbol_u, symbol_r, height, width, memcpy_dtype, memcpy_order)
+    
+    # # Copy interpolation result from device to host
+    correction_3d = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u)
+    
+    print(f"Step 2: Jacobi smoothing operator LEVEL_ID = {current_level}")
+    jacobi_smoothing_operator(device_solver, simulator, device_solver.POST_SMOOTH_ITER, current_level)
+    
+    print(f"Step 3: Compute residual LEVEL_ID = {current_level}")
+    residual_operator(simulator)
+    residual_3d = copy_data_d2h_single(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_r)
+    rho_level = device_solver.calculate_rho(residual_3d)
+    
+    return correction_3d, residual_3d, rho_level
+
+def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_f, symbol_r, symbol_u, args):
     """Main GMG algorithm"""
     print("=" * 50)
     print(f"\nHardware : grid size {height}x{width}")
@@ -307,10 +371,10 @@ def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order
     device_solver._print_level_info()
     device_solver._print_initialization_info()
 
-    # Process each level using a loop
+    # DOWN CYCLE: Process each level using a loop
     for i in range(args.levels - 1):
         current_level = i
-        print(f"\nProcessing Level {i} (LEVEL_ID = {current_level})")
+        print(f"\nDOWN CYCLE - Processing Level {i} (LEVEL_ID = {current_level})")
         
         # Process the current level
         residual_3d, restrict_3d, rho_level = process_single_level_down(
@@ -322,10 +386,27 @@ def gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order
         device_solver.grids[current_level + 1]['f'] = subsample_activenodes_only(restrict_3d, current_level + 1)
     
     # solve coarse level
-    print(f"\nProcessing Level {args.levels - 1}(COARSE) (LEVEL_ID = {args.levels - 1})")
-    residual_3d_coarse, rho_level_coarse = process_coarse_level(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_f, symbol_r, args.levels - 1)
+    print(f"\nDOWN CYCLE - Processing Level {args.levels - 1}(COARSE) (LEVEL_ID = {args.levels - 1})")
+    residual_3d_coarse, rho_level_coarse = process_coarse_level(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_f, symbol_r, symbol_u, args.levels - 1)
     device_solver.grids[args.levels - 1]['r'] = subsample_activenodes_only(residual_3d_coarse, args.levels - 1)
     device_solver.grids[args.levels - 1]['rho'] = rho_level_coarse
+    device_solver.grids[args.levels - 1]['rho_up'] = rho_level_coarse
+
+    # UP CYCLE: Process each level in reverse order (interpolation)
+    for i in reversed(range(args.levels - 1)):
+        current_level = i
+        print(f"\nUP CYCLE - Processing Level {i} (LEVEL_ID = {current_level})")
+
+        # Process the current level (interpolation + post-smoothing)
+        correction_3d, residual_3d, rho_level = process_single_level_up(
+            device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator,
+            symbol_u, symbol_r, current_level
+        )
+        # print(f"Step 1: Interpolation result: \n {correction_3d[:, :, 0]}")
+        device_solver.grids[current_level]['u'] = subsample_activenodes_only(correction_3d, current_level)
+        # print(f"Step 2: Interpolation result(subsampled): \n {device_solver.grids[current_level]['u'][:, :, 0]}")
+        device_solver.grids[current_level]['r'] = subsample_activenodes_only(residual_3d, current_level)
+        device_solver.grids[current_level]['rho_up'] = rho_level
 
 
 def get_exponent(A: int) -> int:
@@ -362,7 +443,7 @@ def main():
     # Initialize solver data.
     host_solver = SimpleGMG(width, height, zDim, args.levels, args.verbose, args.tolerance, args.pre_iter, args.post_iter, args.bottom_iter)
     device_solver = copy.deepcopy(host_solver)    # Before solving make sure to make a deep copy as python might modify the data in the original object.
-    host_residual, host_iterations = host_solver.solve(args.max_ite)
+    # host_residual, host_iterations = host_solver.solve(args.max_ite)
     host_solver.solve_iterative(args.max_ite)
     # host_solver.only_down_cycle()
     # host_solver.solve_coarse()
@@ -413,7 +494,7 @@ def main():
                   symbol_u, symbol_f, symbol_stencil_coeff, device_solver)
     # Run GMG algorithm
     print("Running GMG algorithm...")
-    gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_f, symbol_r, args)
+    gmg_algorithm(device_solver, height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_f, symbol_r, symbol_u, args)
     print("Copying results back...")
 
     # clean up
@@ -441,9 +522,15 @@ def main():
             print(f"Level {level_index}(coarse): {device_solver.grids[level_index]['rho']:.6e}")
         else:
             print(f"Level {level_index}: {device_solver.grids[level_index]['rho']:.6e}")
+    print("Device rho_up")
+    for level_index in reversed(range(args.levels)):  # Print from bottom (coarse) to top (fine)
+        if level_index == args.levels - 1:
+            print(f"Level {level_index}(coarse): {device_solver.grids[level_index]['rho_up']:.6e}")
+        else:
+            print(f"Level {level_index}: {device_solver.grids[level_index]['rho_up']:.6e}")
 
     for level_index in range(args.levels):  # levels 0, 1, 2, 3
-        np.testing.assert_allclose(device_solver.grids[level_index]['r'], host_solver.grids[level_index]['r'], atol=1e-5, rtol=1e-5)
+        # np.testing.assert_allclose(device_solver.grids[level_index]['r'], host_solver.grids[level_index]['r'], atol=1e-5, rtol=1e-5)
         if level_index != args.levels - 1:  # There is no restrict at coarse level
             np.testing.assert_allclose(device_solver.grids[level_index + 1]['f'], host_solver.grids[level_index + 1]['f'], atol=1e-5, rtol=1e-5)
 

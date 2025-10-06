@@ -27,6 +27,7 @@ param MAX_ZDIM: i16; // Maximum ZDIM size on each PE
 param width: i16 ; // width of the core
 param height: i16 ; // height of the core
 param BLOCK_SIZE: i16; // Size of temporary buffers for communication with neighbors
+param LEVELS: i16; // Number of levels
 
 
 const C0: color = @get_color(C0_ID);
@@ -101,7 +102,8 @@ layout{
                 .reduceParams = reduceParams,
                 .MAX_ZDIM = MAX_ZDIM,
                 .BLOCK_SIZE = BLOCK_SIZE,
-                .stencilParams = stencilParams
+                .stencilParams = stencilParams,
+                .LEVELS = LEVELS
             };
 
             @set_tile_code(px, py, "kernel_gmg.csl", params);
@@ -112,6 +114,7 @@ layout{
     @export_name("r", [*]f32, true);
     @export_name("Au", [*]f32, true);
     @export_name("stencil_coeff", [*]f32, true);
+    @export_name("u_smooth", [*]f32, true);
 
 
     // @export_name("f_enable_timer", fn()void);
@@ -119,7 +122,7 @@ layout{
     // @export_name("f_toc", fn()void);
     // @export_name("f_memcpy_timestamps", fn()void);
 
-    @export_name("f_gmg_init", fn(i16, u16, f32)void);
+    @export_name("f_gmg_init", fn(i16, u16, f32, i16)void);
     @export_name("f_apply_operator", fn()void);
     @export_name("f_residual", fn()void);
     @export_name("f_trigger_state_machine", fn()void);
@@ -138,4 +141,8 @@ layout{
     @export_name("f_init_spmv_and_reduce", fn(u16)void);
     @export_name("f_reduction_top_left_pattern", fn(i16)void);
     @export_name("f_restriction_division", fn(i16)void);
+    
+    // INTERPOLATION FUNCTIONS
+    @export_name("f_interpolation_add", fn()void);
+    @export_name("f_bcast_from_top_left", fn(i16)void);
 } // end of layout
