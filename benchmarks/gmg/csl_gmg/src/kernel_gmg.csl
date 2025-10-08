@@ -48,7 +48,9 @@ var xi = @zeros([1]f32);
 
 // GMG parameters
 var omega: f32 = @as(f32, 0.5); // Jacobi relaxation parameters
-var h_level: f32 = @as(f32, 1.0); // grid spacing
+var hx_level: f32 = @as(f32, 1.0); // grid spacing
+var hy_level: f32 = @as(f32, 1.0); // grid spacing
+var hz_level: f32 = @as(f32, 1.0); // grid spacing
 // stencil coefficients are organized as
 // {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
 var stencil_coeff = @zeros([7]f32);
@@ -223,10 +225,12 @@ fn f_bcast_from_top_left(n:i16) void {
 }
 
 // GMG initialization
-fn f_gmg_init(size: i16, level_id: u16, h: f32, down:i16) void {
+fn f_gmg_init(size: i16, level_id: u16, hx: f32, hy: f32, hz: f32, down:i16) void {
     n = size;   // This will be the zDim
     current_level_id = level_id;
-    h_level = h;
+    hx_level = hx;
+    hy_level = hy;
+    hz_level = hz;
     // Set the length of all DSDs
     mem_u_dsd = @set_dsd_length(mem_u_dsd, @bitcast(u16,n));
     mem_f_dsd = @set_dsd_length(mem_f_dsd, @bitcast(u16,n));
@@ -244,26 +248,23 @@ fn f_gmg_init(size: i16, level_id: u16, h: f32, down:i16) void {
         .extent = @bitcast(u16, n) 
     });
 
-    // // print save_u_smooth
-    // simprint.fmt_with_coords("save_u_smooth: LEVEL_ID = {d}\n", .{@as(u16, current_level_id)});
-    // for (save_u_smooth) |val, i| {
-    //     simprint.fmt_with_coords("save_u_smooth[{d}] = {f}", .{ i, val });
-    // }
-    // simprint.print_string("\n");
 
     // Update stencil coefficients for this level
     // order: {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
     const ALPHA: f32 = -6.0;
     const BETA: f32 = 1.0;
-    const h_squared: f32 = h_level * h_level;
+    const hx_squared: f32 = hx_level * hx_level;
+    const hy_squared: f32 = hy_level * hy_level;
+    const hz_squared: f32 = hz_level * hz_level;
+    const center_coeff: f32 = -2.0 * (1.0 / hx_squared + 1.0 / hy_squared + 1.0 / hz_squared);  // Ainsotropic equation
     
-    stencil_coeff[0] = BETA / h_squared;  // west
-    stencil_coeff[1] = BETA / h_squared;  // east  
-    stencil_coeff[2] = BETA / h_squared;  // south
-    stencil_coeff[3] = BETA / h_squared;  // north
-    stencil_coeff[4] = BETA / h_squared;  // bottom
-    stencil_coeff[5] = BETA / h_squared;  // top
-    stencil_coeff[6] = ALPHA / h_squared; // center
+    stencil_coeff[0] = BETA / hx_squared;  // west
+    stencil_coeff[1] = BETA / hx_squared;  // east  
+    stencil_coeff[2] = BETA / hy_squared;  // south
+    stencil_coeff[3] = BETA / hy_squared;  // north
+    stencil_coeff[4] = BETA / hz_squared;  // bottom
+    stencil_coeff[5] = BETA / hz_squared;  // top
+    stencil_coeff[6] = center_coeff; // center
 
     f_init_spmv_and_reduce(current_level_id);
 
@@ -337,19 +338,6 @@ fn f_jacobi_smooth(smooth_iterations: i16, JACOBI_COEFF_PER_LEVEL: f32) void {
 }
 
 
-// // Linear interpolation: copy coarse value to 8 fine points
-// fn f_interpolate() void {
-//     // For now, implement simple injection interpolation
-//     // TODO: Implement linear interpolation
-//     @fmovs(mem_correction_dsd, mem_u_coarse_dsd);
-//     sys_mod.unblock_cmd_stream();
-// }
-
-// // Add correction to solution: u = u + correction
-// fn f_add_correction() void {
-//     @fadds(mem_u_dsd, mem_u_dsd, mem_correction_dsd);
-//     sys_mod.unblock_cmd_stream();
-// }
 
 // TODO: Leo
 // // Timing functions
