@@ -209,7 +209,7 @@ fn f_interpolation_add() void {
         // u += usmooth
         @fadds(mem_u_dsd, mem_u_dsd, mem_save_u_smooth_dsd);    // dimensions is n not MAX_ZDIM
     } else {
-        // Set to 0 for non-top-left PEs
+        // Set to 0 for non-active PEs
         @fmovs(mem_u_dsd, 0.0); // can be optimized
     }
     sys_mod.unblock_cmd_stream();
@@ -284,6 +284,7 @@ fn f_gmg_init(size: i16, level_id: u16, hx: f32, hy: f32, hz: f32, down:i16) voi
 // Coefficient is already scaled by 1/h^2
 fn f_apply_operator() void {
     // 1. Au = A*u
+    @fmovs(mem_Au_dsd, 0.0); // make sure Au is 0.0 to be safe from previous values.
     stencil_mod.spmv(n, &stencil_coeff, &u, &Au);
 }
 
