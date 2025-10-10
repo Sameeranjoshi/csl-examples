@@ -177,6 +177,7 @@ var is_window_boundary_y_start: bool = false;  // PE is at window start in y
 var is_window_boundary_y_end: bool = false;    // PE is at window end in y
 var total_active_pes_x_in_window: i16 = 2;  // Number of active PEs in x-direction of window
 var total_active_pes_y_in_window: i16 = 2;  // Number of active PEs in y-direction of window
+var current_level_id: u16 = 0;
 
 // Configure runtime reduction parameters (call from kernel)
 // Sets width/height and per-PE edge flags; reduction then targets bottom-right PE
@@ -195,7 +196,8 @@ fn inwindow(px: i16, py: i16) bool {
 // window_width, window_height: Size of each restriction window
 // factor: Determines window spacing (2^factor)
 // active_x, active_y: Number of active PEs in x and y directions within window
-fn setWindowedReductionParams(window_width: i16, window_height: i16, factor: u16, total_active_pes_in_window_x: u16, total_active_pes_in_window_y: u16) void {
+fn setWindowedReductionParams(window_width: i16, window_height: i16, factor: u16, total_active_pes_in_window_x: u16, total_active_pes_in_window_y: u16, level_id: u16) void {
+    current_level_id = level_id;
     restriction_window_width = window_width;
     restriction_window_height = window_height;
     current_factor = factor;  // Store for later use
@@ -594,6 +596,9 @@ task f_state_entry() void {
         next_state = state_seq[state_idx];
 
     }else if (STATE_BCAST_FROM_TOP_LEFT == cur_state){
+        // print level information and window details
+        const px: i16 = @as(i16, layout_mod.get_x_coord());
+        const py: i16 = @as(i16, layout_mod.get_y_coord());
         // bcast_from_top_left_configure() reconfigures pos0 and disables pos1
         bcast_from_top_left_configure();
         // top-left PE broadcasts the data to others and also sends TD
@@ -718,9 +723,10 @@ fn broadcast_to_all( n: u16 ) void {
     }
 }
 
-// TODO: Room for improvement: We can skip somehow the inactive PEs.
 // Broadcast from top-left PE to all PEs in the window
-// This is the reverse of the standard broadcast - starts from top-left instead of bottom-right
+// Since multiple windows broadcast simultaneously, we need to ensure:
+// 1. Only PEs within intended windows participate
+// 2. Only window top-left corners broadcast (active PEs at factor boundaries)
 fn broadcast_to_all_inside_window( n: u16 ) void {
 
     // WARNING: block LOCK in the beginning and only
@@ -732,19 +738,32 @@ fn broadcast_to_all_inside_window( n: u16 ) void {
     fab_recv_wdsd = @set_dsd_length(fab_recv_wdsd, n);
     fab_trans_x_wdsd = @set_dsd_length(fab_trans_x_wdsd, n);
 
-    // Check if this PE is the top-left corner of its restriction window
-    if (is_window_boundary_x_start and is_window_boundary_y_start) {
-        // Top-left PE sends data and then f_send_ctrl sends a TD
+    const px: i16 = @as(i16, layout_mod.get_x_coord());
+    const py: i16 = @as(i16, layout_mod.get_y_coord());
+    
+    // Check if this PE is the top-left corner of its window
+    // Window boundaries are set to match where restricted data exists,
+    // so we don't need to check active PE status
+    const is_sender = is_window_boundary_x_start and is_window_boundary_y_start;
+    
+    // All PEs within the window should receive
+    const in_window = inwindow(px, py);
+    
+    if (is_sender) {
+        // Top-left PE of window sends data and then f_send_ctrl sends a TD
         // f_send_ctrl() will unblock LOCK
         @load_to_dsr(dest_dsr, fab_trans_x_wdsd, .{.async=true, .activate=f_send_ctrl} );
         @load_to_dsr(src1_dsr, mem_x_buf_dsd);
         @mov32(dest_dsr, src1_dsr, .{.async=true} );
-    } else {
-        // other PEs receive data and wait for TD
+    } else if (in_window) {
+        // Other PEs in window receive data and wait for TD
         // unblock LOCK after data is received, T29 will activate LOCK
         @load_to_dsr(dest_dsr, mem_x_buf_dsd);
         @load_to_dsr(src1_dsr, fab_recv_wdsd, .{.async=true, .unblock=C_LOCK} );
         @mov32(dest_dsr, src1_dsr, .{.async=true} );
+    } else {
+        // PEs outside windows don't participate - just unblock
+        @unblock(C_LOCK);
     }
 }
 
@@ -836,8 +855,8 @@ task f_send_data() void {
 
 
 task f_send_ctrl() void{
-    if (STATE_BCAST == cur_state){
-        //broadcast: Pw-1,h-1 only sends the TD
+    if (STATE_BCAST == cur_state or STATE_BCAST_FROM_TOP_LEFT == cur_state){
+        //broadcast: sender PE only sends the TD (bottom-right for standard, top-left for reverse)
         // unblock LOCK after TD is sent out
         //@mov32(fab_trans_ctrl_wdsd, mem_buf_td_dsd, .{.async=true, .unblock=C_LOCK} );
         @load_to_dsr(dest_dsr, fab_trans_ctrl_wdsd, .{.async=true, .unblock=C_LOCK} );

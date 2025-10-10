@@ -213,7 +213,6 @@ class SimpleGMG:
             pi = DTYPE(np.pi)
             grid['f'] = np.sin(pi * X) * np.sin(pi * Y) * np.sin(pi * Z)
 
-
     def calculate_rho(self, residual_3d):
         """Calculate the L2 norm squared of the residual vector
         
@@ -284,7 +283,6 @@ class SimpleGMG:
                     #Au[i, j, k] = val / (h*h)
                     Au[i, j, k] = val_x + val_y + val_z
 
-
     def compute_residual(self, level: int):
         """Compute residual r = f - Au"""
         grid = self.grids[level]
@@ -296,9 +294,6 @@ class SimpleGMG:
         Au = grid['Au']
         
         # Residual: r = f - Au
-        # print f and Au
-        # print(f"DEBUG: f LEVEL_ID = {level}: \n {f[:, :, 0]}")
-        # print(f"DEBUG: Au LEVEL_ID = {level}: \n {Au[:, :, 0]}")
         r[:] = f - Au
     
     def jacobi_smooth(self, level: int, num_iter: int = 1):
@@ -354,15 +349,10 @@ class SimpleGMG:
         """Semicoarsening interpolation - only interpolate in 2D (x,y), keep z dimension"""
         fine = self.grids[fine_level]
         coarse = self.grids[fine_level + 1]
-        
+        np.set_printoptions(linewidth=1000)
         coarse_u = coarse['u']
         fine_u = fine['u']
-        # print before interpolate, u both fine and coarse
-        # print(f"DEBUG: Before interpolate, u both fine and coarse LEVEL_ID = {fine_level}")
-        # print(f"HOST x_smooth (3D): \n {fine_u[:, :, 0]}")
-        # print(f"HOST P(u_coarse) (3D): \n {coarse_u[:, :, 0]}")
-        # Semicoarsening interpolation: copy coarse value to 4 fine points in 2D
-        # Keep z dimension unchanged (no interpolation in z)
+
         for i in range(coarse['nx']):
             for j in range(coarse['ny']):
                 for k in range(coarse['nz']):
@@ -374,11 +364,7 @@ class SimpleGMG:
                     fine_u[fi+1, fj,   fk] += coarse_val
                     fine_u[fi,   fj+1, fk] += coarse_val
                     fine_u[fi+1, fj+1, fk] += coarse_val
-        
-        # after
-        # print(f"DEBUG: After interpolate, u both fine and coarse LEVEL_ID = {fine_level}")
-        # print(f"HOST x = x_smooth + P(u_coarse) (3D): \n {fine_u[:, :, 0]}")
-    
+            
     def v_cycle(self, level: int = 0):
         """V-cycle multigrid"""
         if level == self.num_levels - 1:
@@ -410,13 +396,14 @@ class SimpleGMG:
     def only_down_cycle(self, level: int = 0):
         """Only down cycle multigrid"""
         if level == self.num_levels - 1:
-            # Coarsest level: solve directly
-            # self.solve_coarse(level)
             return
         
         # Pre-smooth
         self.jacobi_smooth(level, self.PRE_SMOOTH_ITER)
-        
+        # print u after smooth
+        u = self.grids[level]['u']
+        f = self.grids[level]['f']
+
         # Compute residual
         self.compute_residual(level)
 
@@ -430,6 +417,7 @@ class SimpleGMG:
         
         # Recursive call to coarser level
         self.only_down_cycle(level + 1)
+
     # Note level must be (coarse_level - 2)
     def only_up_cycle(self, level: int):
             """Only up cycle multigrid"""
@@ -440,19 +428,12 @@ class SimpleGMG:
             self.interpolate(level)
             
             # Post-smooth
-            # self.jacobi_smooth(level, self.POST_SMOOTH_ITER)
+            self.jacobi_smooth(level, self.POST_SMOOTH_ITER)
 
             # residual
             self.compute_residual(level)
-            # print interpolated value
-            # print stencil/A
-            print(f"DEBUG: u LEVEL_ID = {level}: \n {self.grids[level]['u'][:, :, 0]}")
-            print(f"DEBUG: Au LEVEL_ID = {level}: \n {self.grids[level]['Au'][:, :, 0]}")
-            print(f"DEBUG: f LEVEL_ID = {level}: \n {self.grids[level]['f'][:, :, 0]}")
-            print(f"DEBUG: r LEVEL_ID = {level}: \n {self.grids[level]['r'][:, :, 0]}")
+
             self.grids[level]['rho_up'] = self.calculate_rho(self.grids[level]['r'])
-            print(f"DEBUG: rho_up LEVEL_ID = {level}: \n {self.grids[level]['rho_up']}")
-########################################################################################
             # Recursive call to finer level
             self.only_up_cycle(level - 1)
 
