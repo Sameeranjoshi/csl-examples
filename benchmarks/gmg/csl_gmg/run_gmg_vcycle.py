@@ -154,6 +154,19 @@ def copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
                          streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
     simulator.memcpy_h2d(symbol_jacobi_coeff_array, jacobi_flat, 0, 0, width, height, args.levels,
                          streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+
+def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, device_solver, args):
+    
+    u_wse_1d = np.zeros(height*width*zDim, DTYPE)
+    simulator.memcpy_d2h(u_wse_1d, symbol_u, 0, 0, width, height, zDim,
+                        streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+    
+    r_wse_1d = np.zeros(height*width*zDim, DTYPE)
+    simulator.memcpy_d2h(r_wse_1d, symbol_r, 0, 0, width, height, zDim,
+                        streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+
+    return u_wse_1d, r_wse_1d
+
 def main():
     """Main function"""
     np.random.seed(2)
@@ -238,7 +251,7 @@ def main():
     
     memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
     memcpy_order = MemcpyOrder.COL_MAJOR
-    simulator = SdkRuntime(logs_dir, cmaddr=args.cmaddr)
+    simulator = SdkRuntime(logs_dir, cmaddr=args.cmaddr, simfab_numthreads=10)
     
     symbol_u = simulator.get_id("u")
     symbol_f = simulator.get_id("f")
@@ -278,19 +291,12 @@ def main():
     print("Copying results from device...")
     print("="*60)
     
-    u_wse_1d = np.zeros(height*width*zDim, DTYPE)
-    simulator.memcpy_d2h(u_wse_1d, symbol_u, 0, 0, width, height, zDim,
-                        streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
-    
-    r_wse_1d = np.zeros(height*width*zDim, DTYPE)
-    simulator.memcpy_d2h(r_wse_1d, symbol_r, 0, 0, width, height, zDim,
-                        streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
-
+    u_wse_1d, r_wse_1d = copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, device_solver, args)
     simulator.stop()
     
     # Reshape results
     u_wse_3d = oned_to_hwl_colmajor(height, width, zDim, u_wse_1d, DTYPE)
-    
+    # r_wse_3d = oned_to_hwl_colmajor(height, width, zDim, r_wse_1d, DTYPE)
     # Store device results
     device_solver.grids[0]['u'] = u_wse_3d
     device_solver.compute_residual(0)
@@ -301,26 +307,34 @@ def main():
     print("\n" + "="*60)
     print("Verification")
     print("="*60)
-    
-    # Compare final level 0 solutions
-    print(f"\nLevel 0 comparison:")
-    print(f"  Host   rho_up: {host_solver.grids[0]['rho_up']:.6e}")
-    print(f"  Device rho_up: {device_solver.grids[0]['rho_up']:.6e}")
-    print(f"  Ratio (device/host): {device_solver.grids[0]['rho_up'] / host_solver.grids[0]['rho_up']:.4f}")
-    
+    device_u = device_solver.grids[0]['u']
+    host_u = host_solver.grids[0]['u']
+    device_rh = device_solver.grids[0]['rho_up']
+    host_rh = host_solver.grids[0]['rho_up']
+
     # Compare u values at a few points
     print(f"\n All u values at level 0:")
-    print(f"  Host   u[:,:,0] = {host_solver.grids[0]['u'][:,:,0]}")
-    print(f"  Device u[:,:,0] = {device_solver.grids[0]['u'][:,:,0]}")
-    # ratio = device_solver.grids[0]['u'] / host_solver.grids[0]['u']
-    # print(f"  Ratio: {ratio:.4f}")
+    print(f"  Host   u[:,:,0] = {host_u[:,:,0]}")
+    print(f"  Device u[:,:,0] = {device_u[:,:,0]}")
     
+    print(f"\nLevel 0 comparison:")
+    print(f"  Host   rho_up: {host_rh:.6e}")
+    print(f"  Device rho_up: {device_rh:.6e}")
+    print(f"  Ratio (device/host): {device_rh / host_rh:.4f}")
     
     # Relaxed tolerance
     try:
-        np.testing.assert_allclose(device_solver.grids[0]['u'], host_solver.grids[0]['u'], 
-                                  atol=1e-4, rtol=1e-4)
+        # Compare using the original 1D array from device (u_wse_1d) 
+        # not the reshaped 3D array, to avoid memory layout issues
+        nrm2_u = np.linalg.norm(u_wse_1d, 2)
+        print(f"  |u|_2 = {nrm2_u:.6e}")
+        # Host is row-major by default, so ravel with order='F' to match device column-major
+        z = host_u.ravel(order='F') - u_wse_1d.ravel()
+        nrm2_z = np.linalg.norm(z, np.inf)
+        print(f"  |u_host - u_wse| = {nrm2_z:.6e}")
+        np.testing.assert_allclose(host_u.ravel(order='F'), u_wse_1d.ravel(), atol=1e-5, rtol=1e-5)
         print("\n SUCCESS! Device and host results match.")
+    
     except AssertionError as e:
         print(f"\n Results differ significantly")
         print(f"   This suggests a bug in the state machine implementation.")
@@ -328,8 +342,8 @@ def main():
         print(f"\nDetailed comparison (first few points):")
         for i in range(min(3, height)):
             for j in range(min(3, width)):
-                h_val = host_solver.grids[0]['u'][i,j,0]
-                d_val = device_solver.grids[0]['u'][i,j,0]
+                h_val = host_u[i,j,0]
+                d_val = device_u[i,j,0]
                 ratio = d_val / h_val if h_val != 0 else 0
                 print(f"   ({i},{j},0): host={h_val:.6e}, device={d_val:.6e}, ratio={ratio:.4f}")
     
