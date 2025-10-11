@@ -1,0 +1,501 @@
+// Geometric Multigrid (GMG) V-cycle kernel with state machine
+// Implements full V-cycle on device without host intervention
+
+// parameters
+param memcpyParams: comptime_struct;
+param reduceParams: comptime_struct;
+param stencilParams: comptime_struct;
+param MAX_ZDIM: i16;
+param BLOCK_SIZE: i16;
+param LEVELS: i16;
+param STATE: local_task_id;
+
+// libraries
+const math_lib = @import_module("<math>");
+const blas_lib = @import_module("blas.csl");
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
+const reduce_mod = @import_module("../../../non-unit-7pt/modified_csl_lib/allreduce/pe.csl", @concat_structs(reduceParams, .{
+     .f_callback = f_trigger_state_machine,
+     .queues = [1]u16{2},
+     .dest_dsr_ids = [1]u16{1},
+     .src0_dsr_ids = [1]u16{1},
+     .src1_dsr_ids = [1]u16{1}
+     }));
+const stencil_mod = @import_module("../../../non-unit-7pt/modified_csl_lib/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
+     .f_callback = f_trigger_state_machine,
+     .input_queues = [4]u16{4, 5, 6, 7},
+     .output_queues = if (@is_arch("wse3")) [4]u16{4, 5, 6, 7} else [1]u16{3},
+     .output_ut_id = 3,
+     .BLOCK_SIZE = BLOCK_SIZE,
+     .dest_dsr_ids = [2]u16{2,3},
+     .src0_dsr_ids = [1]u16{2},
+     .src1_dsr_ids = [2]u16{2,3}
+     }));
+const layout_mod = @import_module("<layout>");
+const simprint = @import_module("<simprint>", .{.enable = true});
+
+// GMG data structures
+var u = @zeros([MAX_ZDIM]f32);
+var f = @zeros([MAX_ZDIM]f32);
+var r = @zeros([MAX_ZDIM]f32);
+var Au = @zeros([MAX_ZDIM]f32);
+var residual_temp = @zeros([MAX_ZDIM]f32);
+var save_u_smooth = @zeros([LEVELS * MAX_ZDIM]f32);
+var save_f_down = @zeros([LEVELS * MAX_ZDIM]f32);
+
+// Grid spacing arrays for each level (passed from host)
+var hx_array = @zeros([LEVELS]f32);
+var hy_array = @zeros([LEVELS]f32);
+var hz_array = @zeros([LEVELS]f32);
+
+// Jacobi coefficients for each level
+var jacobi_coeff_array = @zeros([LEVELS]f32);
+
+// GMG parameters
+var hx_level: f32 = @as(f32, 1.0);
+var hy_level: f32 = @as(f32, 1.0);
+var hz_level: f32 = @as(f32, 1.0);
+var stencil_coeff = @zeros([7]f32);
+
+// State machine parameters
+var n: i16 = 0;  // zDim
+var num_levels: i16 = 0;
+var pre_smooth_iter: i16 = 0;
+var post_smooth_iter: i16 = 0;
+var bottom_solver_iter: i16 = 0;
+
+// Modified stencil/allreduce parameters
+var factor: u16 = 1;
+var hops: u16 = 1;
+var restriction_window_width: u16 = 1;
+var restriction_window_height: u16 = 1;
+var active_pes_in_restriction_window_x: u16 = 2;
+var active_pes_in_restriction_window_y: u16 = 2;
+const rectangle = @get_rectangle();
+const width: u16 = rectangle.width;
+const height: u16 = rectangle.height;
+
+var current_level_id: u16 = 0;
+var is_active_pe: bool = true;
+
+// State machine state variables
+var current_level: i16 = 0;
+var current_smooth_iter: i16 = 0;
+var cur_state: i16 = 0;
+var next_state: i16 = 0;
+
+// State definitions
+const STATE_INIT: i16 = 0;
+const STATE_DOWN_INIT: i16 = 1;
+const STATE_DOWN_SMOOTH_APPLY: i16 = 2;
+const STATE_DOWN_SMOOTH_UPDATE: i16 = 3;
+const STATE_DOWN_SMOOTH_CHECK: i16 = 4;
+const STATE_DOWN_RESIDUAL_APPLY: i16 = 5;
+const STATE_DOWN_RESIDUAL_COMPUTE: i16 = 6;
+const STATE_DOWN_RESTRICT_REDUCE: i16 = 7;
+const STATE_DOWN_RESTRICT_DIV: i16 = 8;
+const STATE_DOWN_LEVEL_CHECK: i16 = 9;
+const STATE_COARSE_INIT: i16 = 10;
+const STATE_COARSE_SMOOTH_APPLY: i16 = 11;
+const STATE_COARSE_SMOOTH_UPDATE: i16 = 12;
+const STATE_COARSE_SMOOTH_CHECK: i16 = 13;
+const STATE_UP_INIT: i16 = 14;
+const STATE_UP_BCAST: i16 = 15;
+const STATE_UP_INTERP_ADD: i16 = 16;
+const STATE_UP_SMOOTH_APPLY: i16 = 17;
+const STATE_UP_SMOOTH_UPDATE: i16 = 18;
+const STATE_UP_SMOOTH_CHECK: i16 = 19;
+const STATE_UP_LEVEL_CHECK: i16 = 20;
+const STATE_EXIT: i16 = 21;
+
+// DSDs
+var mem_u_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> u[i] });
+var mem_f_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> f[i] });
+var mem_r_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r[i] });
+var mem_Au_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> Au[i] });
+var mem_save_u_smooth_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> save_u_smooth[i] });
+var mem_save_f_down_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> save_f_down[i] });
+var mem_residual_temp_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> residual_temp[i] });
+
+// Export pointers
+var ptr_u: [*]f32 = &u;
+var ptr_f: [*]f32 = &f;
+var ptr_r: [*]f32 = &r;
+var ptr_hx_array: [*]f32 = &hx_array;
+var ptr_hy_array: [*]f32 = &hy_array;
+var ptr_hz_array: [*]f32 = &hz_array;
+var ptr_jacobi_coeff_array: [*]f32 = &jacobi_coeff_array;
+
+// Helper functions
+fn isActivePE(px: i16, py: i16, factor_val: u16) bool {
+    return (px % @as(i16, factor_val)) == 0 and (py % @as(i16, factor_val)) == 0;
+}
+
+fn is_top_left_of_restriction_window(px: u16, py: u16, window_width: u16, window_height: u16) bool {
+    const window_idx_x: u16 = px / window_width;
+    const window_idx_y: u16 = py / window_height;
+    const window_st_x: u16 = window_idx_x * window_width;
+    const window_st_y: u16 = window_idx_y * window_height;
+    return (px == window_st_x) and (py == window_st_y);
+}
+
+// Apply operator for Jacobi smoothing
+fn f_apply_operator() void {
+    @fmovs(mem_Au_dsd, 0.0);
+    stencil_mod.spmv(n, &stencil_coeff, &u, &Au);
+}
+
+fn f_jacobi_smooth() void {
+    // Jacobi update
+    const jacobi_coeff: f32 = jacobi_coeff_array[current_level];
+    if (is_active_pe) {
+        @fsubs(mem_residual_temp_dsd, mem_f_dsd, mem_Au_dsd);
+        @fmacs(mem_u_dsd, mem_u_dsd, mem_residual_temp_dsd, jacobi_coeff);
+    } else {
+        @fmovs(mem_u_dsd, 0.0);
+    }
+    @fmovs(mem_save_u_smooth_dsd, mem_u_dsd);
+}
+
+fn f_residual() void {
+    if (is_active_pe) {
+        @fsubs(mem_r_dsd, mem_f_dsd, mem_Au_dsd);
+    } else {
+        @fmovs(mem_r_dsd, 0.0);
+    }
+}
+
+fn f_reduce_row_col_top_left() void {
+    reduce_mod.reduce_row_col_top_left(n, &r, reduce_mod.TYPE_BINARY_OP.ADD);
+}
+
+fn f_restriction_division() void {
+    const pe_id_x: u16 = layout_mod.get_x_coord();
+    const pe_id_y: u16 = layout_mod.get_y_coord();    
+    if (is_top_left_of_restriction_window(pe_id_x, pe_id_y, 
+        restriction_window_width, restriction_window_height)) {
+        const total_active: f32 = @as(f32, active_pes_in_restriction_window_x * 
+            active_pes_in_restriction_window_y);
+        var inv_total: f32 = 1.0 / total_active;
+        @fmuls(mem_f_dsd, mem_r_dsd, inv_total);
+    } else {
+        @fmovs(mem_f_dsd, 0.0);
+    }
+}
+
+fn f_interpolation_add() void {
+    if (is_active_pe) {
+        @fadds(mem_u_dsd, mem_u_dsd, mem_save_u_smooth_dsd);
+    } else {
+        @fmovs(mem_u_dsd, 0.0);
+    }
+}
+
+fn f_bcast_from_top_left() void {
+    reduce_mod.broadcast_from_top_left(n, &u);
+}
+
+fn f_init_spmv_and_reduce(level_id: u16) void {
+    const pe_id_x: u16 = layout_mod.get_x_coord();
+    const pe_id_y: u16 = layout_mod.get_y_coord();
+    
+    var const_2: f16 = 2.0;
+    factor = @as(u16, math_lib.pow(const_2, @as(f16, level_id)));
+    hops = factor;
+    restriction_window_width = @as(u16, math_lib.pow(const_2, @as(f16, level_id + 1)));
+    restriction_window_height = @as(u16, math_lib.pow(const_2, @as(f16, level_id + 1)));
+    active_pes_in_restriction_window_x = 2;
+    active_pes_in_restriction_window_y = 2;
+    
+    is_active_pe = isActivePE(@as(i16, pe_id_x), @as(i16, pe_id_y), factor);
+    stencil_mod.setHopBasedParams(hops, factor, width, height);
+    
+    const window_w = @as(i16, restriction_window_width);
+    const window_h = @as(i16, restriction_window_height);
+    reduce_mod.setWindowedReductionParams(window_w, window_h, factor, 
+        active_pes_in_restriction_window_x, active_pes_in_restriction_window_y, level_id);
+}
+
+fn f_setup_level(level_id: u16, down: i16) void {
+    current_level_id = level_id;
+    hx_level = hx_array[level_id];
+    hy_level = hy_array[level_id];
+    hz_level = hz_array[level_id];
+    
+    // Set DSD lengths
+    mem_u_dsd = @set_dsd_length(mem_u_dsd, @bitcast(u16, n));
+    mem_f_dsd = @set_dsd_length(mem_f_dsd, @bitcast(u16, n));
+    mem_r_dsd = @set_dsd_length(mem_r_dsd, @bitcast(u16, n));
+    mem_Au_dsd = @set_dsd_length(mem_Au_dsd, @bitcast(u16, n));
+    mem_residual_temp_dsd = @set_dsd_length(mem_residual_temp_dsd, @bitcast(u16, n));
+    
+    // Setup save arrays
+    var start_idx: i16 = @as(i16, @as(u16, current_level_id) * @bitcast(u16, MAX_ZDIM));
+    mem_save_u_smooth_dsd = @set_dsd_base_addr(mem_save_u_smooth_dsd, &save_u_smooth);
+    mem_save_u_smooth_dsd = @increment_dsd_offset(mem_save_u_smooth_dsd, start_idx, f32);
+    mem_save_u_smooth_dsd = @set_dsd_length(mem_save_u_smooth_dsd, @bitcast(u16, n));
+    
+    mem_save_f_down_dsd = @set_dsd_base_addr(mem_save_f_down_dsd, &save_f_down);
+    mem_save_f_down_dsd = @increment_dsd_offset(mem_save_f_down_dsd, start_idx, f32);
+    mem_save_f_down_dsd = @set_dsd_length(mem_save_f_down_dsd, @bitcast(u16, n));
+    
+    // Update stencil coefficients
+    const BETA: f32 = 1.0;
+    const hx_sq: f32 = hx_level * hx_level;
+    const hy_sq: f32 = hy_level * hy_level;
+    const hz_sq: f32 = hz_level * hz_level;
+    const center_coeff: f32 = -2.0 * (1.0 / hx_sq + 1.0 / hy_sq + 1.0 / hz_sq);
+    
+    stencil_coeff[0] = BETA / hx_sq;
+    stencil_coeff[1] = BETA / hx_sq;
+    stencil_coeff[2] = BETA / hy_sq;
+    stencil_coeff[3] = BETA / hy_sq;
+    stencil_coeff[4] = BETA / hz_sq;
+    stencil_coeff[5] = BETA / hz_sq;
+    stencil_coeff[6] = center_coeff;
+    
+    f_init_spmv_and_reduce(current_level_id);
+    
+    if (down == 1) {
+        @fmovs(mem_u_dsd, 0.0);
+        @fmovs(mem_save_f_down_dsd, mem_f_dsd);  // Save current f (RHS for this level)
+    } else {
+        // Up cycle: restore the f values saved during down cycle
+        @fmovs(mem_f_dsd, mem_save_f_down_dsd);
+    }
+    
+    @fmovs(mem_r_dsd, 0.0);
+}
+
+// Main V-cycle entry point
+fn f_gmg_vcycle(
+    size: i16,
+    levels: i16, 
+    pre_iter: i16,
+    post_iter: i16,
+    bottom_iter: i16
+) void {
+    n = size;
+    num_levels = levels;
+    pre_smooth_iter = pre_iter;
+    post_smooth_iter = post_iter;
+    bottom_solver_iter = bottom_iter;
+    
+    current_level = 0;
+    cur_state = STATE_INIT;
+    @activate(STATE);
+}
+
+fn f_trigger_state_machine() void {
+    cur_state = next_state;
+    @activate(STATE);
+}
+
+// State machine
+task f_state() void {
+    
+    if (STATE_INIT == cur_state) {
+        // Start down cycle at level 0
+        current_level = 0;
+        next_state = STATE_DOWN_INIT;
+        f_trigger_state_machine();
+
+    } 
+//########################################################################################
+// DOWN CYCLE
+//########################################################################################    
+    else if (STATE_DOWN_INIT == cur_state) {
+        // Initialize current level
+        simprint.fmt_with_coords("DOWN_INIT: level={d}", .{@as(u16, current_level)});
+        f_setup_level(@as(u16, current_level), 1); // (.. , down=True/False)
+        current_smooth_iter = 0;
+        next_state = STATE_DOWN_SMOOTH_APPLY;
+        f_trigger_state_machine();
+        
+    } else if (STATE_DOWN_SMOOTH_APPLY == cur_state) {
+        // Apply operator for Jacobi smoothing
+        next_state = STATE_DOWN_SMOOTH_UPDATE;
+        f_apply_operator();
+        
+    } else if (STATE_DOWN_SMOOTH_UPDATE == cur_state) {
+        f_jacobi_smooth();
+        current_smooth_iter = current_smooth_iter + 1;
+        if (is_active_pe and current_level == 0) {
+            simprint.fmt_with_coords("DOWN_SMOOTH: level={d}, iter={d}, u[0]={f}", 
+                .{@as(u16, current_level), @as(u16, current_smooth_iter), u[0]});
+        }
+        next_state = STATE_DOWN_SMOOTH_CHECK;
+        f_trigger_state_machine();
+        
+    } else if (STATE_DOWN_SMOOTH_CHECK == cur_state) {
+        if (current_smooth_iter < pre_smooth_iter) {
+            next_state = STATE_DOWN_SMOOTH_APPLY;
+        } else {
+            next_state = STATE_DOWN_RESIDUAL_APPLY;
+        }
+        f_trigger_state_machine();
+        
+    } else if (STATE_DOWN_RESIDUAL_APPLY == cur_state) {
+        // Apply operator for residual
+        next_state = STATE_DOWN_RESIDUAL_COMPUTE;
+        f_apply_operator();
+        
+    } else if (STATE_DOWN_RESIDUAL_COMPUTE == cur_state) {
+        // Compute residual
+        f_residual();
+        next_state = STATE_DOWN_RESTRICT_REDUCE;
+        f_trigger_state_machine();
+        
+    } else if (STATE_DOWN_RESTRICT_REDUCE == cur_state) {
+        // Restriction: reduce to top-left
+        next_state = STATE_DOWN_RESTRICT_DIV;
+        f_reduce_row_col_top_left();
+        
+    } else if (STATE_DOWN_RESTRICT_DIV == cur_state) {
+        // Restriction: divide by number of active PEs
+        f_restriction_division();
+        next_state = STATE_DOWN_LEVEL_CHECK;
+        f_trigger_state_machine();
+        
+    } else if (STATE_DOWN_LEVEL_CHECK == cur_state) {
+        current_level = current_level + 1;
+        if (current_level < num_levels - 1) {   // (coarsest - 1) level
+            next_state = STATE_DOWN_INIT;
+        } else {
+            next_state = STATE_COARSE_INIT;
+        }
+        f_trigger_state_machine();
+        
+    } 
+//########################################################################################
+// COARSE LEVEL
+//########################################################################################    
+    else if (STATE_COARSE_INIT == cur_state) {
+        // Initialize coarsest level
+        f_setup_level(@as(u16, current_level), 1);
+        current_smooth_iter = 0;
+        next_state = STATE_COARSE_SMOOTH_APPLY;
+        f_trigger_state_machine();
+        
+    } else if (STATE_COARSE_SMOOTH_APPLY == cur_state) {
+        next_state = STATE_COARSE_SMOOTH_UPDATE;
+        f_apply_operator();
+        
+    } else if (STATE_COARSE_SMOOTH_UPDATE == cur_state) {
+        f_jacobi_smooth();
+        current_smooth_iter = current_smooth_iter + 1;
+        next_state = STATE_COARSE_SMOOTH_CHECK;
+        f_trigger_state_machine();
+        
+    } else if (STATE_COARSE_SMOOTH_CHECK == cur_state) {
+        if (current_smooth_iter < bottom_solver_iter) {
+            next_state = STATE_COARSE_SMOOTH_APPLY;
+        } else {
+            // Print coarse level solution (only from active PEs)
+            if (is_active_pe) {
+                simprint.fmt_with_coords("COARSE_DONE: level={d}, iters={d}, u[0]={f}, u[3]={f}", 
+                    .{@as(u16, current_level), @as(u16, current_smooth_iter), u[0], u[3]});
+            }
+            // Start up cycle
+            current_level = current_level - 1;
+            next_state = STATE_UP_INIT;
+        }
+        f_trigger_state_machine();
+        
+    }
+//########################################################################################
+// UP CYCLE
+//########################################################################################    
+    else if (STATE_UP_INIT == cur_state) {
+        // Initialize level for up cycle
+        simprint.fmt_with_coords("UP_INIT: level={d}", .{@as(u16, current_level)});
+        f_setup_level(@as(u16, current_level), 0); // (.. , down=False for up cycle)
+        next_state = STATE_UP_BCAST;
+        f_trigger_state_machine();
+        
+    } else if (STATE_UP_BCAST == cur_state) {
+        // Broadcast from top-left
+        next_state = STATE_UP_INTERP_ADD;
+        f_bcast_from_top_left();
+        
+    } else if (STATE_UP_INTERP_ADD == cur_state) {
+        // Add interpolated correction
+        f_interpolation_add();
+        
+        current_smooth_iter = 0;
+        next_state = STATE_UP_SMOOTH_APPLY;
+        f_trigger_state_machine();
+        
+    } else if (STATE_UP_SMOOTH_APPLY == cur_state) {
+        next_state = STATE_UP_SMOOTH_UPDATE;
+        f_apply_operator();
+        
+    } else if (STATE_UP_SMOOTH_UPDATE == cur_state) {
+        f_jacobi_smooth();
+        
+        current_smooth_iter = current_smooth_iter + 1;
+        if (is_active_pe and current_level == 0) {
+            simprint.fmt_with_coords("UP_SMOOTH: level={d}, iter={d}, u[0]={f}", 
+                .{@as(u16, current_level), @as(u16, current_smooth_iter), u[0]});
+        }
+        next_state = STATE_UP_SMOOTH_CHECK;
+        f_trigger_state_machine();
+        
+    } else if (STATE_UP_SMOOTH_CHECK == cur_state) {    // post-smooth iterations loop
+        if (current_smooth_iter < post_smooth_iter) {
+            next_state = STATE_UP_SMOOTH_APPLY;
+        } else {
+            next_state = STATE_UP_LEVEL_CHECK;
+        }
+        f_trigger_state_machine();
+        
+    } else if (STATE_UP_LEVEL_CHECK == cur_state) {
+        current_level = current_level - 1;
+        if (current_level >= 0) {
+            next_state = STATE_UP_INIT;
+        } else {
+            next_state = STATE_EXIT;
+        }
+        f_trigger_state_machine();
+        
+    }
+//########################################################################################
+// EXIT
+//########################################################################################    
+    else if (STATE_EXIT == cur_state) {
+        // Print final level 0 solution from PE(0,0)
+        const pe_id_x: u16 = layout_mod.get_x_coord();
+        const pe_id_y: u16 = layout_mod.get_y_coord();
+        if (pe_id_x == 0 and pe_id_y == 0) {
+            simprint.fmt_with_coords("FINAL: u[0]={f}, u[1]={f}, u[2]={f}, u[3]={f}", 
+                .{u[0], u[1], u[2], u[3]});
+        }
+        sys_mod.unblock_cmd_stream();
+        
+    } else {
+        @assert(false); // Error: unknown state
+        // assert() is ignored by HW, it could hang here
+        // To avoid a stall, trigger callback (the caveat is the wrong result)
+        sys_mod.unblock_cmd_stream();
+    }
+}
+
+// Export symbols
+comptime {
+    @bind_local_task(f_state, STATE);
+}
+
+comptime {
+    @export_symbol(ptr_u, "u");
+    @export_symbol(ptr_f, "f");
+    @export_symbol(ptr_r, "r");
+    @export_symbol(ptr_hx_array, "hx_array");
+    @export_symbol(ptr_hy_array, "hy_array");
+    @export_symbol(ptr_hz_array, "hz_array");
+    @export_symbol(ptr_jacobi_coeff_array, "jacobi_coeff_array");
+}
+
+comptime {
+    @export_symbol(f_gmg_vcycle);
+}
+

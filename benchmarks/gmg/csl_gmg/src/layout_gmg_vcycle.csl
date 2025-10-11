@@ -1,0 +1,120 @@
+// Layout for GMG V-cycle with state machine
+
+// color map: memcpy + allreduce + stencil
+//
+// color  var   color  var        color  var              color  var
+//   0   C0       9                18    EN_REDUCE_2       27   reserved (memcpy)
+//   1   C1      10                19    EN_REDUCE_3       28   reserved (memcpy)
+//   2   C2      11                20    EN_REDUCE_4       29   reserved (memcpy)
+//   3   C3      12  STATE         21    reserved (memcpy) 30   reserved (memcpy)
+//   4   C4      13                22    reserved (memcpy) 31   reserved
+//   5   C5      14  EN_STENCIL_1  23    reserved (memcpy) 32
+//   6   C6      15  EN_STENCIL_2  24                      33
+//   7   C7      16  EN_STENCIL_3  25                      34
+//   8   C8      17  EN_REDUCE_1   26                      35
+
+// Parameters
+param C0_ID: i16;
+param C1_ID: i16;
+param C2_ID: i16;
+param C3_ID: i16;
+param C4_ID: i16;
+param C5_ID: i16;
+param C6_ID: i16;
+param C7_ID: i16;
+param C8_ID: i16;
+param MAX_ZDIM: i16;
+param width: i16;
+param height: i16;
+param BLOCK_SIZE: i16;
+param LEVELS: i16;
+
+const C0: color = @get_color(C0_ID);
+const C1: color = @get_color(C1_ID);
+const C2: color = @get_color(C2_ID);
+const C3: color = @get_color(C3_ID);
+const C4: color = @get_color(C4_ID);
+const C5: color = @get_color(C5_ID);
+const C6: color = @get_color(C6_ID);
+const C7: color = @get_color(C7_ID);
+const C8: color = @get_color(C8_ID);
+
+// State machine entrypoint
+const STATE: local_task_id = @get_local_task_id(12);
+
+// Stencil entrypoints
+const EN_STENCIL_1: local_task_id = @get_local_task_id(14);
+const EN_STENCIL_2: local_task_id = @get_local_task_id(15);
+const EN_STENCIL_3: local_task_id = @get_local_task_id(16);
+
+// Allreduce entrypoints
+const EN_REDUCE_1: local_task_id = @get_local_task_id(17);
+const EN_REDUCE_2: local_task_id = @get_local_task_id(18);
+const EN_REDUCE_3: local_task_id = @get_local_task_id(19);
+const EN_REDUCE_4: local_task_id = @get_local_task_id(20);
+
+const stencil = @import_module( "../../../non-unit-7pt/modified_csl_lib/stencil_3d_7pts/layout.csl", .{
+    .colors = [8]color{C0, C1, C2, C3, C4, C5, C6, C7},
+    .entrypoints = [3]local_task_id{EN_STENCIL_1, EN_STENCIL_2, EN_STENCIL_3},
+    .width = width,
+    .height = height,
+    .hops = 1,
+    .factor = 1
+    });
+
+const reduce = @import_module( "../../../non-unit-7pt/modified_csl_lib/allreduce/layout.csl", .{
+    .colors = [1]color{C8},
+    .entrypoints = [4]local_task_id{EN_REDUCE_1, EN_REDUCE_2, EN_REDUCE_3, EN_REDUCE_4},
+    .width = width,
+    .height = height
+    });
+
+const memcpy = @import_module( "<memcpy/get_params>", .{
+    .width = width,
+    .height = height,
+    });
+
+layout{
+    @comptime_assert(C0_ID < C1_ID);
+    @comptime_assert(C1_ID < C2_ID);
+    @comptime_assert(C2_ID < C3_ID);
+    @comptime_assert(C3_ID < C4_ID);
+    @comptime_assert(C4_ID < C5_ID);
+    @comptime_assert(C5_ID < C6_ID);
+    @comptime_assert(C6_ID < C7_ID);
+    @comptime_assert(C7_ID < C8_ID);
+
+    @set_rectangle( width, height );
+
+    var py: i16 = 0;
+    while(py < height) : (py +=1) {
+        var px: i16 = 0;
+        while(px < width) : (px +=1) {
+            const memcpyParams = memcpy.get_params(px);
+            const stencilParams = stencil.get_params(px, py);
+            const reduceParams = reduce.get_params(px, py);
+            var params: comptime_struct = .{
+                .memcpyParams = memcpyParams,
+                .reduceParams = reduceParams,
+                .MAX_ZDIM = MAX_ZDIM,
+                .BLOCK_SIZE = BLOCK_SIZE,
+                .stencilParams = stencilParams,
+                .LEVELS = LEVELS,
+                .STATE = STATE
+            };
+
+            @set_tile_code(px, py, "kernel_gmg_vcycle.csl", params);
+        }
+    }
+
+    @export_name("u", [*]f32, true);
+    @export_name("f", [*]f32, true);
+    @export_name("r", [*]f32, true);
+    @export_name("hx_array", [*]f32, true);
+    @export_name("hy_array", [*]f32, true);
+    @export_name("hz_array", [*]f32, true);
+    @export_name("jacobi_coeff_array", [*]f32, true);
+
+    @export_name("f_gmg_vcycle", fn(i16,i16,i16,i16,i16)void);
+}
+

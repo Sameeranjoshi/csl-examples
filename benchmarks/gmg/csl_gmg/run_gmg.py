@@ -493,7 +493,9 @@ def main():
     #     if level_index >= 0:  #
     #         print(f"Level = {level_index}")
     #         np.testing.assert_allclose(device_solver.grids[level_index]['u'], host_solver.grids[level_index]['u'], atol=1e-5, rtol=1e-5)
-
+    # print correction u at level 0 
+    print(f"Device u at level 0: {device_solver.grids[0]['u']}")
+    print(f"Host u at level 0: {host_solver.grids[0]['u']}")
     for level_index in range(args.levels):
         np.testing.assert_allclose(device_solver.grids[level_index]['rho'], host_solver.grids[level_index]['rho'], atol=1e-5, rtol=1e-5)
 

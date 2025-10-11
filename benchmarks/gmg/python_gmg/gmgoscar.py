@@ -469,6 +469,10 @@ class SimpleGMG:
         print(f"Tolerance: {self.tolerance}")
         print("-" * 50)
         
+        # calculate residual and print before any cycle starts at level 0.
+        self.compute_residual(0)
+        residual = self.calculate_rho(self.grids[0]['r'])
+        print(f"Initial residual at level 0: {residual:.6e}")
         start_time = time.time()
         iterations = 0
         residual = 0.0
@@ -509,6 +513,11 @@ class SimpleGMG:
         print(f"Grid size: {self.nx}x{self.ny}x{self.nz}, Levels: {self.num_levels}")
         print(f"Tolerance: {self.tolerance}")
         print("-" * 50)
+        
+        # calculate residual and print before any cycle starts at level 0.
+        self.compute_residual(0)
+        residual = self.calculate_rho(self.grids[0]['r'])
+        print(f"Initial residual at level 0: {residual:.6e}")
         
         start_time = time.time()
         iterations = 0
