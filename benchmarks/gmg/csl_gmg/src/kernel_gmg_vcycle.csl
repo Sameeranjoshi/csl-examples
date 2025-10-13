@@ -180,19 +180,77 @@ fn save_timestamp_end(level: i16, timing_array: [*]u16) void {
     timing_array[offset + 1] = tsc_temp_end[1];
     timing_array[offset + 2] = tsc_temp_end[2];
     
-    // Debug: Print timing for level 0 only from PE (0,0) to avoid spam
+    // // Debug: Print timing for level 0 only from PE (0,0) to avoid spam
+    // const pe_id_x: u16 = layout_mod.get_x_coord();
+    // const pe_id_y: u16 = layout_mod.get_y_coord();
+    // if (current_level_id == 0 and pe_id_x == 0 and pe_id_y == 0) {
+    //     const start_offset: i16 = level * timestamp.tsc_size_words * 2;
+    //     const start_w0 = timing_array[start_offset + 0];
+    //     const start_w1 = timing_array[start_offset + 1];
+    //     const start_w2 = timing_array[start_offset + 2];
+    //     const end_w0 = timing_array[offset + 0];
+    //     const end_w1 = timing_array[offset + 1];
+    //     const end_w2 = timing_array[offset + 2];
+    //     // simprint.fmt_with_coords("TIMING_DEBUG: level={d}, start=[{d},{d},{d}], end=[{d},{d},{d}]",
+    //     //     .{@as(u16, level), @as(u16, start_w0), @as(u16, start_w1), @as(u16, start_w2), @as(u16, end_w0), @as(u16, end_w1), @as(u16, end_w2)});
+    // }
+}
+
+fn print_time_debug() void {
     const pe_id_x: u16 = layout_mod.get_x_coord();
     const pe_id_y: u16 = layout_mod.get_y_coord();
     if (current_level_id == 0 and pe_id_x == 0 and pe_id_y == 0) {
-        const start_offset: i16 = level * timestamp.tsc_size_words * 2;
-        const start_w0 = timing_array[start_offset + 0];
-        const start_w1 = timing_array[start_offset + 1];
-        const start_w2 = timing_array[start_offset + 2];
-        const end_w0 = timing_array[offset + 0];
-        const end_w1 = timing_array[offset + 1];
-        const end_w2 = timing_array[offset + 2];
-        simprint.fmt_with_coords("TIMING_DEBUG: level={d}, start=[{d},{d},{d}], end=[{d},{d},{d}]",
-            .{@as(u16, level), @as(u16, start_w0), @as(u16, start_w1), @as(u16, start_w2), @as(u16, end_w0), @as(u16, end_w1), @as(u16, end_w2)});
+        // print reference clock
+        const time_ref_w0 = time_ref_u16[0];
+        const time_ref_w1 = time_ref_u16[1];
+        const time_ref_w2 = time_ref_u16[2];
+        simprint.fmt_with_coords("TIMING_DEBUG: time_ref=[{d},{d},{d}]", .{@as(u16, time_ref_w0), @as(u16, time_ref_w1), @as(u16, time_ref_w2)});
+        for (@range(i16, 0, num_levels, 1)) |level| {
+            const start_offset: i16 = level * timestamp.tsc_size_words * 2;
+            const end_offset: i16 = level * timestamp.tsc_size_words * 2 + timestamp.tsc_size_words;
+            // smooth down
+            const start_w0 = timing_smooth_down[start_offset + 0];
+            const start_w1 = timing_smooth_down[start_offset + 1];
+            const start_w2 = timing_smooth_down[start_offset + 2];
+            const end_w0 = timing_smooth_down[end_offset + 0];
+            const end_w1 = timing_smooth_down[end_offset + 1];
+            const end_w2 = timing_smooth_down[end_offset + 2];
+
+            // smooth up
+            const start_w00 = timing_smooth_up[start_offset + 0];
+            const start_w11 = timing_smooth_up[start_offset + 1];
+            const start_w22 = timing_smooth_up[start_offset + 2];
+            const end_w00 = timing_smooth_up[end_offset + 0];
+            const end_w11 = timing_smooth_up[end_offset + 1];
+            const end_w22 = timing_smooth_up[end_offset + 2];
+
+            // apply op
+            const start_w000 = timing_apply_op[start_offset + 0];
+            const start_w111 = timing_apply_op[start_offset + 1];
+            const start_w222 = timing_apply_op[start_offset + 2];
+            const end_w000 = timing_apply_op[end_offset + 0];
+            const end_w111 = timing_apply_op[end_offset + 1];
+            const end_w222 = timing_apply_op[end_offset + 2];
+
+            // restrict
+            const start_w0000 = timing_restrict[start_offset + 0];
+            const start_w1111 = timing_restrict[start_offset + 1];
+            const start_w2222 = timing_restrict[start_offset + 2];
+            const end_w0000 = timing_restrict[end_offset + 0];
+            const end_w1111 = timing_restrict[end_offset + 1];
+            const end_w2222 = timing_restrict[end_offset + 2];
+
+            // interp
+            const start_w00000 = timing_interp[start_offset + 0];
+            const start_w11111 = timing_interp[start_offset + 1];
+            const start_w22222 = timing_interp[start_offset + 2];
+            const end_w00000 = timing_interp[end_offset + 0];
+            const end_w11111 = timing_interp[end_offset + 1];
+            const end_w22222 = timing_interp[end_offset + 2];
+
+            simprint.fmt_with_coords("TIMING_DEBUG: level={d}, smooth_down=[{d},{d},{d}], smooth_up=[{d},{d},{d}], apply_op=[{d},{d},{d}], restrict=[{d},{d},{d}], interp=[{d},{d},{d}]",
+                .{@as(u16, level), @as(u16, start_w0), @as(u16, start_w1), @as(u16, start_w2), @as(u16, end_w0), @as(u16, end_w1), @as(u16, end_w2), @as(u16, start_w00), @as(u16, start_w11), @as(u16, start_w22), @as(u16, end_w00), @as(u16, end_w11), @as(u16, end_w22), @as(u16, start_w000), @as(u16, start_w111), @as(u16, start_w222), @as(u16, end_w000), @as(u16, end_w111), @as(u16, end_w222), @as(u16, start_w0000), @as(u16, start_w1111), @as(u16, start_w2222), @as(u16, end_w0000), @as(u16, end_w1111), @as(u16, end_w2222), @as(u16, start_w00000), @as(u16, start_w11111), @as(u16, start_w22222), @as(u16, end_w00000), @as(u16, end_w11111), @as(u16, end_w22222)});
+        }
     }
 }
 
@@ -457,6 +515,7 @@ task f_state() void {
         } else {
             next_state = STATE_COARSE_INIT;
         }
+        print_time_debug();
         f_trigger_state_machine();
         
     } 

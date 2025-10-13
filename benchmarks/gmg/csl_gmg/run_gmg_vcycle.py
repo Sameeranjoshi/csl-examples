@@ -195,7 +195,7 @@ def combine_timing_arrays(height, width, levels, timing_down_hwl, timing_up_hwl)
     
     return combined_hwl
 
-def copy_timing_data(height, width, levels, simulator, symbol_timing):
+def copy_timing(height, width, levels, simulator, symbol_timing):
     """Copy timing data from device and return as numpy array"""
     # Each level has 6 u16 values (start[3] + end[3])
     timing_size = levels * 6
@@ -293,6 +293,14 @@ def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
 
     return u_wse_1d, r_wse_1d
 
+def copy_timing_data(height, width, levels, simulator, symbol_timing_smooth_down, symbol_timing_smooth_up, symbol_timing_apply_op, symbol_timing_restrict, symbol_timing_interp, args):
+    timing_smooth_down_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_smooth_down)
+    timing_smooth_up_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_smooth_up)
+    timing_apply_op_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_apply_op)
+    timing_restrict_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_restrict)
+    timing_interp_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_interp)
+    return timing_smooth_down_hwl, timing_smooth_up_hwl, timing_apply_op_hwl, timing_restrict_hwl, timing_interp_hwl
+
 def main():
     """Main function"""
     np.random.seed(2)
@@ -338,37 +346,6 @@ def main():
     # Run reference on host
     host_solver.solve_iterative(args.max_ite)
     
-    # Debug: print solutions at all levels
-    if args.verbose:
-        for level in range(args.levels):
-            print(f"Host level {level} u shape: {host_solver.grids[level]['u'].shape}")
-            print(f"Host level {level} u sample: {host_solver.grids[level]['u'][0,0,:]}")
-        print(f"Host coarse level (level {args.levels-1}) u full: {host_solver.grids[args.levels - 1]['u']}")
-    
-    # # Calculate fabric dimensions
-    # fabric_width, fabric_height, core_fabric_offset_x, core_fabric_offset_y = \
-    #     calculate_fabric_dimensions(args, width, height, width_west_buf, width_east_buf)
-    
-    # # Compile kernel
-    # layout_file = "./src/layout_gmg_vcycle.csl"
-    
-    # if not args.run_only:
-    #     print("\n" + "="*60)
-    #     print("Compiling CSL kernel...")
-    #     print("="*60)
-    #     csl_compile_core(
-    #         cslc=cslc, width=width, height=height, pe_length=pe_length, 
-    #         blockSize=blockSize, file_config=layout_file, elf_dir=logs_dir, levels=args.levels,
-    #         fabric_width=fabric_width, fabric_height=fabric_height, 
-    #         core_fabric_offset_x=core_fabric_offset_x, core_fabric_offset_y=core_fabric_offset_y, 
-    #         use_precompile=args.run_only, arch=args.arch if args.arch else "wse2", 
-    #         C0=0, C1=1, C2=2, C3=3, C4=4, C5=5, C6=6, C7=7, C8=8, 
-    #         channels=channels, width_west_buf=width_west_buf, width_east_buf=width_east_buf
-    #     )
-    
-    # if args.compile_only:
-    #     print("COMPILE ONLY: EXIT")
-    #     return
     
     # Initialize device
     print("\n" + "="*60)
@@ -435,14 +412,9 @@ def main():
     print("="*60)
     
     u_wse_1d, r_wse_1d = copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, device_solver, args)
-    
     # Copy timing data from device
     print("\nCopying timing data...")
-    timing_smooth_down_hwl = copy_timing_data(height, width, args.levels, simulator, symbol_timing_smooth_down)
-    timing_smooth_up_hwl = copy_timing_data(height, width, args.levels, simulator, symbol_timing_smooth_up)
-    timing_apply_op_hwl = copy_timing_data(height, width, args.levels, simulator, symbol_timing_apply_op)
-    timing_restrict_hwl = copy_timing_data(height, width, args.levels, simulator, symbol_timing_restrict)
-    timing_interp_hwl = copy_timing_data(height, width, args.levels, simulator, symbol_timing_interp)
+    timing_smooth_down_hwl, timing_smooth_up_hwl, timing_apply_op_hwl, timing_restrict_hwl, timing_interp_hwl = copy_timing_data(height, width, args.levels, simulator, symbol_timing_smooth_down, symbol_timing_smooth_up, symbol_timing_apply_op, symbol_timing_restrict, symbol_timing_interp, args)
     
     # Copy reference clock
     print("Copying reference clock...")
