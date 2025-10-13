@@ -14,6 +14,7 @@ param STATE: local_task_id;
 const math_lib = @import_module("<math>");
 const blas_lib = @import_module("blas.csl");
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
+const timestamp = @import_module("<time>");
 const reduce_mod = @import_module("../../../non-unit-7pt/modified_csl_lib/allreduce/pe.csl", @concat_structs(reduceParams, .{
      .f_callback = f_trigger_state_machine,
      .queues = [1]u16{2},
@@ -50,6 +51,23 @@ var hz_array = @zeros([LEVELS]f32);
 
 // Jacobi coefficients for each level
 var jacobi_coeff_array = @zeros([LEVELS]f32);
+
+// Timing buffers - store start/end timestamps for each operation at each level
+// Operations: smooth (down + up separate), apply_op, restriction, interpolation
+// For each operation: [start_timestamp[3], end_timestamp[3]] = 6 u16 values
+var timing_smooth_down = @zeros([LEVELS * timestamp.tsc_size_words * 2]u16); // pre-smoothing timing
+var timing_smooth_up = @zeros([LEVELS * timestamp.tsc_size_words * 2]u16);   // post-smoothing timing
+var timing_apply_op = @zeros([LEVELS * timestamp.tsc_size_words * 2]u16);    // operator application timing
+var timing_restrict = @zeros([LEVELS * timestamp.tsc_size_words * 2]u16);    // restriction timing
+var timing_interp = @zeros([LEVELS * timestamp.tsc_size_words * 2]u16);      // interpolation timing
+
+// Temporary timestamp buffers
+var tsc_temp_start = @zeros([timestamp.tsc_size_words]u16);
+var tsc_temp_end = @zeros([timestamp.tsc_size_words]u16);
+
+// Reference clock from allreduce module (for TSC synchronization)
+var time_ref_u16 = @zeros([timestamp.tsc_size_words]u16);
+var dot = @zeros([1]f32); // dummy variable for f_sync
 
 // GMG parameters
 var hx_level: f32 = @as(f32, 1.0);
@@ -107,6 +125,7 @@ const STATE_UP_SMOOTH_UPDATE: i16 = 18;
 const STATE_UP_SMOOTH_CHECK: i16 = 19;
 const STATE_UP_LEVEL_CHECK: i16 = 20;
 const STATE_EXIT: i16 = 21;
+const STATE_SYNC: i16 = 22;
 
 // DSDs
 var mem_u_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> u[i] });
@@ -125,6 +144,12 @@ var ptr_hx_array: [*]f32 = &hx_array;
 var ptr_hy_array: [*]f32 = &hy_array;
 var ptr_hz_array: [*]f32 = &hz_array;
 var ptr_jacobi_coeff_array: [*]f32 = &jacobi_coeff_array;
+var ptr_timing_smooth_down: [*]u16 = &timing_smooth_down;
+var ptr_timing_smooth_up: [*]u16 = &timing_smooth_up;
+var ptr_timing_apply_op: [*]u16 = &timing_apply_op;
+var ptr_timing_restrict: [*]u16 = &timing_restrict;
+var ptr_timing_interp: [*]u16 = &timing_interp;
+var ptr_time_ref: [*]u16 = &time_ref_u16;
 
 // Helper functions
 fn isActivePE(px: i16, py: i16, factor_val: u16) bool {
@@ -137,6 +162,38 @@ fn is_top_left_of_restriction_window(px: u16, py: u16, window_width: u16, window
     const window_st_x: u16 = window_idx_x * window_width;
     const window_st_y: u16 = window_idx_y * window_height;
     return (px == window_st_x) and (py == window_st_y);
+}
+
+// Timing helper functions
+fn save_timestamp_start(level: i16, timing_array: [*]u16) void {
+    timestamp.get_timestamp(&tsc_temp_start);
+    const offset: i16 = level * timestamp.tsc_size_words * 2;
+    timing_array[offset + 0] = tsc_temp_start[0];
+    timing_array[offset + 1] = tsc_temp_start[1];
+    timing_array[offset + 2] = tsc_temp_start[2];
+}
+
+fn save_timestamp_end(level: i16, timing_array: [*]u16) void {
+    timestamp.get_timestamp(&tsc_temp_end);
+    const offset: i16 = level * timestamp.tsc_size_words * 2 + timestamp.tsc_size_words;
+    timing_array[offset + 0] = tsc_temp_end[0];
+    timing_array[offset + 1] = tsc_temp_end[1];
+    timing_array[offset + 2] = tsc_temp_end[2];
+    
+    // Debug: Print timing for level 0 only from PE (0,0) to avoid spam
+    const pe_id_x: u16 = layout_mod.get_x_coord();
+    const pe_id_y: u16 = layout_mod.get_y_coord();
+    if (current_level_id == 0 and pe_id_x == 0 and pe_id_y == 0) {
+        const start_offset: i16 = level * timestamp.tsc_size_words * 2;
+        const start_w0 = timing_array[start_offset + 0];
+        const start_w1 = timing_array[start_offset + 1];
+        const start_w2 = timing_array[start_offset + 2];
+        const end_w0 = timing_array[offset + 0];
+        const end_w1 = timing_array[offset + 1];
+        const end_w2 = timing_array[offset + 2];
+        simprint.fmt_with_coords("TIMING_DEBUG: level={d}, start=[{d},{d},{d}], end=[{d},{d},{d}]",
+            .{@as(u16, level), @as(u16, start_w0), @as(u16, start_w1), @as(u16, start_w2), @as(u16, end_w0), @as(u16, end_w1), @as(u16, end_w2)});
+    }
 }
 
 // Apply operator for Jacobi smoothing
@@ -267,6 +324,27 @@ fn f_setup_level(level_id: u16, down: i16) void {
     @fmovs(mem_r_dsd, 0.0);
 }
 
+// Enable timing
+fn f_enable_timer() void {
+    timestamp.enable_tsc();
+    sys_mod.unblock_cmd_stream();
+}
+
+// Synchronize all PEs using allreduce (also captures reference clock)
+fn f_sync() void {
+    cur_state = STATE_SYNC;
+    @activate(STATE);
+}
+
+
+// Copy reference clock from allreduce module
+fn f_reference_timestamps() void {
+    time_ref_u16[0] = reduce_mod.tscRefBuffer[0];
+    time_ref_u16[1] = reduce_mod.tscRefBuffer[1];
+    time_ref_u16[2] = reduce_mod.tscRefBuffer[2];
+    sys_mod.unblock_cmd_stream();
+}
+
 // Main V-cycle entry point
 fn f_gmg_vcycle(
     size: i16,
@@ -293,8 +371,13 @@ fn f_trigger_state_machine() void {
 
 // State machine
 task f_state() void {
-    
-    if (STATE_INIT == cur_state) {
+    if (STATE_SYNC == cur_state){
+        // sync all PEs by internal allreduce module
+        next_state = STATE_EXIT;
+        reduce_mod.allreduce(1, &dot, reduce_mod.TYPE_BINARY_OP.ADD);
+
+    }
+    else if (STATE_INIT == cur_state) {
         // Start down cycle at level 0
         current_level = 0;
         next_state = STATE_DOWN_INIT;
@@ -306,7 +389,7 @@ task f_state() void {
 //########################################################################################    
     else if (STATE_DOWN_INIT == cur_state) {
         // Initialize current level
-        simprint.fmt_with_coords("DOWN_INIT: level={d}", .{@as(u16, current_level)});
+        // simprint.fmt_with_coords("DOWN_INIT: level={d}", .{@as(u16, current_level)});
         f_setup_level(@as(u16, current_level), 1); // (.. , down=True/False)
         current_smooth_iter = 0;
         next_state = STATE_DOWN_SMOOTH_APPLY;
@@ -314,6 +397,10 @@ task f_state() void {
         
     } else if (STATE_DOWN_SMOOTH_APPLY == cur_state) {
         // Apply operator for Jacobi smoothing
+        // Start timing for DOWN smooth (first iteration only)
+        if (current_smooth_iter == 0) {
+            save_timestamp_start(current_level, &timing_smooth_down);
+        }
         next_state = STATE_DOWN_SMOOTH_UPDATE;
         f_apply_operator();
         
@@ -321,8 +408,8 @@ task f_state() void {
         f_jacobi_smooth();
         current_smooth_iter = current_smooth_iter + 1;
         if (is_active_pe and current_level == 0) {
-            simprint.fmt_with_coords("DOWN_SMOOTH: level={d}, iter={d}, u[0]={f}", 
-                .{@as(u16, current_level), @as(u16, current_smooth_iter), u[0]});
+            // simprint.fmt_with_coords("DOWN_SMOOTH: level={d}, iter={d}, u[0]={f}", 
+            //     .{@as(u16, current_level), @as(u16, current_smooth_iter), u[0]});
         }
         next_state = STATE_DOWN_SMOOTH_CHECK;
         f_trigger_state_machine();
@@ -331,29 +418,35 @@ task f_state() void {
         if (current_smooth_iter < pre_smooth_iter) {
             next_state = STATE_DOWN_SMOOTH_APPLY;
         } else {
+            // End timing for DOWN smoothing
+            save_timestamp_end(current_level, &timing_smooth_down);
             next_state = STATE_DOWN_RESIDUAL_APPLY;
         }
         f_trigger_state_machine();
         
     } else if (STATE_DOWN_RESIDUAL_APPLY == cur_state) {
         // Apply operator for residual
+        save_timestamp_start(current_level, &timing_apply_op);
         next_state = STATE_DOWN_RESIDUAL_COMPUTE;
         f_apply_operator();
         
     } else if (STATE_DOWN_RESIDUAL_COMPUTE == cur_state) {
         // Compute residual
         f_residual();
+        save_timestamp_end(current_level, &timing_apply_op);
         next_state = STATE_DOWN_RESTRICT_REDUCE;
         f_trigger_state_machine();
         
     } else if (STATE_DOWN_RESTRICT_REDUCE == cur_state) {
         // Restriction: reduce to top-left
+        save_timestamp_start(current_level, &timing_restrict);
         next_state = STATE_DOWN_RESTRICT_DIV;
         f_reduce_row_col_top_left();
         
     } else if (STATE_DOWN_RESTRICT_DIV == cur_state) {
         // Restriction: divide by number of active PEs
         f_restriction_division();
+        save_timestamp_end(current_level, &timing_restrict);
         next_state = STATE_DOWN_LEVEL_CHECK;
         f_trigger_state_machine();
         
@@ -378,6 +471,10 @@ task f_state() void {
         f_trigger_state_machine();
         
     } else if (STATE_COARSE_SMOOTH_APPLY == cur_state) {
+        // Start timing for coarse solve (use down array, first iteration only)
+        if (current_smooth_iter == 0) {
+            save_timestamp_start(current_level, &timing_smooth_down);
+        }
         next_state = STATE_COARSE_SMOOTH_UPDATE;
         f_apply_operator();
         
@@ -391,11 +488,14 @@ task f_state() void {
         if (current_smooth_iter < bottom_solver_iter) {
             next_state = STATE_COARSE_SMOOTH_APPLY;
         } else {
-            // Print coarse level solution (only from active PEs)
-            if (is_active_pe) {
-                simprint.fmt_with_coords("COARSE_DONE: level={d}, iters={d}, u[0]={f}, u[3]={f}", 
-                    .{@as(u16, current_level), @as(u16, current_smooth_iter), u[0], u[3]});
-            }
+            // End timing for coarse solve (use down array since no up cycle for coarsest)
+            save_timestamp_end(current_level, &timing_smooth_down);
+            
+            // // Print coarse level solution (only from active PEs)
+            // if (is_active_pe) {
+            //     simprint.fmt_with_coords("COARSE_DONE: level={d}, iters={d}, u[0]={f}, u[3]={f}", 
+            //         .{@as(u16, current_level), @as(u16, current_smooth_iter), u[0], u[3]});
+            // }
             // Start up cycle
             current_level = current_level - 1;
             next_state = STATE_UP_INIT;
@@ -408,25 +508,30 @@ task f_state() void {
 //########################################################################################    
     else if (STATE_UP_INIT == cur_state) {
         // Initialize level for up cycle
-        simprint.fmt_with_coords("UP_INIT: level={d}", .{@as(u16, current_level)});
+        // simprint.fmt_with_coords("UP_INIT: level={d}", .{@as(u16, current_level)});
         f_setup_level(@as(u16, current_level), 0); // (.. , down=False for up cycle)
         next_state = STATE_UP_BCAST;
         f_trigger_state_machine();
         
     } else if (STATE_UP_BCAST == cur_state) {
         // Broadcast from top-left
+        save_timestamp_start(current_level, &timing_interp);
         next_state = STATE_UP_INTERP_ADD;
         f_bcast_from_top_left();
         
     } else if (STATE_UP_INTERP_ADD == cur_state) {
         // Add interpolated correction
         f_interpolation_add();
-        
+        save_timestamp_end(current_level, &timing_interp);
         current_smooth_iter = 0;
         next_state = STATE_UP_SMOOTH_APPLY;
         f_trigger_state_machine();
         
     } else if (STATE_UP_SMOOTH_APPLY == cur_state) {
+        // Start timing for UP smooth (first iteration only)
+        if (current_smooth_iter == 0) {
+            save_timestamp_start(current_level, &timing_smooth_up);
+        }
         next_state = STATE_UP_SMOOTH_UPDATE;
         f_apply_operator();
         
@@ -435,8 +540,8 @@ task f_state() void {
         
         current_smooth_iter = current_smooth_iter + 1;
         if (is_active_pe and current_level == 0) {
-            simprint.fmt_with_coords("UP_SMOOTH: level={d}, iter={d}, u[0]={f}", 
-                .{@as(u16, current_level), @as(u16, current_smooth_iter), u[0]});
+            // simprint.fmt_with_coords("UP_SMOOTH: level={d}, iter={d}, u[0]={f}", 
+            //     .{@as(u16, current_level), @as(u16, current_smooth_iter), u[0]});
         }
         next_state = STATE_UP_SMOOTH_CHECK;
         f_trigger_state_machine();
@@ -445,6 +550,8 @@ task f_state() void {
         if (current_smooth_iter < post_smooth_iter) {
             next_state = STATE_UP_SMOOTH_APPLY;
         } else {
+            // End timing for UP smoothing
+            save_timestamp_end(current_level, &timing_smooth_up);
             next_state = STATE_UP_LEVEL_CHECK;
         }
         f_trigger_state_machine();
@@ -466,10 +573,10 @@ task f_state() void {
         // Print final level 0 solution from PE(0,0)
         const pe_id_x: u16 = layout_mod.get_x_coord();
         const pe_id_y: u16 = layout_mod.get_y_coord();
-        if (pe_id_x == 0 and pe_id_y == 0) {
-            simprint.fmt_with_coords("FINAL: u[0]={f}, u[1]={f}, u[2]={f}, u[3]={f}", 
-                .{u[0], u[1], u[2], u[3]});
-        }
+        // if (pe_id_x == 0 and pe_id_y == 0) {
+        //     simprint.fmt_with_coords("FINAL: u[0]={f}, u[1]={f}, u[2]={f}, u[3]={f}", 
+        //         .{u[0], u[1], u[2], u[3]});
+        // }
         sys_mod.unblock_cmd_stream();
         
     } else {
@@ -493,9 +600,18 @@ comptime {
     @export_symbol(ptr_hy_array, "hy_array");
     @export_symbol(ptr_hz_array, "hz_array");
     @export_symbol(ptr_jacobi_coeff_array, "jacobi_coeff_array");
+    @export_symbol(ptr_timing_smooth_down, "timing_smooth_down");
+    @export_symbol(ptr_timing_smooth_up, "timing_smooth_up");
+    @export_symbol(ptr_timing_apply_op, "timing_apply_op");
+    @export_symbol(ptr_timing_restrict, "timing_restrict");
+    @export_symbol(ptr_timing_interp, "timing_interp");
+    @export_symbol(ptr_time_ref, "time_ref");
 }
 
 comptime {
+    @export_symbol(f_enable_timer);
+    @export_symbol(f_sync);
+    @export_symbol(f_reference_timestamps);
     @export_symbol(f_gmg_vcycle);
 }
 

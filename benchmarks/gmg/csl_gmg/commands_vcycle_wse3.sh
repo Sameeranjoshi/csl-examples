@@ -3,6 +3,17 @@
 set -e
 
 # Compile and run GMG V-cycle with state machine on WSE3
+# With comprehensive performance timing
+
+echo "============================================"
+echo "GMG V-Cycle State Machine with Timing"
+echo "============================================"
+echo ""
+
+# Clean previous runs
+# rm -rf out_vcycle sim.log simfab_traces
+
+echo "Compiling..."
 cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=16,16 --fabric-offsets=4,1 \
 --params=width:8,height:8,MAX_ZDIM:8,LEVELS:3 --params=BLOCK_SIZE:8 \
 --params=C0_ID:0 --params=C1_ID:1 --params=C2_ID:2 --params=C3_ID:3 \
@@ -11,5 +22,11 @@ cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=16,16 --fabric-offset
 --memcpy --channels=1 --width-west-buf=0 --width-east-buf=0 --max-inlined-iterations=1000000
 
 cs_python ./run_gmg_vcycle.py -m=8 -n=8 -k=8 --latestlink out_vcycle --channels=1 \
---width-west-buf=0 --width-east-buf=0 --zDim=8 --run-only --levels=3 --max-ite=1
+--width-west-buf=0 --width-east-buf=0 --zDim=8 --run-only --levels=3 --max-ite=1 \
+--pre-iter=6 --post-iter=6 --bottom-iter=50
+
+echo ""
+echo "============================================"
+echo "Check output above for timing breakdown!"
+echo "============================================"
 

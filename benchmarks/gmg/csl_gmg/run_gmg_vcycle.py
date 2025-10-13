@@ -155,6 +155,132 @@ def copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
     simulator.memcpy_h2d(symbol_jacobi_coeff_array, jacobi_flat, 0, 0, width, height, args.levels,
                          streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
 
+def make_u48(words):
+    """Convert three u16 words to 48-bit timestamp"""
+    return words[0] + (words[1] << 16) + (words[2] << 32)
+
+def combine_timing_arrays(height, width, levels, timing_down_hwl, timing_up_hwl):
+    """Combine down and up timing arrays by summing elapsed cycles
+    
+    Returns a new timing array where cycles = (down_end - down_start) + (up_end - up_start)
+    The combined array stores artificial start=0 and end=total_cycles for each level/PE
+    """
+    combined_hwl = np.zeros_like(timing_down_hwl)
+    
+    for level in range(levels):
+        for h in range(height):
+            for w in range(width):
+                offset = level * 6
+                
+                # Extract down timing
+                down_start = make_u48(timing_down_hwl[h, w, offset:offset+3])
+                down_end = make_u48(timing_down_hwl[h, w, offset+3:offset+6])
+                down_cycles = down_end - down_start
+                
+                # Extract up timing
+                up_start = make_u48(timing_up_hwl[h, w, offset:offset+3])
+                up_end = make_u48(timing_up_hwl[h, w, offset+3:offset+6])
+                up_cycles = up_end - up_start
+                
+                # Total cycles
+                total_cycles = down_cycles + up_cycles
+                
+                # Store as start=0, end=total_cycles (fake timestamps for combined measurement)
+                combined_hwl[h, w, offset+0] = 0
+                combined_hwl[h, w, offset+1] = 0
+                combined_hwl[h, w, offset+2] = 0
+                combined_hwl[h, w, offset+3] = total_cycles & 0xFFFF
+                combined_hwl[h, w, offset+4] = (total_cycles >> 16) & 0xFFFF
+                combined_hwl[h, w, offset+5] = (total_cycles >> 32) & 0xFFFF
+    
+    return combined_hwl
+
+def copy_timing_data(height, width, levels, simulator, symbol_timing):
+    """Copy timing data from device and return as numpy array"""
+    # Each level has 6 u16 values (start[3] + end[3])
+    timing_size = levels * 6
+    timing_1d = np.zeros(height * width * timing_size, np.uint32)
+    simulator.memcpy_d2h(timing_1d, symbol_timing, 0, 0, width, height, timing_size,
+                        streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, 
+                        order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    
+    # memcpy_d2h with MEMCPY_16BIT reads u16 but stores in u32 array (drops upper 16 bits)
+    # Convert to u16 and reshape to (height, width, timing_size) in column-major order
+    timing_u16 = (timing_1d & 0xFFFF).astype(np.uint16)
+    timing_hwl = timing_u16.reshape(timing_size, width, height, order='F').transpose(2, 1, 0)
+    return timing_hwl
+
+def adjust_timestamps_with_ref_clock(height, width, time_ref_hwl):
+    """Adjust reference clock by propagation delay and convert to full timestamps
+    
+    Returns: time_ref array of shape (height, width) with adjusted 48-bit timestamps
+    """
+    time_ref = np.zeros((height, width), dtype=np.int64)
+    
+    for h in range(height):
+        for w in range(width):
+            # Reconstruct 48-bit reference timestamp
+            ref_words = time_ref_hwl[h, w, :]
+            time_ref[h, w] = make_u48(ref_words)
+    
+    # Adjust reference clock by propagation delay
+    # The right-bottom PE signals other PEs, the propagation delay is:
+    #     (height-1) - py + (width-1) - px
+    for py in range(height):
+        for px in range(width):
+            time_ref[py, px] = time_ref[py, px] - ((width + height - 2) - (px + py))
+    
+    return time_ref
+
+def process_timing_data(height, width, levels, timing_hwl, time_ref, operation_name):
+    """Process timing data for one operation across all levels
+    
+    Adjusts timestamps relative to reference clock before computing cycles
+    """
+    timing_per_level = []
+    
+    for level in range(levels):
+        # Extract start and end timestamps for this level
+        level_times = []
+        for h in range(height):
+            for w in range(width):
+                offset = level * 6
+                start_words = timing_hwl[h, w, offset:offset+3]
+                end_words = timing_hwl[h, w, offset+3:offset+6]
+                time_start_raw = make_u48(start_words)
+                time_end_raw = make_u48(end_words)
+                
+                # Adjust by reference clock
+                time_start_adj = time_start_raw - time_ref[h, w]
+                time_end_adj = time_end_raw - time_ref[h, w]
+                
+                cycles = time_end_adj - time_start_adj
+                if cycles > 0:  # Only include valid measurements
+                    level_times.append(cycles)
+        
+        # Get min/max/avg cycles for this level
+        if len(level_times) > 0:
+            level_times = np.array(level_times)
+            min_cycles = np.min(level_times)
+            max_cycles = np.max(level_times)
+            avg_cycles = np.mean(level_times)
+        else:
+            min_cycles = max_cycles = avg_cycles = 0
+        
+        # Convert to microseconds (875MHz clock for WSE3)
+        time_us = (avg_cycles / 0.875) * 1.e-3
+        
+        timing_per_level.append({
+            'level': level,
+            'operation': operation_name,
+            'min_cycles': min_cycles,
+            'max_cycles': max_cycles,
+            'avg_cycles': avg_cycles,
+            'time_us': time_us
+        })
+    
+    return timing_per_level
+
 def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, device_solver, args):
     
     u_wse_1d = np.zeros(height*width*zDim, DTYPE)
@@ -260,6 +386,12 @@ def main():
     symbol_hy_array = simulator.get_id("hy_array")
     symbol_hz_array = simulator.get_id("hz_array")
     symbol_jacobi_coeff_array = simulator.get_id("jacobi_coeff_array")
+    symbol_timing_smooth_down = simulator.get_id("timing_smooth_down")
+    symbol_timing_smooth_up = simulator.get_id("timing_smooth_up")
+    symbol_timing_apply_op = simulator.get_id("timing_apply_op")
+    symbol_timing_restrict = simulator.get_id("timing_restrict")
+    symbol_timing_interp = simulator.get_id("timing_interp")
+    symbol_time_ref = simulator.get_id("time_ref")
     
     simulator.load()
     simulator.run()
@@ -273,6 +405,17 @@ def main():
    
     copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, 
                  symbol_u, symbol_f, symbol_hx_array, symbol_hy_array, symbol_hz_array, symbol_jacobi_coeff_array, device_solver, args)
+    
+    # Enable timing and synchronize PEs
+    print("\nEnabling timer...")
+    simulator.launch("f_enable_timer", nonblock=False)
+    
+    print("Synchronizing PEs...")
+    simulator.launch("f_sync", nonblock=False)
+    
+    print("Copying reference clock...")
+    simulator.launch("f_reference_timestamps", nonblock=False)
+    # 
     # Run GMG V-cycle on device
     print("\n" + "="*60)
     print(f"Running GMG V-cycle on device (levels={args.levels})...")
@@ -292,6 +435,29 @@ def main():
     print("="*60)
     
     u_wse_1d, r_wse_1d = copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, device_solver, args)
+    
+    # Copy timing data from device
+    print("\nCopying timing data...")
+    timing_smooth_down_hwl = copy_timing_data(height, width, args.levels, simulator, symbol_timing_smooth_down)
+    timing_smooth_up_hwl = copy_timing_data(height, width, args.levels, simulator, symbol_timing_smooth_up)
+    timing_apply_op_hwl = copy_timing_data(height, width, args.levels, simulator, symbol_timing_apply_op)
+    timing_restrict_hwl = copy_timing_data(height, width, args.levels, simulator, symbol_timing_restrict)
+    timing_interp_hwl = copy_timing_data(height, width, args.levels, simulator, symbol_timing_interp)
+    
+    # Copy reference clock
+    print("Copying reference clock...")
+    time_ref_1d = np.zeros(height * width * 3, np.uint32)
+    simulator.memcpy_d2h(time_ref_1d, symbol_time_ref, 0, 0, width, height, 3,
+                         streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, 
+                         order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    time_ref_hwl = oned_to_hwl_colmajor(height, width, 3, time_ref_1d, np.uint16)
+    print(f"time_ref_hwl: {time_ref_hwl}")
+    print(f"time_ref_1d: {time_ref_1d}")
+    print(f"timing_smooth_down_hwl: {timing_smooth_down_hwl}")
+    print(f"timing_smooth_up_hwl: {timing_smooth_up_hwl}")
+    print(f"timing_apply_op_hwl: {timing_apply_op_hwl}")
+    print(f"timing_restrict_hwl: {timing_restrict_hwl}")
+    print(f"timing_interp_hwl: {timing_interp_hwl}")
     simulator.stop()
     
     # Reshape results
@@ -346,6 +512,61 @@ def main():
                 d_val = device_u[i,j,0]
                 ratio = d_val / h_val if h_val != 0 else 0
                 print(f"   ({i},{j},0): host={h_val:.6e}, device={d_val:.6e}, ratio={ratio:.4f}")
+    
+    # Process and display timing information
+    print("\n" + "="*60)
+    print("Performance Timing (similar to bricks output)")
+    print("="*60)
+    
+    # Adjust reference clock by propagation delay
+    time_ref = adjust_timestamps_with_ref_clock(height, width, time_ref_hwl)
+    
+    # Combine down and up smoothing times
+    timing_smooth_combined_hwl = combine_timing_arrays(height, width, args.levels, 
+                                                       timing_smooth_down_hwl, timing_smooth_up_hwl)
+    
+    # Process timing data with reference clock adjustment
+    timing_smooth_data = process_timing_data(height, width, args.levels, timing_smooth_combined_hwl, time_ref, "smooth")
+    timing_apply_data = process_timing_data(height, width, args.levels, timing_apply_op_hwl, time_ref, "apply_op")
+    timing_restrict_data = process_timing_data(height, width, args.levels, timing_restrict_hwl, time_ref, "restriction")
+    timing_interp_data = process_timing_data(height, width, args.levels, timing_interp_hwl, time_ref, "interpolation")
+    
+    print("\nTime per operation and level [min, avg, max] cycles (time_us):")
+    print("-" * 80)
+    
+    for level in range(args.levels):
+        smooth = timing_smooth_data[level]
+        apply = timing_apply_data[level]
+        
+        print(f"Level {level}:")
+        print(f"  smooth:        [{smooth['min_cycles']:8.0f}, {smooth['avg_cycles']:8.0f}, {smooth['max_cycles']:8.0f}]  ({smooth['time_us']:8.3f} us)")
+        print(f"  apply_op:      [{apply['min_cycles']:8.0f}, {apply['avg_cycles']:8.0f}, {apply['max_cycles']:8.0f}]  ({apply['time_us']:8.3f} us)")
+        
+        if level < args.levels - 1:  # No restriction at coarsest level
+            restrict = timing_restrict_data[level]
+            print(f"  restriction:   [{restrict['min_cycles']:8.0f}, {restrict['avg_cycles']:8.0f}, {restrict['max_cycles']:8.0f}]  ({restrict['time_us']:8.3f} us)")
+        
+        if level < args.levels - 1:  # No interpolation at coarsest level
+            interp = timing_interp_data[level]
+            print(f"  interpolation: [{interp['min_cycles']:8.0f}, {interp['avg_cycles']:8.0f}, {interp['max_cycles']:8.0f}]  ({interp['time_us']:8.3f} us)")
+        
+        print()
+    
+    # Calculate totals
+    total_smooth_us = sum([t['time_us'] for t in timing_smooth_data])
+    total_apply_us = sum([t['time_us'] for t in timing_apply_data])
+    total_restrict_us = sum([t['time_us'] for t in timing_restrict_data if t['level'] < args.levels - 1])
+    total_interp_us = sum([t['time_us'] for t in timing_interp_data if t['level'] < args.levels - 1])
+    total_time_us = total_smooth_us + total_apply_us + total_restrict_us + total_interp_us
+    
+    print("=" * 80)
+    print("Total Time Summary:")
+    print(f"  Total smooth:        {total_smooth_us:10.3f} us")
+    print(f"  Total apply_op:      {total_apply_us:10.3f} us")
+    print(f"  Total restriction:   {total_restrict_us:10.3f} us")
+    print(f"  Total interpolation: {total_interp_us:10.3f} us")
+    print(f"  Total V-cycle time:  {total_time_us:10.3f} us")
+    print("=" * 80)
     
     # if args.cmaddr is None:
     #     # Move simulation logs
