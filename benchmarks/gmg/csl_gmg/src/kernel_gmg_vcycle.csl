@@ -55,11 +55,18 @@ var jacobi_coeff_array = @zeros([LEVELS]f32);
 // Timing buffers - store start/end timestamps for each operation at each level
 // Operations: smooth (down + up separate), apply_op, restriction, interpolation
 // For each operation: [start_timestamp[3], end_timestamp[3]] = 6 u16 values
-var timing_smooth_down = @zeros([LEVELS * timestamp.tsc_size_words * 2]u16); // pre-smoothing timing
-var timing_smooth_up = @zeros([LEVELS * timestamp.tsc_size_words * 2]u16);   // post-smoothing timing
+var timing_smooth = @zeros([LEVELS * timestamp.tsc_size_words * 2]u16); // pre-smoothing timing
 var timing_apply_op = @zeros([LEVELS * timestamp.tsc_size_words * 2]u16);    // operator application timing
+var timing_residual = @zeros([LEVELS * timestamp.tsc_size_words * 2]u16);    // residual timing
 var timing_restrict = @zeros([LEVELS * timestamp.tsc_size_words * 2]u16);    // restriction timing
 var timing_interp = @zeros([LEVELS * timestamp.tsc_size_words * 2]u16);      // interpolation timing
+
+// Operation counters - track number of operations at each level
+var counter_smooth = @zeros([LEVELS]u16);    // Number of up smoothing iterations per level
+var counter_apply_op = @zeros([LEVELS]u16);     // Number of operator applications per level
+var counter_residual = @zeros([LEVELS]u16);     // Number of residual operations per level
+var counter_restrict = @zeros([LEVELS]u16);     // Number of restriction operations per level
+var counter_interp = @zeros([LEVELS]u16);       // Number of interpolation operations per level
 
 // Temporary timestamp buffers
 var tsc_temp_start = @zeros([timestamp.tsc_size_words]u16);
@@ -144,12 +151,18 @@ var ptr_hx_array: [*]f32 = &hx_array;
 var ptr_hy_array: [*]f32 = &hy_array;
 var ptr_hz_array: [*]f32 = &hz_array;
 var ptr_jacobi_coeff_array: [*]f32 = &jacobi_coeff_array;
-var ptr_timing_smooth_down: [*]u16 = &timing_smooth_down;
-var ptr_timing_smooth_up: [*]u16 = &timing_smooth_up;
+
+var ptr_timing_smooth: [*]u16 = &timing_smooth;
 var ptr_timing_apply_op: [*]u16 = &timing_apply_op;
+var ptr_timing_residual: [*]u16 = &timing_residual;
 var ptr_timing_restrict: [*]u16 = &timing_restrict;
 var ptr_timing_interp: [*]u16 = &timing_interp;
 var ptr_time_ref: [*]u16 = &time_ref_u16;
+var ptr_counter_smooth: [*]u16 = &counter_smooth;
+var ptr_counter_apply_op: [*]u16 = &counter_apply_op;
+var ptr_counter_residual: [*]u16 = &counter_residual;
+var ptr_counter_restrict: [*]u16 = &counter_restrict;
+var ptr_counter_interp: [*]u16 = &counter_interp;
 
 // Helper functions
 fn isActivePE(px: i16, py: i16, factor_val: u16) bool {
@@ -179,21 +192,6 @@ fn save_timestamp_end(level: i16, timing_array: [*]u16) void {
     timing_array[offset + 0] = tsc_temp_end[0];
     timing_array[offset + 1] = tsc_temp_end[1];
     timing_array[offset + 2] = tsc_temp_end[2];
-    
-    // // Debug: Print timing for level 0 only from PE (0,0) to avoid spam
-    // const pe_id_x: u16 = layout_mod.get_x_coord();
-    // const pe_id_y: u16 = layout_mod.get_y_coord();
-    // if (current_level_id == 0 and pe_id_x == 0 and pe_id_y == 0) {
-    //     const start_offset: i16 = level * timestamp.tsc_size_words * 2;
-    //     const start_w0 = timing_array[start_offset + 0];
-    //     const start_w1 = timing_array[start_offset + 1];
-    //     const start_w2 = timing_array[start_offset + 2];
-    //     const end_w0 = timing_array[offset + 0];
-    //     const end_w1 = timing_array[offset + 1];
-    //     const end_w2 = timing_array[offset + 2];
-    //     // simprint.fmt_with_coords("TIMING_DEBUG: level={d}, start=[{d},{d},{d}], end=[{d},{d},{d}]",
-    //     //     .{@as(u16, level), @as(u16, start_w0), @as(u16, start_w1), @as(u16, start_w2), @as(u16, end_w0), @as(u16, end_w1), @as(u16, end_w2)});
-    // }
 }
 
 fn print_time_debug() void {
@@ -209,20 +207,12 @@ fn print_time_debug() void {
             const start_offset: i16 = level * timestamp.tsc_size_words * 2;
             const end_offset: i16 = level * timestamp.tsc_size_words * 2 + timestamp.tsc_size_words;
             // smooth down
-            const start_w0 = timing_smooth_down[start_offset + 0];
-            const start_w1 = timing_smooth_down[start_offset + 1];
-            const start_w2 = timing_smooth_down[start_offset + 2];
-            const end_w0 = timing_smooth_down[end_offset + 0];
-            const end_w1 = timing_smooth_down[end_offset + 1];
-            const end_w2 = timing_smooth_down[end_offset + 2];
-
-            // smooth up
-            const start_w00 = timing_smooth_up[start_offset + 0];
-            const start_w11 = timing_smooth_up[start_offset + 1];
-            const start_w22 = timing_smooth_up[start_offset + 2];
-            const end_w00 = timing_smooth_up[end_offset + 0];
-            const end_w11 = timing_smooth_up[end_offset + 1];
-            const end_w22 = timing_smooth_up[end_offset + 2];
+            const start_w0 = timing_smooth[start_offset + 0];
+            const start_w1 = timing_smooth[start_offset + 1];
+            const start_w2 = timing_smooth[start_offset + 2];
+            const end_w0 = timing_smooth[end_offset + 0];
+            const end_w1 = timing_smooth[end_offset + 1];
+            const end_w2 = timing_smooth[end_offset + 2];
 
             // apply op
             const start_w000 = timing_apply_op[start_offset + 0];
@@ -248,19 +238,39 @@ fn print_time_debug() void {
             const end_w11111 = timing_interp[end_offset + 1];
             const end_w22222 = timing_interp[end_offset + 2];
 
-            simprint.fmt_with_coords("TIMING_DEBUG: level={d}, smooth_down=[{d},{d},{d}], smooth_up=[{d},{d},{d}], apply_op=[{d},{d},{d}], restrict=[{d},{d},{d}], interp=[{d},{d},{d}]",
-                .{@as(u16, level), @as(u16, start_w0), @as(u16, start_w1), @as(u16, start_w2), @as(u16, end_w0), @as(u16, end_w1), @as(u16, end_w2), @as(u16, start_w00), @as(u16, start_w11), @as(u16, start_w22), @as(u16, end_w00), @as(u16, end_w11), @as(u16, end_w22), @as(u16, start_w000), @as(u16, start_w111), @as(u16, start_w222), @as(u16, end_w000), @as(u16, end_w111), @as(u16, end_w222), @as(u16, start_w0000), @as(u16, start_w1111), @as(u16, start_w2222), @as(u16, end_w0000), @as(u16, end_w1111), @as(u16, end_w2222), @as(u16, start_w00000), @as(u16, start_w11111), @as(u16, start_w22222), @as(u16, end_w00000), @as(u16, end_w11111), @as(u16, end_w22222)});
+            // residual
+            const start_w000000 = timing_residual[start_offset + 0];
+            const start_w111111 = timing_residual[start_offset + 1];
+            const start_w222222 = timing_residual[start_offset + 2];
+            const end_w000000 = timing_residual[end_offset + 0];
+            const end_w111111 = timing_residual[end_offset + 1];
+            const end_w222222 = timing_residual[end_offset + 2];
+            
+            simprint.fmt_with_coords("TIMING_DEBUG: level={d}, smooth=[start={d},{d},{d}, end={d},{d},{d}], apply_op=[start={d},{d},{d}, end={d},{d},{d}], restrict=[start={d},{d},{d}, end={d},{d},{d}], interp=[start={d},{d},{d}, end={d},{d},{d}], residual=[start={d},{d},{d}, end={d},{d},{d}]",
+                .{@as(u16, level), 
+                    @as(u16, start_w0), @as(u16, start_w1), @as(u16, start_w2), 
+                    @as(u16, end_w0), @as(u16, end_w1), @as(u16, end_w2), 
+                    @as(u16, start_w000), @as(u16, start_w111), @as(u16, start_w222), 
+                    @as(u16, end_w000), @as(u16, end_w111), @as(u16, end_w222), 
+                    @as(u16, start_w0000), @as(u16, start_w1111), @as(u16, start_w2222), 
+                    @as(u16, end_w0000), @as(u16, end_w1111), @as(u16, end_w2222), 
+                    @as(u16, start_w00000), @as(u16, start_w11111), @as(u16, start_w22222), 
+                    @as(u16, end_w00000), @as(u16, end_w11111), @as(u16, end_w22222),
+                    @as(u16, start_w000000), @as(u16, start_w111111), @as(u16, start_w222222), 
+                    @as(u16, end_w000000), @as(u16, end_w111111), @as(u16, end_w222222)});
         }
     }
 }
 
 // Apply operator for Jacobi smoothing
 fn f_apply_operator() void {
+    counter_apply_op[current_level] += 1;
     @fmovs(mem_Au_dsd, 0.0);
     stencil_mod.spmv(n, &stencil_coeff, &u, &Au);
 }
 
 fn f_jacobi_smooth() void {
+    counter_smooth[current_level] += 1;
     // Jacobi update
     const jacobi_coeff: f32 = jacobi_coeff_array[current_level];
     if (is_active_pe) {
@@ -273,6 +283,7 @@ fn f_jacobi_smooth() void {
 }
 
 fn f_residual() void {
+    counter_residual[current_level] += 1;
     if (is_active_pe) {
         @fsubs(mem_r_dsd, mem_f_dsd, mem_Au_dsd);
     } else {
@@ -285,6 +296,7 @@ fn f_reduce_row_col_top_left() void {
 }
 
 fn f_restriction_division() void {
+    counter_restrict[current_level] += 1;
     const pe_id_x: u16 = layout_mod.get_x_coord();
     const pe_id_y: u16 = layout_mod.get_y_coord();    
     if (is_top_left_of_restriction_window(pe_id_x, pe_id_y, 
@@ -299,6 +311,7 @@ fn f_restriction_division() void {
 }
 
 fn f_interpolation_add() void {
+    counter_interp[current_level] += 1;
     if (is_active_pe) {
         @fadds(mem_u_dsd, mem_u_dsd, mem_save_u_smooth_dsd);
     } else {
@@ -429,11 +442,10 @@ fn f_trigger_state_machine() void {
 
 // State machine
 task f_state() void {
-    if (STATE_SYNC == cur_state){
+    if (STATE_SYNC == cur_state) {
         // sync all PEs by internal allreduce module
         next_state = STATE_EXIT;
         reduce_mod.allreduce(1, &dot, reduce_mod.TYPE_BINARY_OP.ADD);
-
     }
     else if (STATE_INIT == cur_state) {
         // Start down cycle at level 0
@@ -447,7 +459,6 @@ task f_state() void {
 //########################################################################################    
     else if (STATE_DOWN_INIT == cur_state) {
         // Initialize current level
-        // simprint.fmt_with_coords("DOWN_INIT: level={d}", .{@as(u16, current_level)});
         f_setup_level(@as(u16, current_level), 1); // (.. , down=True/False)
         current_smooth_iter = 0;
         next_state = STATE_DOWN_SMOOTH_APPLY;
@@ -457,18 +468,13 @@ task f_state() void {
         // Apply operator for Jacobi smoothing
         // Start timing for DOWN smooth (first iteration only)
         if (current_smooth_iter == 0) {
-            save_timestamp_start(current_level, &timing_smooth_down);
+            save_timestamp_start(current_level, &timing_smooth);
         }
         next_state = STATE_DOWN_SMOOTH_UPDATE;
         f_apply_operator();
-        
     } else if (STATE_DOWN_SMOOTH_UPDATE == cur_state) {
         f_jacobi_smooth();
         current_smooth_iter = current_smooth_iter + 1;
-        if (is_active_pe and current_level == 0) {
-            // simprint.fmt_with_coords("DOWN_SMOOTH: level={d}, iter={d}, u[0]={f}", 
-            //     .{@as(u16, current_level), @as(u16, current_smooth_iter), u[0]});
-        }
         next_state = STATE_DOWN_SMOOTH_CHECK;
         f_trigger_state_machine();
         
@@ -477,21 +483,21 @@ task f_state() void {
             next_state = STATE_DOWN_SMOOTH_APPLY;
         } else {
             // End timing for DOWN smoothing
-            save_timestamp_end(current_level, &timing_smooth_down);
+            save_timestamp_end(current_level, &timing_smooth);
             next_state = STATE_DOWN_RESIDUAL_APPLY;
         }
         f_trigger_state_machine();
         
     } else if (STATE_DOWN_RESIDUAL_APPLY == cur_state) {
         // Apply operator for residual
-        save_timestamp_start(current_level, &timing_apply_op);
+        save_timestamp_start(current_level, &timing_residual);
         next_state = STATE_DOWN_RESIDUAL_COMPUTE;
         f_apply_operator();
         
     } else if (STATE_DOWN_RESIDUAL_COMPUTE == cur_state) {
         // Compute residual
         f_residual();
-        save_timestamp_end(current_level, &timing_apply_op);
+        save_timestamp_end(current_level, &timing_residual);
         next_state = STATE_DOWN_RESTRICT_REDUCE;
         f_trigger_state_machine();
         
@@ -515,7 +521,6 @@ task f_state() void {
         } else {
             next_state = STATE_COARSE_INIT;
         }
-        print_time_debug();
         f_trigger_state_machine();
         
     } 
@@ -532,11 +537,11 @@ task f_state() void {
     } else if (STATE_COARSE_SMOOTH_APPLY == cur_state) {
         // Start timing for coarse solve (use down array, first iteration only)
         if (current_smooth_iter == 0) {
-            save_timestamp_start(current_level, &timing_smooth_down);
+            save_timestamp_start(current_level, &timing_smooth);
         }
         next_state = STATE_COARSE_SMOOTH_UPDATE;
         f_apply_operator();
-        
+
     } else if (STATE_COARSE_SMOOTH_UPDATE == cur_state) {
         f_jacobi_smooth();
         current_smooth_iter = current_smooth_iter + 1;
@@ -548,16 +553,11 @@ task f_state() void {
             next_state = STATE_COARSE_SMOOTH_APPLY;
         } else {
             // End timing for coarse solve (use down array since no up cycle for coarsest)
-            save_timestamp_end(current_level, &timing_smooth_down);
-            
-            // // Print coarse level solution (only from active PEs)
-            // if (is_active_pe) {
-            //     simprint.fmt_with_coords("COARSE_DONE: level={d}, iters={d}, u[0]={f}, u[3]={f}", 
-            //         .{@as(u16, current_level), @as(u16, current_smooth_iter), u[0], u[3]});
-            // }
+            save_timestamp_end(current_level, &timing_smooth);
             // Start up cycle
             current_level = current_level - 1;
             next_state = STATE_UP_INIT;
+            print_time_debug();
         }
         f_trigger_state_machine();
         
@@ -567,7 +567,6 @@ task f_state() void {
 //########################################################################################    
     else if (STATE_UP_INIT == cur_state) {
         // Initialize level for up cycle
-        // simprint.fmt_with_coords("UP_INIT: level={d}", .{@as(u16, current_level)});
         f_setup_level(@as(u16, current_level), 0); // (.. , down=False for up cycle)
         next_state = STATE_UP_BCAST;
         f_trigger_state_machine();
@@ -589,19 +588,14 @@ task f_state() void {
     } else if (STATE_UP_SMOOTH_APPLY == cur_state) {
         // Start timing for UP smooth (first iteration only)
         if (current_smooth_iter == 0) {
-            save_timestamp_start(current_level, &timing_smooth_up);
+            save_timestamp_start(current_level, &timing_smooth);
         }
         next_state = STATE_UP_SMOOTH_UPDATE;
         f_apply_operator();
         
     } else if (STATE_UP_SMOOTH_UPDATE == cur_state) {
         f_jacobi_smooth();
-        
         current_smooth_iter = current_smooth_iter + 1;
-        if (is_active_pe and current_level == 0) {
-            // simprint.fmt_with_coords("UP_SMOOTH: level={d}, iter={d}, u[0]={f}", 
-            //     .{@as(u16, current_level), @as(u16, current_smooth_iter), u[0]});
-        }
         next_state = STATE_UP_SMOOTH_CHECK;
         f_trigger_state_machine();
         
@@ -610,7 +604,7 @@ task f_state() void {
             next_state = STATE_UP_SMOOTH_APPLY;
         } else {
             // End timing for UP smoothing
-            save_timestamp_end(current_level, &timing_smooth_up);
+            save_timestamp_end(current_level, &timing_smooth);
             next_state = STATE_UP_LEVEL_CHECK;
         }
         f_trigger_state_machine();
@@ -629,13 +623,7 @@ task f_state() void {
 // EXIT
 //########################################################################################    
     else if (STATE_EXIT == cur_state) {
-        // Print final level 0 solution from PE(0,0)
-        const pe_id_x: u16 = layout_mod.get_x_coord();
-        const pe_id_y: u16 = layout_mod.get_y_coord();
-        // if (pe_id_x == 0 and pe_id_y == 0) {
-        //     simprint.fmt_with_coords("FINAL: u[0]={f}, u[1]={f}, u[2]={f}, u[3]={f}", 
-        //         .{u[0], u[1], u[2], u[3]});
-        // }
+        print_time_debug();
         sys_mod.unblock_cmd_stream();
         
     } else {
@@ -652,6 +640,7 @@ comptime {
 }
 
 comptime {
+    // data
     @export_symbol(ptr_u, "u");
     @export_symbol(ptr_f, "f");
     @export_symbol(ptr_r, "r");
@@ -659,12 +648,19 @@ comptime {
     @export_symbol(ptr_hy_array, "hy_array");
     @export_symbol(ptr_hz_array, "hz_array");
     @export_symbol(ptr_jacobi_coeff_array, "jacobi_coeff_array");
-    @export_symbol(ptr_timing_smooth_down, "timing_smooth_down");
-    @export_symbol(ptr_timing_smooth_up, "timing_smooth_up");
+    // timing
+    @export_symbol(ptr_timing_smooth, "timing_smooth");
     @export_symbol(ptr_timing_apply_op, "timing_apply_op");
+    @export_symbol(ptr_timing_residual, "timing_residual");
     @export_symbol(ptr_timing_restrict, "timing_restrict");
     @export_symbol(ptr_timing_interp, "timing_interp");
     @export_symbol(ptr_time_ref, "time_ref");
+    // counters
+    @export_symbol(ptr_counter_smooth, "counter_smooth");
+    @export_symbol(ptr_counter_apply_op, "counter_apply_op");
+    @export_symbol(ptr_counter_residual, "counter_residual");
+    @export_symbol(ptr_counter_restrict, "counter_restrict");
+    @export_symbol(ptr_counter_interp, "counter_interp");
 }
 
 comptime {

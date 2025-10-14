@@ -114,12 +114,19 @@ layout{
     @export_name("hy_array", [*]f32, true);
     @export_name("hz_array", [*]f32, true);
     @export_name("jacobi_coeff_array", [*]f32, true);
-    @export_name("timing_smooth_down", [*]u16, true);
-    @export_name("timing_smooth_up", [*]u16, true);
+    // timing
+    @export_name("timing_smooth", [*]u16, true);
+    @export_name("timing_residual", [*]u16, true);
     @export_name("timing_apply_op", [*]u16, true);
     @export_name("timing_restrict", [*]u16, true);
     @export_name("timing_interp", [*]u16, true);
     @export_name("time_ref", [*]u16, true);
+    // counters
+    @export_name("counter_smooth", [*]u16, true);
+    @export_name("counter_apply_op", [*]u16, true);
+    @export_name("counter_residual", [*]u16, true);
+    @export_name("counter_restrict", [*]u16, true);
+    @export_name("counter_interp", [*]u16, true);
 
     @export_name("f_enable_timer", fn()void);
     @export_name("f_sync", fn()void);
