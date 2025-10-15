@@ -14,8 +14,8 @@ import subprocess
 import numpy as np
 import copy
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', "python_gmg"))
-from gmgoscar import SimpleGMG as SimpleGMGOSCAR
+# sys.path.append(os.path.join(os.path.dirname(__file__), '..', "python_gmg"))
+from python_gmg.gmgoscar import SimpleGMG as SimpleGMGOSCAR
 from cmd_parser import parse_args, print_arguments
 from util import hwl_2_oned_colmajor, oned_to_hwl_colmajor
 

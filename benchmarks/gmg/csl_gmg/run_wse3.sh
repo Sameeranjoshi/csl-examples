@@ -7,5 +7,4 @@ set -e
 # fi
 # simulator=$1
 python compile.py
-
-# python launch_wse3.py
+python launch_wse3.py
