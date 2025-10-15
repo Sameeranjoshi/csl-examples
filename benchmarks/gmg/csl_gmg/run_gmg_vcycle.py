@@ -374,7 +374,7 @@ def main():
     
     memcpy_dtype = MemcpyDataType.MEMCPY_32BIT
     memcpy_order = MemcpyOrder.COL_MAJOR
-    simulator = SdkRuntime(logs_dir, cmaddr=args.cmaddr, simfab_numthreads=10)
+    simulator = SdkRuntime(logs_dir, cmaddr=args.cmaddr, simfab_numthreads=64)
     
     symbol_u = simulator.get_id("u")
     symbol_f = simulator.get_id("f")

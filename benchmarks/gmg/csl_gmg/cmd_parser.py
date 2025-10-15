@@ -62,7 +62,7 @@ def parse_args():
   parser.add_argument('--tolerance', type=float, default=1e-6, help='Convergence tolerance (default: 1e-6)')
   parser.add_argument('--pre-iter', type=int, default=6, help='Number of pre-smoothing iterations (default: 6)')
   parser.add_argument('--post-iter', type=int, default=6, help='Number of post-smoothing iterations (default: 6)')
-  parser.add_argument('--bottom-iter', type=int, default=50, help='Number of bottom solver iterations (default: 100)')
+  parser.add_argument('--bottom-iter', type=int, default=10, help='Number of bottom solver iterations (default: 10)')
 
   # Other CSL related arguments
   parser.add_argument("--blockSize", default=2, type=int, help="the size of temporary buffers for communication")
