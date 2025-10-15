@@ -44,9 +44,10 @@ with SdkLauncher(artifact_path, simulator=True, disable_version_check=True) as l
     # using the same cmd as when using the Singularity container
     # print the working directory
     # print pwd
-    response = launcher.run("cs_python run_gmg_vcycle.py -m=4 -n=4 -k=4 --latestlink out_vcycle --channels=4 \
---width-west-buf=13 --width-east-buf=13 --zDim=4 --run-only --levels=2 --max-ite=1 \
+    response = launcher.run("cs_python run_gmg_vcycle.py -m=64 -n=64 -k=64 --latestlink out_vcycle --channels=15 \
+--width-west-buf=0 --width-east-buf=0 --zDim=64 --run-only --levels=3 --max-ite=1 \
 --pre-iter=3 --post-iter=3 --bottom-iter=10")
+
     print("Host code execution response: ", response)
 
     # Fetch files from the appliance
