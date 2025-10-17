@@ -11,14 +11,13 @@ from cerebras.sdk.client import SdkLauncher
 
 layout_file = "./src/layout_gmg_vcycle.csl"
 # Compiler arguments
-Compile_command = f"--arch=wse3 --fabric-dims=75,69 --fabric-offsets=4,1 --params=width:16,height:16,MAX_ZDIM:16,LEVELS:3 \
-    --params=BLOCK_SIZE:16 --params=C0_ID:0 --params=C1_ID:1 --params=C2_ID:2 --params=C3_ID:3 --params=C4_ID:4 \
+Compile_command = f"--arch=wse3 --fabric-dims=75,69 --fabric-offsets=4,1 --params=width:64,height:64,MAX_ZDIM:64,LEVELS:3 \
+    --params=BLOCK_SIZE:64 --params=C0_ID:0 --params=C1_ID:1 --params=C2_ID:2 --params=C3_ID:3 --params=C4_ID:4 \
     --params=C5_ID:5 --params=C6_ID:6 --params=C7_ID:7 --params=C8_ID:8 --memcpy --channels=10 \
     --width-west-buf=0 --width-east-buf=0 -o out_vcycle --max-inlined-iterations=1000000"
 
-Run_command = f"cs_python run_gmg_vcycle.py -m=16 -n=16 -k=16 --latestlink out_vcycle --channels=10 \
---width-west-buf=0 --width-east-buf=0 --zDim=16 --run-only --levels=3 --max-ite=1 \
---pre-iter=3 --post-iter=3 --bottom-iter=10"
+Run_command = f"cs_python run_gmg_vcycle.py -m=64 -n=64 -k=64 --latestlink out_vcycle --channels=10 \
+--width-west-buf=0 --width-east-buf=0 --zDim=64 --run-only --levels=3 --max-ite=1 "
 out_path = "out_dir"
 os.makedirs(out_path, exist_ok=True)
 

@@ -17,8 +17,6 @@ param colors:[8]color;
 param entrypoints:[3]local_task_id;
 param width : i16 ;   // width of the core
 param height: i16 ;   // height of the core
-param hops: u16;      // hop distance between active PEs
-param factor: u16;    // factor used for active PE determination
 
 const C0 : color = colors[0];
 const C1 : color = colors[1];
@@ -120,8 +118,5 @@ fn get_params(px:i16, py:i16) comptime_struct {
         .first_py = first_py,
         .last_py = last_py,
         
-        // Hop-based communication parameters
-        .hops = hops,
-        .factor = factor,
     };
 }
