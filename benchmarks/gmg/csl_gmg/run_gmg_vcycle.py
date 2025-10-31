@@ -589,19 +589,19 @@ def main():
     print(f"  Total V-cycle time:  {total_time_cycles:10.0f} cycles ({total_time_us:10.3f} us) - {total_ops} totalOps")
     print("=" * 100)
     
-    # if args.cmaddr is None:
-    #     # Move simulation logs
-    #     dst_log = Path(f"{logs_dir}/sim.log")
-    #     src_log = Path("sim.log")
-    #     if src_log.exists():
-    #         shutil.move(src_log, dst_log)
+    if args.cmaddr is None:
+        # Move simulation logs
+        dst_log = Path(f"{logs_dir}/sim.log")
+        src_log = Path("sim.log")
+        if src_log.exists():
+            shutil.move(src_log, dst_log)
         
-    #     dst_trace = Path(f"{logs_dir}/simfab_traces")
-    #     src_trace = Path("simfab_traces")
-    #     if dst_trace.exists():
-    #         shutil.rmtree(dst_trace)
-    #     if src_trace.exists():
-    #         shutil.move(src_trace, dst_trace)
+        dst_trace = Path(f"{logs_dir}/simfab_traces")
+        src_trace = Path("simfab_traces")
+        if dst_trace.exists():
+            shutil.rmtree(dst_trace)
+        if src_trace.exists():
+            shutil.move(src_trace, dst_trace)
 
 if __name__ == "__main__":
     main()
