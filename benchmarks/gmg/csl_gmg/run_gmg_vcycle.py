@@ -426,7 +426,7 @@ def main():
     print("="*60)
     
     simulator.launch("f_gmg_vcycle", 
-                    np.int16(zDim), 
+                    # np.int16(zDim), 
                     np.int16(args.levels),
                     np.int16(args.pre_iter),
                     np.int16(args.post_iter),
@@ -461,9 +461,12 @@ def main():
     u_wse_3d = oned_to_hwl_colmajor(height, width, zDim, u_wse_1d, DTYPE)
     # r_wse_3d = oned_to_hwl_colmajor(height, width, zDim, r_wse_1d, DTYPE)
     # Store device results
+    print(f"u_wse_3d shape = {u_wse_3d.shape}")
+    print(f"u_wse_3d[:, :, 0] = {u_wse_3d[:, :, 0]}")
     device_solver.grids[0]['u'] = u_wse_3d
     device_solver.compute_residual(0)
     device_solver.grids[0]['rho_up'] = device_solver.calculate_rho(device_solver.grids[0]['r'])
+
 
 ############################################################
 # Verification
@@ -471,7 +474,20 @@ def main():
     # Verification
     print("\n" + "="*60)
     print("Verification")
+    print("Checking u, f, r, Au at level 0 for host_solver and device_solver")
     print("="*60)
+
+
+    # # Check/verify u, f, r, Au at level 0 for host_solver and device_solver
+    # fields = ['u', 'f', 'r', 'Au']
+    # for field in fields:
+    #     host_field = host_solver.grids[0][field]
+    #     device_field = device_solver.grids[0][field]
+    #     print(f"Host {field}: shape={host_field.shape}, dtype={host_field.dtype}")
+    #     print(f"Device {field}: shape={device_field.shape}, dtype={device_field.dtype}")
+    #     np.testing.assert_allclose(host_field, device_field, atol=1e-5, rtol=1e-5)
+
+        
     device_u = device_solver.grids[0]['u']
     host_u = host_solver.grids[0]['u']
     device_rh = device_solver.grids[0]['rho_up']

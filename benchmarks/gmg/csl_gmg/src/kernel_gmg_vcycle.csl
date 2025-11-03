@@ -35,14 +35,29 @@ const stencil_mod = @import_module("./modified_csl_lib/stencil_3d_7pts/pe.csl", 
 const layout_mod = @import_module("<layout>");
 const simprint = @import_module("<simprint>", .{.enable = true});
 
+// Compute total storage needed for GMG levels using geometric series formula
+// Total = zdim + zdim/2 + zdim/4 + ... + zdim/2^(LEVELS-1)
+// This function uses a comptime loop (like the identity matrix example)
+fn compute_total_gmg_size() i16 {
+    var total: i16 = 0;
+    var level: i16 = 0;
+    var factor: u16 = 1;  // Start with 2^0 = 1
+    while (level < LEVELS) : (level += 1) {
+        total += MAX_ZDIM / @as(i16, factor);
+        factor *= 2;  // Double the factor: 1, 2, 4, 8, ...
+    }
+    return total;
+}
+
 // GMG data structures
 var u = @zeros([MAX_ZDIM]f32);
 var f = @zeros([MAX_ZDIM]f32);
 var r = @zeros([MAX_ZDIM]f32);
 var Au = @zeros([MAX_ZDIM]f32);
 var residual_temp = @zeros([MAX_ZDIM]f32);
-var save_u_smooth = @zeros([LEVELS * MAX_ZDIM]f32);
-var save_f_down = @zeros([LEVELS * MAX_ZDIM]f32);
+const TOTAL_GMG_SIZE: i16 = compute_total_gmg_size();
+var save_u_smooth = @zeros([TOTAL_GMG_SIZE]f32);
+var save_f_down = @zeros([TOTAL_GMG_SIZE]f32);
 
 // Grid spacing arrays for each level (passed from host)
 var hx_array = @zeros([LEVELS]f32);
@@ -303,8 +318,9 @@ fn f_restriction_division() void {
         restriction_window_width, restriction_window_height)) {
         const total_active: f32 = @as(f32, active_pes_in_restriction_window_x * 
             active_pes_in_restriction_window_y);
-        var inv_total: f32 = 1.0 / total_active;
+        var inv_total: f32 = 1.0 / total_active;    // 1/4
         @fmuls(mem_f_dsd, mem_r_dsd, inv_total);
+        // put 2 dsds on r, which are strided, 2i and 2i + 1, and reduce them, and store the result in mem_f_dsd
     } else {
         @fmovs(mem_f_dsd, 0.0);
     }
@@ -345,6 +361,10 @@ fn f_init_spmv_and_reduce(level_id: u16) void {
 }
 
 fn f_setup_level(level_id: u16, down: i16) void {
+    var const_2: f16 = 2.0;
+    factor = @as(u16, math_lib.pow(const_2, @as(f16, level_id)));
+    n = MAX_ZDIM/@as(i16, factor);    // zdim/1 --> zdim/2 --> zdim/4 --> ...
+    // print n
     current_level_id = level_id;
     hx_level = hx_array[level_id];
     hy_level = hy_array[level_id];
@@ -357,8 +377,23 @@ fn f_setup_level(level_id: u16, down: i16) void {
     mem_Au_dsd = @set_dsd_length(mem_Au_dsd, @bitcast(u16, n));
     mem_residual_temp_dsd = @set_dsd_length(mem_residual_temp_dsd, @bitcast(u16, n));
     
-    // Setup save arrays
-    var start_idx: i16 = @as(i16, @as(u16, current_level_id) * @bitcast(u16, MAX_ZDIM));
+    // Setup save arrays - compute offset as sum of sizes of all previous levels
+    // This implements the geometric series: zdim + zdim/2 + zdim/4 + ...
+    var start_idx: i16 = 0;
+    var temp_level: u16 = 0;
+    var temp_factor: u16 = 1;  // Start with factor = 1 for level 0
+    while (temp_level < current_level_id) : (temp_level += 1) {
+        start_idx += MAX_ZDIM / @as(i16, temp_factor);
+        temp_factor *= 2;  // Double the factor: 1, 2, 4, 8, ...
+    }
+    
+    // print start_idx
+    const pe_id_x: u16 = layout_mod.get_x_coord();
+    const pe_id_y: u16 = layout_mod.get_y_coord();
+    if (pe_id_x == 0 and pe_id_y == 0) {
+        simprint.fmt_with_coords("DEBUG: LEVEL_ID = {d}, n = {d}, TOTAL_GMG_SIZE = {d}, start_idx = {d}", .{@as(u16, level_id), @as(u16, n), @as(u16, TOTAL_GMG_SIZE), @as(u16, start_idx)});
+    }
+    
     mem_save_u_smooth_dsd = @set_dsd_base_addr(mem_save_u_smooth_dsd, &save_u_smooth);
     mem_save_u_smooth_dsd = @increment_dsd_offset(mem_save_u_smooth_dsd, start_idx, f32);
     mem_save_u_smooth_dsd = @set_dsd_length(mem_save_u_smooth_dsd, @bitcast(u16, n));
@@ -418,13 +453,13 @@ fn f_reference_timestamps() void {
 
 // Main V-cycle entry point
 fn f_gmg_vcycle(
-    size: i16,
+    // size: i16,
     levels: i16, 
     pre_iter: i16,
     post_iter: i16,
     bottom_iter: i16
 ) void {
-    n = size;
+    // n = size;
     num_levels = levels;
     pre_smooth_iter = pre_iter;
     post_smooth_iter = post_iter;
