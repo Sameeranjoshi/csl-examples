@@ -140,14 +140,15 @@ const STATE_COARSE_SMOOTH_APPLY: i16 = 11;
 const STATE_COARSE_SMOOTH_UPDATE: i16 = 12;
 const STATE_COARSE_SMOOTH_CHECK: i16 = 13;
 const STATE_UP_INIT: i16 = 14;
-const STATE_UP_BCAST: i16 = 15;
-const STATE_UP_INTERP_ADD: i16 = 16;
-const STATE_UP_SMOOTH_APPLY: i16 = 17;
-const STATE_UP_SMOOTH_UPDATE: i16 = 18;
-const STATE_UP_SMOOTH_CHECK: i16 = 19;
-const STATE_UP_LEVEL_CHECK: i16 = 20;
-const STATE_EXIT: i16 = 21;
-const STATE_SYNC: i16 = 22;
+const STATE_UP_EXPAND_Z: i16 = 15;
+const STATE_UP_BCAST: i16 = 16;
+const STATE_UP_INTERP_ADD: i16 = 17;
+const STATE_UP_SMOOTH_APPLY: i16 = 18;
+const STATE_UP_SMOOTH_UPDATE: i16 = 19;
+const STATE_UP_SMOOTH_CHECK: i16 = 20;
+const STATE_UP_LEVEL_CHECK: i16 = 21;
+const STATE_EXIT: i16 = 22;
+const STATE_SYNC: i16 = 23;
 
 // DSDs
 var mem_u_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> u[i] });
@@ -347,12 +348,48 @@ fn f_restriction_division() void {
         
         // Divide by 8 total: 4 (for x,y averaging from 2x2 window) * 2 (for z pair averaging)
         // This completes full 2x2x2 coarsening: average 8 fine points to 1 coarse point
-        const inv_total: f32 = 1.0 / 4.0;  // 1/(4*2) for full 2x2x2 coarsening
+        const inv_total: f32 = 1.0 / 8.0;  // 1/(4*2) for full 2x2x2 coarsening
         @fmuls(mem_f_coarse_dsd, mem_f_coarse_dsd, inv_total);
         @fmovs(mem_f_dsd, mem_f_coarse_dsd);    // not same size, will this work?
     } else {
         @fmovs(mem_f_dsd, 0.0);
     }
+}
+
+fn f_interpolation_expand_z() void {
+    // Expand z dimension: duplicate each coarse element to 2 fine elements
+    // Reverse of restriction: if restriction sums pairs (0,1)->0, (2,3)->1, ...
+    // Then interpolation duplicates: 0->(0,1), 1->(2,3), ...
+    // Coarse z dimension is n/2, fine z dimension is n
+    const coarse_n: i16 = n / 2;  // Coarse z dimension
+    
+    // Save coarse values temporarily in residual_temp (first coarse_n elements)
+    var mem_u_coarse_dsd = @set_dsd_base_addr(mem_u_dsd, &u);
+    mem_u_coarse_dsd = @set_dsd_length(mem_u_coarse_dsd, @bitcast(u16, coarse_n));
+    var mem_residual_temp_coarse_dsd = @set_dsd_base_addr(mem_residual_temp_dsd, &residual_temp);
+    mem_residual_temp_coarse_dsd = @set_dsd_length(mem_residual_temp_coarse_dsd, @bitcast(u16, coarse_n));
+    @fmovs(mem_residual_temp_coarse_dsd, mem_u_coarse_dsd);  // Save coarse values
+    
+    // Create strided DSDs to write to even and odd positions
+    // DSD for even indices: 0, 2, 4, 6, ... (stride 2, starting at offset 0)
+    var mem_u_even_dsd = @set_dsd_base_addr(mem_u_dsd, &u);
+    mem_u_even_dsd = @set_dsd_length(mem_u_even_dsd, @bitcast(u16, coarse_n));
+    mem_u_even_dsd = @set_dsd_stride(mem_u_even_dsd, 2);  // Write to 0, 2, 4, 6, ...
+    
+    // DSD for odd indices: 1, 3, 5, 7, ... (stride 2, starting at offset 1)
+    var mem_u_odd_dsd = @set_dsd_base_addr(mem_u_dsd, &u);
+    mem_u_odd_dsd = @increment_dsd_offset(mem_u_odd_dsd, 1, f32);  // Start at index 1
+    mem_u_odd_dsd = @set_dsd_length(mem_u_odd_dsd, @bitcast(u16, coarse_n));
+    mem_u_odd_dsd = @set_dsd_stride(mem_u_odd_dsd, 2);  // Write to 1, 3, 5, 7, ...
+    
+    // Copy coarse values to even positions (0, 2, 4, 6, ...)
+    @fmovs(mem_u_even_dsd, mem_residual_temp_coarse_dsd);
+    // Copy coarse values to odd positions (1, 3, 5, 7, ...)
+    @fmovs(mem_u_odd_dsd, mem_residual_temp_coarse_dsd);
+    
+    // Now u has fine z dimension n with duplicated values
+    // Update mem_u_dsd to reflect fine z dimension (n)
+    mem_u_dsd = @set_dsd_length(mem_u_dsd, @bitcast(u16, n));
 }
 
 fn f_interpolation_add() void {
@@ -618,9 +655,9 @@ task f_state() void {
         } else {
             // End timing for coarse solve (use down array since no up cycle for coarsest)
             // // can you print u here after sommthing
-            for (@range(i16, 0, n, 1)) |index| {
-                simprint.fmt_with_coords("DEBUG: u[{d}] = {f}", .{@as(u16, index), u[index]});
-            }
+            // for (@range(i16, 0, n, 1)) |index| {
+            //     simprint.fmt_with_coords("DEBUG: u[{d}] = {f}", .{@as(u16, index), u[index]});
+            // }
             save_timestamp_end(current_level, &timing_smooth);
             // Start up cycle
             current_level = current_level - 1;
@@ -636,12 +673,19 @@ task f_state() void {
     else if (STATE_UP_INIT == cur_state) {
         // Initialize level for up cycle
         f_setup_level(@as(u16, current_level), 0); // (.. , down=False for up cycle)
+        next_state = STATE_UP_EXPAND_Z;
+        f_trigger_state_machine();
+        
+    } else if (STATE_UP_EXPAND_Z == cur_state) {
+        // Expand z dimension: duplicate each coarse element to 2 fine elements
+        // This prepares u for broadcasting (u currently has coarse z dim, needs fine z dim)
+        save_timestamp_start(current_level, &timing_interp);
+        f_interpolation_expand_z();
         next_state = STATE_UP_BCAST;
         f_trigger_state_machine();
         
     } else if (STATE_UP_BCAST == cur_state) {
         // Broadcast from top-left
-        save_timestamp_start(current_level, &timing_interp);
         next_state = STATE_UP_INTERP_ADD;
         f_bcast_from_top_left();
         
