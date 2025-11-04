@@ -60,17 +60,17 @@ class SimpleGMG:
             self._print_initialization_info()
         
     def _create_grids(self):
-        """Create simple grid hierarchy with semicoarsening (z dimension preserved)"""
+        """Create simple grid hierarchy with full coarsening (all dimensions reduced)"""
         grids = []
         
         for level in range(self.num_levels):
             # Calculate dimensions for this level
-            # Semicoarsening: only reduce x and y dimensions, keep z dimension
+            # Full coarsening: reduce x, y, and z dimensions by factor of 2 at each level
             nx = max(1, self.nx // (2 ** level))
             ny = max(1, self.ny // (2 ** level))
-            nz = self.nz  # Keep z dimension unchanged for semicoarsening
+            nz = max(1, self.nz // (2 ** level))  # Also reduce z dimension for full coarsening
             
-            # Grid spacing(semicoarsening)
+            # Grid spacing (full coarsening)
             hx = 1.0 / nx
             hy = 1.0 / ny
             hz = 1.0 / nz
@@ -239,6 +239,12 @@ class SimpleGMG:
 
     def apply_operator(self, level: int):
         """Apply 7-point Laplacian operator"""
+        """
+        General forumula: 
+        1/hx2 ( u(i-1, j, k) - 2*u(i,j,k) + u(i+1, j, k) ) + 
+        1/hy2 ( u(i, j-1, k) - 2*u(i,j,k) + u(i, j+1, k) ) +
+        1/hz2 ( u(i, j, k-1) - 2*u(i,j,k) + u(i, j, k+1) )
+        """
         grid = self.grids[level]
         u = grid['u']
         Au = grid['Au']
@@ -322,31 +328,47 @@ class SimpleGMG:
             u[:] += update[:]  # update all cells, boundary handled by apply_operator
     
     def restrict(self, fine_level: int):
-        """Semicoarsening restriction - only reduce in 2D (x,y), keep z dimension"""
+        """
+        Full coarsening restriction - average 8 points in 2x2x2 block (all 3 dimensions)
+        """
         fine = self.grids[fine_level]
         coarse = self.grids[fine_level + 1]
         
         fine_r = fine['r'] # (nx, ny, nz)
         coarse_f = coarse['f']
-       
         
-        # Semicoarsening: average 4 fine points in 2D to 1 coarse point
-        # Keep z dimension unchanged (no reduction in z)
-        # Simple: reduce over x and y for all z dimensions
         Xdim, Ydim, Zdim = coarse_f.shape
-        fineX = 2*Xdim
-        fineY = 2*Ydim
-        # restrict only 2x2 blocks as in python side we make data dense.
-        # Average 2x2 blocks in x,y for all z
-        coarse_f[:] = (
-            fine_r[0:fineX:2, 0:fineY:2, :] +
-            fine_r[0:fineX:2, 1:fineY:2, :] +
-            fine_r[1:fineX:2, 0:fineY:2, :] +
-            fine_r[1:fineX:2, 1:fineY:2, :]
-        ) / 4.0
+        coarse_f.fill(0.0)
+        for i in range(Xdim):
+            for j in range(Ydim):
+                for k in range(Zdim):
+                    f_i = 2*i
+                    f_j = 2*j
+                    f_k = 2*k
+                    total_val = (
+                        fine_r[f_i, f_j, f_k] +
+                        fine_r[f_i+1, f_j, f_k] +
+                        fine_r[f_i, f_j+1, f_k] +
+                        fine_r[f_i+1, f_j+1, f_k] +
+                        # k +1 layer
+                        fine_r[f_i, f_j, f_k+1] +
+                        fine_r[f_i+1, f_j, f_k+1] +
+                        fine_r[f_i, f_j+1, f_k+1] +
+                        fine_r[f_i+1, f_j+1, f_k+1]
+                    )
+                    coarse_f[i, j, k] = total_val / 8.0
+        
 
     def interpolate(self, fine_level: int):
-        """Semicoarsening interpolation - only interpolate in 2D (x,y), keep z dimension"""
+        """Full coarsening interpolation - broadcast to 8 fine points in 2x2x2 block
+        
+        Reverse of restriction: for each coarse point (i,j,k), broadcast its value to
+        8 fine points in the 2x2x2 block. This is the inverse operation of full coarsening.
+        
+        For each coarse position (i,j,k), adds coarse_u[i,j,k] to all 8 fine positions:
+        - Fine positions: (2i, 2j, 2k), (2i+1, 2j, 2k), (2i, 2j+1, 2k), (2i+1, 2j+1, 2k),
+                           (2i, 2j, 2k+1), (2i+1, 2j, 2k+1), (2i, 2j+1, 2k+1), (2i+1, 2j+1, 2k+1)
+        """
         fine = self.grids[fine_level]
         coarse = self.grids[fine_level + 1]
         np.set_printoptions(linewidth=1000)
@@ -356,14 +378,18 @@ class SimpleGMG:
         for i in range(coarse['nx']):
             for j in range(coarse['ny']):
                 for k in range(coarse['nz']):
-                    fi, fj = 2*i, 2*j  # Only double x,y coordinates
-                    fk = k  # z coordinate stays the same
+                    fi, fj, fk = 2*i, 2*j, 2*k  # Fine grid coordinates (double all coordinates)
                     coarse_val = coarse_u[i, j, k]
-                    # Add val to four fine points in (x,y) plane at same z
+                    
+                    # Add coarse value to all 8 fine points in 2x2x2 block
                     fine_u[fi,   fj,   fk] += coarse_val
                     fine_u[fi+1, fj,   fk] += coarse_val
                     fine_u[fi,   fj+1, fk] += coarse_val
                     fine_u[fi+1, fj+1, fk] += coarse_val
+                    fine_u[fi,   fj,   fk+1] += coarse_val
+                    fine_u[fi+1, fj,   fk+1] += coarse_val
+                    fine_u[fi,   fj+1, fk+1] += coarse_val
+                    fine_u[fi+1, fj+1, fk+1] += coarse_val
             
     def v_cycle(self, level: int = 0):
         """V-cycle multigrid"""
@@ -529,6 +555,13 @@ class SimpleGMG:
             cycle_start = time.time()
             self.only_down_cycle()
             self.solve_coarse()
+            # print u after solve_coarse layer by layer over z
+            u = self.grids[self.num_levels - 1]['u']
+            nz = u.shape[2]
+            print(f"u at coarsest level after solve_coarse (layer by layer over z):")
+            for z in range(nz):
+                print(f"  z={z}:")
+                print(u[:, :, z])
             # temporary fix.
             self.grids[self.num_levels - 1]['rho_up'] = self.grids[self.num_levels - 1]['rho']
             self.only_up_cycle(self.num_levels - 2)

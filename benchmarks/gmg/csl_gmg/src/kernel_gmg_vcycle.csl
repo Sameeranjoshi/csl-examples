@@ -157,6 +157,9 @@ var mem_Au_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> Au[i] });
 var mem_save_u_smooth_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> save_u_smooth[i] });
 var mem_save_f_down_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> save_f_down[i] });
 var mem_residual_temp_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> residual_temp[i] });
+var mem_r_even_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r[i] });
+var mem_r_odd_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r[i] });
+var mem_f_coarse_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> f[i] });
 
 // Export pointers
 var ptr_u: [*]f32 = &u;
@@ -316,11 +319,37 @@ fn f_restriction_division() void {
     const pe_id_y: u16 = layout_mod.get_y_coord();    
     if (is_top_left_of_restriction_window(pe_id_x, pe_id_y, 
         restriction_window_width, restriction_window_height)) {
-        const total_active: f32 = @as(f32, active_pes_in_restriction_window_x * 
-            active_pes_in_restriction_window_y);
-        var inv_total: f32 = 1.0 / total_active;    // 1/4
-        @fmuls(mem_f_dsd, mem_r_dsd, inv_total);
-        // put 2 dsds on r, which are strided, 2i and 2i + 1, and reduce them, and store the result in mem_f_dsd
+        // Full coarsening: sum pairs in z dimension after x,y averaging
+        // Fine level z dimension is n, coarse level z dimension is n/2
+        const coarse_n: i16 = n / 2;  // Coarse z dimension
+        
+        // Create strided DSDs to access pairs in z: (0,1), (2,3), (4,5), (6,7), ...
+        // DSD for even indices: 0, 2, 4, 6, ... (stride 2, starting at offset 0)
+        mem_r_even_dsd = @set_dsd_base_addr(mem_r_even_dsd, &r);
+        mem_r_even_dsd = @set_dsd_length(mem_r_even_dsd, @bitcast(u16, coarse_n));
+        mem_r_even_dsd = @set_dsd_stride(mem_r_even_dsd, 2);  // Access 0, 2, 4, 6, ...
+        
+        // DSD for odd indices: 1, 3, 5, 7, ... (stride 2, starting at offset 1)
+        mem_r_odd_dsd = @set_dsd_base_addr(mem_r_odd_dsd, &r);
+        mem_r_odd_dsd = @increment_dsd_offset(mem_r_odd_dsd, 1, f32);  // Start at index 1
+        mem_r_odd_dsd = @set_dsd_length(mem_r_odd_dsd, @bitcast(u16, coarse_n));
+        mem_r_odd_dsd = @set_dsd_stride(mem_r_odd_dsd, 2);  // Access 1, 3, 5, 7, ...
+        
+        // Set mem_f_dsd to coarse z dimension (n/2)
+        mem_f_coarse_dsd = @set_dsd_base_addr(mem_f_coarse_dsd, &f);
+        mem_f_coarse_dsd = @set_dsd_length(mem_f_coarse_dsd, @bitcast(u16, coarse_n));
+        
+        // Sum pairs in z: f[coarse_idx] = (r[2*coarse_idx] + r[2*coarse_idx+1]) / 8
+        // First, copy even indices (0, 2, 4, 6, ...) to f
+        @fmovs(mem_f_coarse_dsd, mem_r_even_dsd);
+        // Then add odd indices (1, 3, 5, 7, ...) to get pairs summed
+        @fadds(mem_f_coarse_dsd, mem_f_coarse_dsd, mem_r_odd_dsd);
+        
+        // Divide by 8 total: 4 (for x,y averaging from 2x2 window) * 2 (for z pair averaging)
+        // This completes full 2x2x2 coarsening: average 8 fine points to 1 coarse point
+        const inv_total: f32 = 1.0 / 4.0;  // 1/(4*2) for full 2x2x2 coarsening
+        @fmuls(mem_f_coarse_dsd, mem_f_coarse_dsd, inv_total);
+        @fmovs(mem_f_dsd, mem_f_coarse_dsd);    // not same size, will this work?
     } else {
         @fmovs(mem_f_dsd, 0.0);
     }
@@ -588,6 +617,10 @@ task f_state() void {
             next_state = STATE_COARSE_SMOOTH_APPLY;
         } else {
             // End timing for coarse solve (use down array since no up cycle for coarsest)
+            // // can you print u here after sommthing
+            for (@range(i16, 0, n, 1)) |index| {
+                simprint.fmt_with_coords("DEBUG: u[{d}] = {f}", .{@as(u16, index), u[index]});
+            }
             save_timestamp_end(current_level, &timing_smooth);
             // Start up cycle
             current_level = current_level - 1;
