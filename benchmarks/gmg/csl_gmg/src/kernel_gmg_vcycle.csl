@@ -88,6 +88,7 @@ var tsc_temp_start = @zeros([timestamp.tsc_size_words]u16);
 var tsc_temp_end = @zeros([timestamp.tsc_size_words]u16);
 
 // Reference clock from allreduce module (for TSC synchronization)
+var time_total_start_end_u16 = @zeros([timestamp.tsc_size_words*2]u16);
 var time_ref_u16 = @zeros([timestamp.tsc_size_words]u16);
 var dot = @zeros([1]f32); // dummy variable for f_sync
 
@@ -191,6 +192,7 @@ var ptr_timing_residual: [*]u16 = &timing_residual;
 var ptr_timing_restrict: [*]u16 = &timing_restrict;
 var ptr_timing_interp: [*]u16 = &timing_interp;
 var ptr_time_ref: [*]u16 = &time_ref_u16;
+var ptr_time_total_start_end: [*]u16 = &time_total_start_end_u16;
 var ptr_counter_smooth: [*]u16 = &counter_smooth;
 var ptr_counter_apply_op: [*]u16 = &counter_apply_op;
 var ptr_counter_residual: [*]u16 = &counter_residual;
@@ -539,6 +541,22 @@ fn f_reference_timestamps() void {
     sys_mod.unblock_cmd_stream();
 }
 
+fn f_tic_total() void {
+    timestamp.get_timestamp(&tsc_temp_start);
+    time_total_start_end_u16[0] = tsc_temp_start[0];
+    time_total_start_end_u16[1] = tsc_temp_start[1];
+    time_total_start_end_u16[2] = tsc_temp_start[2];
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_toc_total() void {
+    timestamp.get_timestamp(&tsc_temp_end);
+    time_total_start_end_u16[3] = tsc_temp_end[0];
+    time_total_start_end_u16[4] = tsc_temp_end[1];
+    time_total_start_end_u16[5] = tsc_temp_end[2];
+    sys_mod.unblock_cmd_stream();
+}
+
 // Synchronize all PEs using allreduce (also captures reference clock)
 fn f_sync() void {
     cur_state = STATE_SYNC;
@@ -842,6 +860,7 @@ comptime {
     @export_symbol(ptr_timing_restrict, "timing_restrict");
     @export_symbol(ptr_timing_interp, "timing_interp");
     @export_symbol(ptr_time_ref, "time_ref");
+    @export_symbol(ptr_time_total_start_end, "time_total_start_end");
     // counters
     @export_symbol(ptr_counter_smooth, "counter_smooth");
     @export_symbol(ptr_counter_apply_op, "counter_apply_op");
@@ -854,6 +873,8 @@ comptime {
     @export_symbol(f_enable_timer);
     @export_symbol(f_sync);
     @export_symbol(f_reference_timestamps);
+    @export_symbol(f_tic_total);
+    @export_symbol(f_toc_total);
     @export_symbol(f_gmg_vcycle);
     @export_symbol(ptr_rho, "rho");
 }

@@ -301,13 +301,14 @@ def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
 
     return u_wse_1d, r_wse_1d
 
-def copy_timing_data(height, width, levels, simulator, symbol_timing_smooth, symbol_timing_apply_op, symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, args):
+def copy_timing_data(height, width, levels, simulator, symbol_timing_smooth, symbol_timing_apply_op, symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, symbol_time_total_start_end, args):
     timing_smooth_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_smooth)
     timing_residual_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_residual)
     timing_apply_op_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_apply_op)
     timing_restrict_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_restrict)
     timing_interp_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_interp)
-    return timing_smooth_hwl, timing_residual_hwl, timing_apply_op_hwl, timing_restrict_hwl, timing_interp_hwl
+    time_total_start_end_hwl = copy_timing(height, width, 1, simulator, symbol_time_total_start_end)    # Not level based
+    return timing_smooth_hwl, timing_residual_hwl, timing_apply_op_hwl, timing_restrict_hwl, timing_interp_hwl, time_total_start_end_hwl
 
 def copy_counters(height, width, levels, simulator, symbol_counter):
     """Copy operation counter data from device"""
@@ -403,6 +404,7 @@ def main():
     symbol_timing_restrict = simulator.get_id("timing_restrict")
     symbol_timing_interp = simulator.get_id("timing_interp")
     symbol_time_ref = simulator.get_id("time_ref")
+    symbol_time_total_start_end = simulator.get_id("time_total_start_end")
     # counters
     symbol_counter_smooth = simulator.get_id("counter_smooth")
     symbol_counter_apply_op = simulator.get_id("counter_apply_op")
@@ -446,6 +448,9 @@ def main():
     print("Copying reference clock...")
     simulator.launch("f_reference_timestamps", nonblock=False)
 
+    print("Starting tic_total()")
+    simulator.launch("f_tic_total", nonblock=True)
+
     # Run GMG V-cycle with convergence checking on device
     print("Running GMG V-cycle...")
     print(f"  max_iter={args.max_ite}, tolerance={device_solver.tolerance:.6e}")
@@ -459,6 +464,8 @@ def main():
                     np.float32(device_solver.tolerance),  # tolerance parameter
                     nonblock=False)
 
+    print("Stopping tic_total()")
+    simulator.launch("f_toc_total", nonblock=False)
 ############################################################
 # Copy results and timing data back
 ############################################################
@@ -473,7 +480,7 @@ def main():
 
     # Copy timing data from device
     print("\nCopying timing data...")
-    timing_smooth_hwl_levels, timing_residual_hwl_levels, timing_apply_op_hwl_levels, timing_restrict_hwl_levels, timing_interp_hwl_levels = copy_timing_data(height, width, args.levels, simulator, symbol_timing_smooth, symbol_timing_apply_op, symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, args)
+    timing_smooth_hwl_levels, timing_residual_hwl_levels, timing_apply_op_hwl_levels, timing_restrict_hwl_levels, timing_interp_hwl_levels, time_total_start_end_hwl = copy_timing_data(height, width, args.levels, simulator, symbol_timing_smooth, symbol_timing_apply_op, symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, symbol_time_total_start_end, args)
     
     # Copy reference clock
     print("Copying reference clock...")
@@ -484,7 +491,7 @@ def main():
     # Copy operation counters from device
     print("Copying operation counters...")
     counter_smooth, counter_residual, counter_apply_op, counter_restrict, counter_interp = copy_counter_data(height, width, args.levels, simulator, symbol_counter_smooth, symbol_counter_residual, symbol_counter_apply_op, symbol_counter_restrict, symbol_counter_interp, args)
-
+    counter_total = np.array([1]) # Because we have only 1 level
     # Copy rho (convergence metric) from device
     print("Copying final rho from device...")
     rho_wse = np.zeros(1, np.float32)
@@ -553,7 +560,8 @@ def main():
     # timing_apply_data = process_timing_data(height, width, args.levels, timing_apply_op_hwl_levels, time_ref_hwl, "apply_op", counter_apply_op)
     timing_restrict_data = process_timing_data(height, width, args.levels, timing_restrict_hwl_levels, time_ref_hwl, "restriction", counter_restrict)
     timing_interp_data = process_timing_data(height, width, args.levels, timing_interp_hwl_levels, time_ref_hwl, "interpolation", counter_interp)
-    
+    timing_total_start_end_data = process_timing_data(height, width, 1, time_total_start_end_hwl, time_ref_hwl, "total", counter_total)
+
 
     print("\nTime per operation and level (cycles, time, operation count):")
     print("-" * 100)
@@ -614,7 +622,8 @@ def main():
     # print(f"  Total apply_op:      {total_apply_cycles:10.0f} cycles ({total_apply_us:10.3f} us) - {total_apply_ops} applyOps")
     print(f"  Total restriction:   {total_restrict_cycles:10.0f} cycles ({total_restrict_us:10.3f} us) - {total_restrict_ops} restrictions")
     print(f"  Total interpolation: {total_interp_cycles:10.0f} cycles ({total_interp_us:10.3f} us) - {total_interp_ops} interpolations")
-    print(f"  Total V-cycle time:  {total_time_cycles:10.0f} cycles ({total_time_us:10.3f} us) - {total_ops} totalOps")
+    print(f"  Total V-cycle time(sum of above):  {total_time_cycles:10.0f} cycles ({total_time_us:10.3f} us) - {total_ops} totalOps")
+    print(f"  Total V-cycle time(kernel launch + V cycle time):  {timing_total_start_end_data[0]['cycles_send']:10.0f} cycles ({timing_total_start_end_data[0]['time_send']:10.3f} us)")
     print("=" * 100)
     
     if args.cmaddr is None:
