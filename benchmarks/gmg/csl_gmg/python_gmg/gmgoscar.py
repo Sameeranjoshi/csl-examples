@@ -503,8 +503,8 @@ class SimpleGMG:
         iterations = 0
         residual = 0.0
         
-        # while residual > self.tolerance and iterations < max_iter:
-        while iterations < max_iter:
+        while residual > self.tolerance and iterations < max_iter:
+        # while iterations < max_iter:
             # Perform V-cycle
             cycle_start = time.time()
             self.v_cycle()
@@ -519,7 +519,6 @@ class SimpleGMG:
         
         total_time = time.time() - start_time
         
-        print("-" * 50)
         print(f"After {iterations} iterations")
         print(f"Final residual: {residual:.6e}")
         print(f"Tolerance: {self.tolerance:.6e}")
@@ -547,10 +546,10 @@ class SimpleGMG:
         
         start_time = time.time()
         iterations = 0
-        residual = 100.0
+        residual = 1000.0
         
-        # while residual > self.tolerance and iterations < max_iter:
-        while iterations < max_iter:
+        while residual > self.tolerance and iterations < max_iter:
+        # while iterations < max_iter:
             # Perform V-cycle
             cycle_start = time.time()
             self.only_down_cycle()
@@ -558,10 +557,10 @@ class SimpleGMG:
             # print u after solve_coarse layer by layer over z
             u = self.grids[self.num_levels - 1]['u']
             nz = u.shape[2]
-            print(f"u at coarsest level after solve_coarse (layer by layer over z):")
-            for z in range(nz):
-                print(f"  z={z}:")
-                print(u[:, :, z])
+            # print(f"u at coarsest level after solve_coarse (layer by layer over z):")
+            # for z in range(nz):
+            #     print(f"  z={z}:")
+            #     print(u[:, :, z])
             # temporary fix.
             self.grids[self.num_levels - 1]['rho_up'] = self.grids[self.num_levels - 1]['rho']
             self.only_up_cycle(self.num_levels - 2)

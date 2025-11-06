@@ -103,6 +103,16 @@ var num_levels: i16 = 0;
 var pre_smooth_iter: i16 = 0;
 var post_smooth_iter: i16 = 0;
 var bottom_solver_iter: i16 = 0;
+var max_iter: i16 = 0;  // Maximum number of V-cycle iterations
+var tolerance: f32 = @as(f32, 0.0);  // Convergence tolerance
+// var rho: f32 = @as(f32, 0.0);  // L2 norm squared of residual (like PCG's xi)
+fn fill_rho() [1]f32 {
+    var rho = @zeros([1]f32);
+    rho[0] = @as(f32, 1000.0);
+    return rho;
+}
+var rho = fill_rho();
+var k: i16 = 0;  // Current iteration counter
 
 // Modified stencil/allreduce parameters
 var factor: u16 = 1;
@@ -149,6 +159,10 @@ const STATE_UP_SMOOTH_CHECK: i16 = 20;
 const STATE_UP_LEVEL_CHECK: i16 = 21;
 const STATE_EXIT: i16 = 22;
 const STATE_SYNC: i16 = 23;
+const STATE_CONV_CHECK: i16 = 24;  // Convergence check after V-cycle
+const STATE_CALC_RHO: i16 = 25;  // Calculate rho = |r|^2
+const STATE_RESIDUAL_AFTER_V_CYCLE_APPLY: i16 = 26;  // Apply operator after V-cycle to compute Au
+const STATE_RESIDUAL_AFTER_V_CYCLE_COMPUTE: i16 = 27;  // Compute residual after V-cycle
 
 // DSDs
 var mem_u_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> u[i] });
@@ -182,6 +196,7 @@ var ptr_counter_apply_op: [*]u16 = &counter_apply_op;
 var ptr_counter_residual: [*]u16 = &counter_residual;
 var ptr_counter_restrict: [*]u16 = &counter_restrict;
 var ptr_counter_interp: [*]u16 = &counter_interp;
+var ptr_rho: [*]f32 = &rho;
 
 // Helper functions
 fn isActivePE(px: i16, py: i16, factor_val: u16) bool {
@@ -308,6 +323,16 @@ fn f_residual() void {
     } else {
         @fmovs(mem_r_dsd, 0.0);
     }
+}
+
+
+// Calculate rho = |r|^2 at level 0 (for convergence checking)
+fn f_compute_rho() void {
+        // Compute <r, r> locally using BLAS dot product
+        // Use r directly (not residual_temp) since we compute residual at level 0 after V-cycle
+        rho[0] = blas_lib.dot(n, &r, &r);
+        // Reduce(|r|^2) across all PEs
+        reduce_mod.allreduce(1, &rho, reduce_mod.TYPE_BINARY_OP.ADD);
 }
 
 fn f_reduce_row_col_top_left() void {
@@ -453,12 +478,12 @@ fn f_setup_level(level_id: u16, down: i16) void {
         temp_factor *= 2;  // Double the factor: 1, 2, 4, 8, ...
     }
     
-    // print start_idx
-    const pe_id_x: u16 = layout_mod.get_x_coord();
-    const pe_id_y: u16 = layout_mod.get_y_coord();
-    if (pe_id_x == 0 and pe_id_y == 0) {
-        simprint.fmt_with_coords("DEBUG: LEVEL_ID = {d}, n = {d}, TOTAL_GMG_SIZE = {d}, start_idx = {d}", .{@as(u16, level_id), @as(u16, n), @as(u16, TOTAL_GMG_SIZE), @as(u16, start_idx)});
-    }
+    // // print start_idx
+    // const pe_id_x: u16 = layout_mod.get_x_coord();
+    // const pe_id_y: u16 = layout_mod.get_y_coord();
+    // if (pe_id_x == 0 and pe_id_y == 0) {
+    //     simprint.fmt_with_coords("DEBUG: LEVEL_ID = {d}, n = {d}, TOTAL_GMG_SIZE = {d}, start_idx = {d}", .{@as(u16, level_id), @as(u16, n), @as(u16, TOTAL_GMG_SIZE), @as(u16, start_idx)});
+    // }
     
     mem_save_u_smooth_dsd = @set_dsd_base_addr(mem_save_u_smooth_dsd, &save_u_smooth);
     mem_save_u_smooth_dsd = @increment_dsd_offset(mem_save_u_smooth_dsd, start_idx, f32);
@@ -486,7 +511,11 @@ fn f_setup_level(level_id: u16, down: i16) void {
     f_init_spmv_and_reduce(current_level_id);
     
     if (down == 1) {
-        @fmovs(mem_u_dsd, 0.0);
+        // Only reset u to 0 if we're not at level 0, or if we're at level 0 and it's the first iteration (k == 0)
+        // At level 0, for subsequent iterations, we want to preserve the solution from the previous iteration
+        if (level_id != 0) {
+            @fmovs(mem_u_dsd, 0.0);
+        }
         @fmovs(mem_save_f_down_dsd, mem_f_dsd);  // Save current f (RHS for this level)
     } else {
         // Up cycle: restore the f values saved during down cycle
@@ -502,13 +531,6 @@ fn f_enable_timer() void {
     sys_mod.unblock_cmd_stream();
 }
 
-// Synchronize all PEs using allreduce (also captures reference clock)
-fn f_sync() void {
-    cur_state = STATE_SYNC;
-    @activate(STATE);
-}
-
-
 // Copy reference clock from allreduce module
 fn f_reference_timestamps() void {
     time_ref_u16[0] = reduce_mod.tscRefBuffer[0];
@@ -517,19 +539,28 @@ fn f_reference_timestamps() void {
     sys_mod.unblock_cmd_stream();
 }
 
+// Synchronize all PEs using allreduce (also captures reference clock)
+fn f_sync() void {
+    cur_state = STATE_SYNC;
+    @activate(STATE);
+}
+
 // Main V-cycle entry point
 fn f_gmg_vcycle(
-    // size: i16,
     levels: i16, 
     pre_iter: i16,
     post_iter: i16,
-    bottom_iter: i16
+    bottom_iter: i16,
+    max_iter_val: i16,
+    tol: f32
 ) void {
-    // n = size;
     num_levels = levels;
     pre_smooth_iter = pre_iter;
     post_smooth_iter = post_iter;
     bottom_solver_iter = bottom_iter;
+    max_iter = max_iter_val;
+    tolerance = tol;
+    k = 0;  // Reset iteration counter
     
     current_level = 0;
     cur_state = STATE_INIT;
@@ -553,7 +584,6 @@ task f_state() void {
         current_level = 0;
         next_state = STATE_DOWN_INIT;
         f_trigger_state_machine();
-
     } 
 //########################################################################################
 // DOWN CYCLE
@@ -573,6 +603,7 @@ task f_state() void {
         }
         next_state = STATE_DOWN_SMOOTH_UPDATE;
         f_apply_operator();
+
     } else if (STATE_DOWN_SMOOTH_UPDATE == cur_state) {
         f_jacobi_smooth();
         current_smooth_iter = current_smooth_iter + 1;
@@ -662,7 +693,7 @@ task f_state() void {
             // Start up cycle
             current_level = current_level - 1;
             next_state = STATE_UP_INIT;
-            print_time_debug();
+            // print_time_debug();
         }
         f_trigger_state_machine();
         
@@ -726,6 +757,50 @@ task f_state() void {
         if (current_level >= 0) {
             next_state = STATE_UP_INIT;
         } else {
+            // V-cycle complete, need to compute residual at level 0 for convergence checking
+            // Set current_level back to 0 and compute residual
+            current_level = 0;
+            next_state = STATE_RESIDUAL_AFTER_V_CYCLE_APPLY;
+        }
+        f_trigger_state_machine();
+        
+    } else if (STATE_RESIDUAL_AFTER_V_CYCLE_APPLY == cur_state) {
+        // After V-cycle: restore level 0 context and apply operator to compute Au
+        // CRITICAL: Must restore level 0 context to ensure:
+        // 1. f is restored to original RHS from save_f_down
+        // 2. DSD lengths (n) are correct for level 0
+        // 3. Stencil coefficients are correct for level 0
+        f_setup_level(@as(u16, current_level), 0); // down=False, restores f from save_f_down
+        next_state = STATE_RESIDUAL_AFTER_V_CYCLE_COMPUTE;
+        f_apply_operator();
+        
+    } else if (STATE_RESIDUAL_AFTER_V_CYCLE_COMPUTE == cur_state) {
+        // Compute residual r = f - Au at level 0
+        // At this point, f should be the original RHS (restored by f_setup_level)
+        f_residual();
+        next_state = STATE_CALC_RHO;
+        f_trigger_state_machine();
+        
+    } else if (STATE_CALC_RHO == cur_state) {
+        // Compute rho = |r|^2 at level 0
+        next_state = STATE_CONV_CHECK;
+        f_compute_rho();    // internally has the library which triggers the state machine.
+
+    } else if (STATE_CONV_CHECK == cur_state) {
+        // Compute rho = |r|^2
+        // if |r|^2 < tol, then exit
+        // if (rho > tolerance) and (k < max_iter), continue
+        const pe_id_x: u16 = layout_mod.get_x_coord();
+        const pe_id_y: u16 = layout_mod.get_y_coord();
+        if (pe_id_x == 0 and pe_id_y == 0) {
+            simprint.fmt_with_coords("DEBUG: Converged or max iterations reached: exit k = {d}, max_iter = {d}, rho = {f}, tolerance = {f}", .{@as(u16, k), @as(u16, max_iter), rho[0], tolerance});
+        }
+        k = k + 1;
+        if ((rho[0] > tolerance) and (k < max_iter)) {
+            // Not converged and iterations remaining: increment counter and start next V-cycle
+            next_state = STATE_INIT;
+        } else {
+            // Converged or max iterations reached: exit
             next_state = STATE_EXIT;
         }
         f_trigger_state_machine();
@@ -735,7 +810,7 @@ task f_state() void {
 // EXIT
 //########################################################################################    
     else if (STATE_EXIT == cur_state) {
-        print_time_debug();
+        // print_time_debug();
         sys_mod.unblock_cmd_stream();
         
     } else {
@@ -780,5 +855,6 @@ comptime {
     @export_symbol(f_sync);
     @export_symbol(f_reference_timestamps);
     @export_symbol(f_gmg_vcycle);
+    @export_symbol(ptr_rho, "rho");
 }
 

@@ -14,30 +14,21 @@
 //   8   C8      17  EN_REDUCE_1   26                      35
 
 // Parameters
-param C0_ID: i16;
-param C1_ID: i16;
-param C2_ID: i16;
-param C3_ID: i16;
-param C4_ID: i16;
-param C5_ID: i16;
-param C6_ID: i16;
-param C7_ID: i16;
-param C8_ID: i16;
 param MAX_ZDIM: i16;
 param width: i16;
 param height: i16;
 param BLOCK_SIZE: i16;
 param LEVELS: i16;
 
-const C0: color = @get_color(C0_ID);
-const C1: color = @get_color(C1_ID);
-const C2: color = @get_color(C2_ID);
-const C3: color = @get_color(C3_ID);
-const C4: color = @get_color(C4_ID);
-const C5: color = @get_color(C5_ID);
-const C6: color = @get_color(C6_ID);
-const C7: color = @get_color(C7_ID);
-const C8: color = @get_color(C8_ID);
+const C0: color = @get_color(0);
+const C1: color = @get_color(1);
+const C2: color = @get_color(2);
+const C3: color = @get_color(3);
+const C4: color = @get_color(4);
+const C5: color = @get_color(5);
+const C6: color = @get_color(6);
+const C7: color = @get_color(7);
+const C8: color = @get_color(8);
 
 // State machine entrypoint
 const STATE: local_task_id = @get_local_task_id(12);
@@ -73,14 +64,6 @@ const memcpy = @import_module( "<memcpy/get_params>", .{
     });
 
 layout{
-    @comptime_assert(C0_ID < C1_ID);
-    @comptime_assert(C1_ID < C2_ID);
-    @comptime_assert(C2_ID < C3_ID);
-    @comptime_assert(C3_ID < C4_ID);
-    @comptime_assert(C4_ID < C5_ID);
-    @comptime_assert(C5_ID < C6_ID);
-    @comptime_assert(C6_ID < C7_ID);
-    @comptime_assert(C7_ID < C8_ID);
 
     @set_rectangle( width, height );
 
@@ -129,6 +112,7 @@ layout{
     @export_name("f_enable_timer", fn()void);
     @export_name("f_sync", fn()void);
     @export_name("f_reference_timestamps", fn()void);
-    @export_name("f_gmg_vcycle", fn(i16,i16,i16,i16)void);
+    @export_name("f_gmg_vcycle", fn(i16,i16,i16,i16,i16,f32)void);
+    @export_name("rho", [*]f32, true);
 }
 

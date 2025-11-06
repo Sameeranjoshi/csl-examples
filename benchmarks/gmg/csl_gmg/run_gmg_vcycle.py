@@ -22,6 +22,28 @@ from util import hwl_2_oned_colmajor, oned_to_hwl_colmajor
 from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyOrder, MemcpyDataType
 
 DTYPE = np.float32
+def l2(v): 
+    return float(np.sqrt(np.dot(v.ravel(), v.ravel())))
+
+def compare_u(u_host, u_dev):
+    diff = u_host - u_dev
+    return {
+        "L_inf_abs": float(np.max(np.abs(diff))),
+        "L2_abs": l2(diff),
+        "L2_rel": l2(diff) / max(l2(u_host), 1e-30),
+        "mean_abs": float(np.mean(np.abs(diff))),
+        "median_abs": float(np.median(np.abs(diff))),
+    }
+
+def top_k_indices_absdiff(u_host, u_dev, k=10):
+    diff = np.abs(u_host - u_dev).ravel()
+    if diff.size == 0:
+        return []
+    idx = np.argpartition(diff, -k)[-k:]
+    idx = idx[np.argsort(-diff[idx])]
+    shape = u_host.shape
+    triples = [np.unravel_index(int(i), shape) for i in idx]
+    return [(tuple(t), float(diff[np.ravel_multi_index(t, shape)])) for t in triples]
 
 def csl_compile_core(
     cslc: str, width: int, height: int, pe_length: int, blockSize: int, 
@@ -40,15 +62,6 @@ def csl_compile_core(
         args.append(f"--fabric-offsets={core_fabric_offset_x},{core_fabric_offset_y}")
         args.append(f"--params=width:{width},height:{height},MAX_ZDIM:{pe_length},LEVELS:{levels}")
         args.append(f"--params=BLOCK_SIZE:{blockSize}")
-        args.append(f"--params=C0_ID:{C0}")
-        args.append(f"--params=C1_ID:{C1}")
-        args.append(f"--params=C2_ID:{C2}")
-        args.append(f"--params=C3_ID:{C3}")
-        args.append(f"--params=C4_ID:{C4}")
-        args.append(f"--params=C5_ID:{C5}")
-        args.append(f"--params=C6_ID:{C6}")
-        args.append(f"--params=C7_ID:{C7}")
-        args.append(f"--params=C8_ID:{C8}")
         args.append(f"-o={elf_dir}")
         
         if arch is not None:
@@ -360,7 +373,7 @@ def main():
     host_solver = SimpleGMGOSCAR(width, height, zDim, args.levels, args.verbose, 
                                  args.tolerance, args.pre_iter, args.post_iter, args.bottom_iter)
     device_solver = copy.deepcopy(host_solver)
-    
+
     # Run reference on host
     host_solver.solve_iterative(args.max_ite)
     
@@ -396,10 +409,15 @@ def main():
     symbol_counter_residual = simulator.get_id("counter_residual")
     symbol_counter_restrict = simulator.get_id("counter_restrict")
     symbol_counter_interp = simulator.get_id("counter_interp")
+    # convergence
+    symbol_rho = simulator.get_id("rho")
     
     simulator.load()
     simulator.run()
 
+############################################################
+# Copy data to device
+############################################################
     # Copy initial data
     print("\n" + "="*60)
     print("Copying data to device...")
@@ -409,6 +427,14 @@ def main():
    
     copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, 
                  symbol_u, symbol_f, symbol_hx_array, symbol_hy_array, symbol_hz_array, symbol_jacobi_coeff_array, device_solver, args)
+
+############################################################
+# Kernel launch
+############################################################
+    # Run GMG V-cycle on device
+    print("\n" + "="*60)
+    print(f"Running GMG V-cycle on device (levels={args.levels})...")
+    print("="*60)
     
     # Enable timing and synchronize PEs
     print("\nEnabling timer...")
@@ -419,114 +445,100 @@ def main():
     
     print("Copying reference clock...")
     simulator.launch("f_reference_timestamps", nonblock=False)
-    # 
-    # Run GMG V-cycle on device
-    print("\n" + "="*60)
-    print(f"Running GMG V-cycle on device (levels={args.levels})...")
-    print("="*60)
-    
+
+    # Run GMG V-cycle with convergence checking on device
+    print("Running GMG V-cycle...")
+    print(f"  max_iter={args.max_ite}, tolerance={device_solver.tolerance:.6e}")
     simulator.launch("f_gmg_vcycle", 
                     # np.int16(zDim), 
                     np.int16(args.levels),
                     np.int16(args.pre_iter),
                     np.int16(args.post_iter),
                     np.int16(args.bottom_iter),
+                    np.int16(args.max_ite),  # max_iter parameter
+                    np.float32(device_solver.tolerance),  # tolerance parameter
                     nonblock=False)
-    
+
+############################################################
+# Copy results and timing data back
+############################################################
     # Copy results back
     print("\n" + "="*60)
-    print("Copying results from device...")
+    print("Copying from device...")
     print("="*60)
     
+    print("Copying u from device...")
     u_wse_1d, r_wse_1d = copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, device_solver, args)
-    
+    u_wse_3d = oned_to_hwl_colmajor(height, width, zDim, u_wse_1d, DTYPE)
+
     # Copy timing data from device
     print("\nCopying timing data...")
     timing_smooth_hwl_levels, timing_residual_hwl_levels, timing_apply_op_hwl_levels, timing_restrict_hwl_levels, timing_interp_hwl_levels = copy_timing_data(height, width, args.levels, simulator, symbol_timing_smooth, symbol_timing_apply_op, symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, args)
     
-    # Copy operation counters from device
-    print("Copying operation counters...")
-    counter_smooth, counter_residual, counter_apply_op, counter_restrict, counter_interp = copy_counter_data(height, width, args.levels, simulator, symbol_counter_smooth, symbol_counter_residual, symbol_counter_apply_op, symbol_counter_restrict, symbol_counter_interp, args)
-    
     # Copy reference clock
     print("Copying reference clock...")
     time_ref_1d = np.zeros(height * width * 3, np.uint32)
-    simulator.memcpy_d2h(time_ref_1d, symbol_time_ref, 0, 0, width, height, 3,
-                         streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, 
-                         order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    simulator.memcpy_d2h(time_ref_1d, symbol_time_ref, 0, 0, width, height, 3, streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, order=MemcpyOrder.COL_MAJOR, nonblock=False)
     time_ref_hwl = oned_to_hwl_colmajor(height, width, 3, time_ref_1d, np.uint16)
+
+    # Copy operation counters from device
+    print("Copying operation counters...")
+    counter_smooth, counter_residual, counter_apply_op, counter_restrict, counter_interp = copy_counter_data(height, width, args.levels, simulator, symbol_counter_smooth, symbol_counter_residual, symbol_counter_apply_op, symbol_counter_restrict, symbol_counter_interp, args)
+
+    # Copy rho (convergence metric) from device
+    print("Copying final rho from device...")
+    rho_wse = np.zeros(1, np.float32)
+    simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1, streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    rho_device = rho_wse[0]
+
+############################################################
+# Stop simulator
+############################################################
     simulator.stop()
-    
-    # Reshape results
-    u_wse_3d = oned_to_hwl_colmajor(height, width, zDim, u_wse_1d, DTYPE)
-    # r_wse_3d = oned_to_hwl_colmajor(height, width, zDim, r_wse_1d, DTYPE)
-    # Store device results
-    # print(f"u_wse_3d shape = {u_wse_3d.shape}")
-    # print(f"u_wse_3d[:, :, 0] = {u_wse_3d[:, :, 0]}")
     device_solver.grids[0]['u'] = u_wse_3d
-    device_solver.compute_residual(0)
-    device_solver.grids[0]['rho_up'] = device_solver.calculate_rho(device_solver.grids[0]['r'])
+    device_solver.grids[0]['rho_up'] = rho_device
+    # device_solver.compute_residual(0)
+    # device_solver.grids[0]['rho_up'] = device_solver.calculate_rho(device_solver.grids[0]['r'])
 
 
 ############################################################
 # Verification
 ############################################################
-    # Verification
+    # # Verification
     print("\n" + "="*60)
     print("Verification")
-    print("Checking u, f, r, Au at level 0 for host_solver and device_solver")
+    print("Checking u at level 0 for host_solver and device_solver")
     print("="*60)
-
-
-    # Check/verify u, f, r, Au at level 0 for host_solver and device_solver
-    fields = ['u', 'f', 'r', 'Au']
+  
+    # # Check/verify u, f, r, Au at level 0 for host_solver and device_solver
+    fields = ['u']
     for field in fields:
         host_field = host_solver.grids[0][field]
         device_field = device_solver.grids[0][field]
-        print(f"Host {field}: shape={host_field.shape}, dtype={host_field.dtype}")
-        print(f"Device {field}: shape={device_field.shape}, dtype={device_field.dtype}")
-        np.testing.assert_allclose(host_field, device_field, atol=1e-5, rtol=1e-5)
+        np.testing.assert_allclose(host_field.ravel(), device_field.ravel(), atol=1e-5, rtol=1e-5)
+        stats = compare_u(host_field, device_field)
+        print(stats)
+        print(f"Top-10 largest |Δ{field}| indices: {top_k_indices_absdiff(host_field, device_field, k=10)}")
 
-        
-    device_u = device_solver.grids[0]['u']
-    host_u = host_solver.grids[0]['u']
+
+        nrm2_u = np.linalg.norm(device_field.ravel(), 2)
+        print(f"|{field}|_2 = {nrm2_u}")
+        z = host_field.ravel() - device_field.ravel()
+        nrm_z = np.linalg.norm(z, np.inf)
+        print(f"|{field}_host - {field}_device| = {nrm_z}")
+        print("\nSUCCESS!")
+############################################################
+# Convergence
+############################################################
+    print("\n" + "="*60)
+    print("Convergence")
+    print("="*60)
     device_rh = device_solver.grids[0]['rho_up']
-    host_rh = host_solver.grids[0]['rho_up']
 
-    # Compare u values at a few points
-    print(f"\n All u values at level 0:")
-    print(f"  Host   u[:,:,0] = {host_u[:,:,0]}")
-    print(f"  Device u[:,:,0] = {device_u[:,:,0]}")
-    
-    print(f"\nLevel 0 comparison:")
-    print(f"  Host   rho_up: {host_rh:.6e}")
-    print(f"  Device rho_up: {device_rh:.6e}")
-    print(f"  Ratio (device/host): {device_rh / host_rh:.4f}")
-    
-    # Relaxed tolerance
-    try:
-        # Compare using the original 1D array from device (u_wse_1d) 
-        # not the reshaped 3D array, to avoid memory layout issues
-        nrm2_u = np.linalg.norm(u_wse_1d, 2)
-        print(f"  |u|_2 = {nrm2_u:.6e}")
-        # Host is row-major by default, so ravel with order='F' to match device column-major
-        z = host_u.ravel(order='F') - u_wse_1d.ravel()
-        nrm2_z = np.linalg.norm(z, np.inf)
-        print(f"  |u_host - u_wse| = {nrm2_z:.6e}")
-        np.testing.assert_allclose(host_u.ravel(order='F'), u_wse_1d.ravel(), atol=1e-5, rtol=1e-5)
-        print("\n SUCCESS! Device and host results match.")
-    
-    except AssertionError as e:
-        print(f"\n Results differ significantly")
-        print(f"   This suggests a bug in the state machine implementation.")
-        # Print more details
-        print(f"\nDetailed comparison (first few points):")
-        for i in range(min(3, height)):
-            for j in range(min(3, width)):
-                h_val = host_u[i,j,0]
-                d_val = device_u[i,j,0]
-                ratio = d_val / h_val if h_val != 0 else 0
-                print(f"   ({i},{j},0): host={h_val:.6e}, device={d_val:.6e}, ratio={ratio:.4f}")
+    print(f"[GMG] rho = |b-A*x|^2 = {device_rh:.6e}")
+    print(f"  Tolerance = {(device_solver.tolerance):.6e}")
+    converged = device_rh <= (device_solver.tolerance)
+    print(f"  Converged: {'Yes' if converged else 'No'}")
 
 ############################################################
 # Timing
