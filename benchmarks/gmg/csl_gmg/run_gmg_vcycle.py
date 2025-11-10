@@ -454,7 +454,7 @@ def profiling(
     timing_smooth_hwl_levels, timing_residual_hwl_levels,
     timing_restrict_hwl_levels, timing_interp_hwl_levels,
     timing_setup_init_hwl_levels, timing_rho_check_hwl_levels,
-    time_total_start_end_hwl, time_h2d_hwl, time_ref_hwl,
+    time_total_start_end_hwl, time_h2d_hwl, time_d2h_hwl, time_ref_hwl,
     counter_smooth, counter_residual, counter_restrict, counter_interp, counter_setup_init, counter_rho_check,
     WORDS_PER_TIMESTAMP, WORDS_PER_START_END
     ):
@@ -473,6 +473,7 @@ def profiling(
     counter_total = np.array([1]) # Because we have only 1 level
     timing_total_start_end_data = process_timing_data(height, width, 1, time_total_start_end_hwl, time_ref_hwl, "total", counter_total, False, WORDS_PER_TIMESTAMP)
     timing_h2d_data = process_timing_data(height, width, 1, time_h2d_hwl, time_ref_hwl, "h2d", counter_total, False, WORDS_PER_TIMESTAMP)
+    timing_d2h_data = process_timing_data(height, width, 1, time_d2h_hwl, time_ref_hwl, "d2h", counter_total, False, WORDS_PER_TIMESTAMP)
     print("\nTime per operation and level (us[cycles]):")
     operators = [
         ("smooth", timing_smooth_data, counter_smooth),
@@ -561,6 +562,7 @@ def profiling(
 
     print("=" * 100)
     print(f"Total H2D time: {timing_h2d_data[0]['time_send']:10.3f} us ({timing_h2d_data[0]['cycles_send']:10.0f} cycles)")
+    print(f"Total D2H time: {timing_d2h_data[0]['time_send']:10.3f} us ({timing_d2h_data[0]['cycles_send']:10.0f} cycles)")
     print(f"Total V-cycle time (sum of operations): {total_time_us:10.3f} us ({total_time_cycles:10.0f} cycles)")
     print(f"Total V-cycle time (kernel launch + V cycle time): {timing_total_start_end_data[0]['time_send']:10.3f} us ({timing_total_start_end_data[0]['cycles_send']:10.0f} cycles)")
     print("=" * 100)
@@ -638,6 +640,7 @@ def main():
     symbol_time_ref = simulator.get_id("time_ref")
     symbol_time_total_start_end = simulator.get_id("time_total_start_end")
     symbol_time_h2d = simulator.get_id("time_h2d")
+    symbol_time_d2h = simulator.get_id("time_d2h")
     # counters
     symbol_counter_smooth = simulator.get_id("counter_smooth")
     symbol_counter_apply_op = simulator.get_id("counter_apply_op")
@@ -652,13 +655,13 @@ def main():
     simulator.load()
     simulator.run()
 
+############################################################
+# Copy data to device
+############################################################
     # Enable timing and synchronize PEs
     print("1. Enabling timer...")
     simulator.launch("f_enable_timer", nonblock=False)
     
-############################################################
-# Copy data to device
-############################################################
     # Copy initial data
     print("2. Copying initial data to device...")
     device_solver.compute_residual(0)
@@ -695,6 +698,7 @@ def main():
     print("6. Copying results from device...")
     
     print("  6.1. Copying u from device...")
+    simulator.launch("f_tic_d2h", nonblock=True)
     u_wse_1d, r_wse_1d, total_bytes_d2h = copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, device_solver, args)
     u_wse_3d = oned_to_hwl_colmajor(height, width, zDim, u_wse_1d, DTYPE)
 
@@ -718,6 +722,8 @@ def main():
     simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1, streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
     rho_device = rho_wse[0]
 
+    simulator.launch("f_toc_d2h", nonblock=False)
+    time_d2h_hwl = copy_timing(height, width, 1, simulator, symbol_time_d2h, WORDS_PER_TIMESTAMP)    # Not level based
 ############################################################
 # Stop simulator
 ############################################################
@@ -773,7 +779,7 @@ def main():
         timing_smooth_hwl_levels, timing_residual_hwl_levels,
         timing_restrict_hwl_levels, timing_interp_hwl_levels,
         timing_setup_init_hwl_levels, timing_rho_check_hwl_levels,
-        time_total_start_end_hwl, time_h2d_hwl, time_ref_hwl,
+        time_total_start_end_hwl, time_h2d_hwl, time_d2h_hwl, time_ref_hwl,
         counter_smooth, counter_residual, counter_restrict, counter_interp, counter_setup_init, counter_rho_check,
         WORDS_PER_TIMESTAMP, WORDS_PER_START_END)
     print_bandwidth_summary(bandwidth_stats)
