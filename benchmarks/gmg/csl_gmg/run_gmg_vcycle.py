@@ -7,6 +7,7 @@ Runs complete V-cycle on device
 import math
 import os
 import sys
+import time
 from typing import Optional
 from pathlib import Path
 import shutil
@@ -167,6 +168,16 @@ def copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
     simulator.memcpy_h2d(symbol_jacobi_coeff_array, jacobi_flat, 0, 0, width, height, args.levels,
                          streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
 
+    total_bytes = (
+        u_1d.nbytes
+        + f_1d.nbytes
+        + hx_flat.nbytes
+        + hy_flat.nbytes
+        + hz_flat.nbytes
+        + jacobi_flat.nbytes
+    )
+
+    return total_bytes
 WORDS_PER_TIMESTAMP = 3
 WORDS_PER_START_END = WORDS_PER_TIMESTAMP * 2
 
@@ -314,7 +325,9 @@ def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
     simulator.memcpy_d2h(r_wse_1d, symbol_r, 0, 0, width, height, zDim,
                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
 
-    return u_wse_1d, r_wse_1d
+    total_bytes = u_wse_1d.nbytes + r_wse_1d.nbytes
+
+    return u_wse_1d, r_wse_1d, total_bytes
 
 def copy_timing_data(height, width, levels, simulator, symbol_timing_smooth, symbol_timing_apply_op, symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, symbol_timing_setup_init, symbol_timing_rho_check, symbol_time_total_start_end, symbol_time_ref, args):
     timing_smooth_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_smooth, WORDS_PER_TIMESTAMP)
@@ -392,6 +405,44 @@ def print_configuration_summary(
     key_width = 32
     for label, value in config_items:
         print(f"{label:<{key_width}}: {value}")
+
+def print_bandwidth_summary(bandwidth_stats):
+    if not bandwidth_stats:
+        return
+
+    print("\n" + "=" * 60)
+    print("Bandwidth Summary")
+    print("=" * 60)
+
+    headers = ["transfer", "size (MiB)", "time (us)", "bandwidth (MiB/s)", "bandwidth (Gb/s)"]
+    col_widths = [18, 16, 14, 20, 20]
+
+    def divider(char="-"):
+        return "+" + "+".join(char * w for w in col_widths) + "+"
+
+    print(divider("="))
+    print("|" + "|".join(f"{title:^{w}}" for title, w in zip(headers, col_widths)) + "|")
+    print(divider("-"))
+
+    for label, stats in bandwidth_stats.items():
+        bytes_transferred = stats.get("bytes", 0)
+        seconds = stats.get("seconds", 0.0)
+        size_mib = bytes_transferred / (1024 ** 2)
+        time_us = seconds * 1e6
+        bandwidth_mib_s = (size_mib / seconds) if seconds > 0 else float("inf")
+        bandwidth_gbps = (bytes_transferred * 8 / seconds) / 1e9 if seconds > 0 else float("inf")
+
+        row = [
+            f"{label:^{col_widths[0]}}",
+            f"{size_mib:^{col_widths[1]}.3f}",
+            f"{time_us:^{col_widths[2]}.3f}",
+            f"{bandwidth_mib_s:^{col_widths[3]}.3f}",
+            f"{bandwidth_gbps:^{col_widths[4]}.3f}",
+        ]
+        print("|" + "|".join(row) + "|")
+        print(divider("-"))
+
+    print(divider("="))
 
 def profiling(
     args, height, width,
@@ -548,6 +599,8 @@ def main():
 
     # Run reference on host
     host_residual, host_iterations = host_solver.solve_iterative(args.max_ite)
+
+    bandwidth_stats = {}
     
 ############################################################
 # Device
@@ -601,8 +654,14 @@ def main():
     initial_residual = device_solver.calculate_rho(device_solver.grids[0]['r'])
     # print(f"Initial residual at level 0: {initial_residual:.6e}")
    
-    copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, 
+    h2d_start = time.perf_counter()
+    bytes_h2d = copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, 
                  symbol_u, symbol_f, symbol_hx_array, symbol_hy_array, symbol_hz_array, symbol_jacobi_coeff_array, device_solver, args)
+    h2d_duration = time.perf_counter() - h2d_start
+    bandwidth_stats["H2D initial copy"] = {"bytes": bytes_h2d, "seconds": h2d_duration}
+    if h2d_duration > 0:
+        print(f"   -> {bytes_h2d / (1024 ** 2):.3f} MiB transferred in {h2d_duration * 1e3:.3f} ms "
+              f"({(bytes_h2d / (1024 ** 2)) / h2d_duration:.3f} MiB/s)")
 
 ############################################################
 # Kernel launch
@@ -639,7 +698,13 @@ def main():
     print("6. Copying results from device...")
     
     print("  6.1. Copying u from device...")
-    u_wse_1d, r_wse_1d = copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, device_solver, args)
+    d2h_start = time.perf_counter()
+    u_wse_1d, r_wse_1d, bytes_d2h = copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, device_solver, args)
+    d2h_duration = time.perf_counter() - d2h_start
+    bandwidth_stats["D2H solution copy"] = {"bytes": bytes_d2h, "seconds": d2h_duration}
+    if d2h_duration > 0:
+        print(f"   -> {bytes_d2h / (1024 ** 2):.3f} MiB transferred in {d2h_duration * 1e3:.3f} ms "
+              f"({(bytes_d2h / (1024 ** 2)) / d2h_duration:.3f} MiB/s)")
     u_wse_3d = oned_to_hwl_colmajor(height, width, zDim, u_wse_1d, DTYPE)
 
     # Copy timing data from device
@@ -719,6 +784,7 @@ def main():
         time_total_start_end_hwl, time_ref_hwl,
         counter_smooth, counter_residual, counter_restrict, counter_interp, counter_setup_init, counter_rho_check,
         WORDS_PER_TIMESTAMP, WORDS_PER_START_END)
+    print_bandwidth_summary(bandwidth_stats)
     print_configuration_summary(
         args,
         device_solver,
