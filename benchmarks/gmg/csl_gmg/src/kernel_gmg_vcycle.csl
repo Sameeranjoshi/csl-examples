@@ -15,7 +15,7 @@ const math_lib = @import_module("<math>");
 const blas_lib = @import_module("blas.csl");
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
 const timestamp = @import_module("<time>");
-const timer = @import_module("timer_modified.csl", .{ .timerCount = 7 });
+const timer = @import_module("timer_modified.csl", .{ .timerCount = 8 });
 const reduce_mod = @import_module("./modified_csl_lib/allreduce/pe.csl", @concat_structs(reduceParams, .{
      .f_callback = f_trigger_state_machine,
      .queues = [1]u16{2},
@@ -91,6 +91,7 @@ var counter_rho_check = @zeros([LEVELS]u16);   // Number of rho check operations
 // start, end
 var time_total_start_end_u16 = @zeros([1 * timestamp.tsc_size_words * 2]u16);   // this is also elapsed time for entire V-cycle, 1 level
 var time_ref_u16 = @zeros([timestamp.tsc_size_words]u16);
+var time_h2d_u16 = @zeros([timestamp.tsc_size_words]u16);
 var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
 var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
 var dot = @zeros([1]f32); // dummy variable for f_sync
@@ -176,7 +177,7 @@ const TIMER_ID_INTERP: i16 = 3;
 const TIMER_ID_TOTAL: i16 = 4;
 const TIMER_ID_SETUP_INIT: i16 = 5;
 const TIMER_ID_RHO_CHECK: i16 = 6;
-
+const TIMER_ID_H2D: i16 = 7;
 // DSDs
 var mem_u_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> u[i] });
 var mem_f_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> f[i] });
@@ -205,6 +206,7 @@ var ptr_timing_restrict: [*]u16 = &timing_restrict;
 var ptr_timing_interp: [*]u16 = &timing_interp;
 var ptr_timing_setup_init: [*]u16 = &timing_setup_init;
 var ptr_timing_rho_check: [*]u16 = &timing_rho_check;
+var ptr_time_h2d: [*]u16 = &time_h2d_u16;
 var ptr_time_ref: [*]u16 = &time_ref_u16;
 var ptr_time_total_start_end: [*]u16 = &time_total_start_end_u16;
 var ptr_counter_smooth: [*]u16 = &counter_smooth;
@@ -549,6 +551,17 @@ fn f_toc_total() void {
     // sys_mod.unblock_cmd_stream();
 }
 
+fn f_tic_h2d() void {
+    timer.start(TIMER_ID_H2D);
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_toc_h2d() void {
+    timer.stop(TIMER_ID_H2D);
+    timer.elapsed(TIMER_ID_H2D, @ptrcast(*[timer.timestamp_size]u16, &time_h2d_u16));
+    sys_mod.unblock_cmd_stream();
+}
+
 // Synchronize all PEs using allreduce (also captures reference clock)
 fn f_sync() void {
     cur_state = STATE_SYNC;
@@ -853,6 +866,7 @@ comptime {
     @export_symbol(ptr_timing_rho_check, "timing_rho_check");
     @export_symbol(ptr_time_ref, "time_ref");
     @export_symbol(ptr_time_total_start_end, "time_total_start_end");
+    @export_symbol(ptr_time_h2d, "time_h2d");
     // counters
     @export_symbol(ptr_counter_smooth, "counter_smooth");
     @export_symbol(ptr_counter_apply_op, "counter_apply_op");
@@ -867,6 +881,8 @@ comptime {
     @export_symbol(f_enable_timer);
     @export_symbol(f_sync);
     @export_symbol(f_reference_timestamps);
+    @export_symbol(f_tic_h2d);
+    @export_symbol(f_toc_h2d);
     @export_symbol(f_tic_total);
     @export_symbol(f_toc_total);
     @export_symbol(f_gmg_vcycle);

@@ -105,6 +105,8 @@ layout{
     @export_name("timing_setup_init", [*]u16, true);
     @export_name("timing_rho_check", [*]u16, true);
     @export_name("time_total_start_end", [*]u16, true);
+    @export_name("time_h2d", [*]u16, true);
+    @export_name("time_d2h", [*]u16, true);
     // counters
     @export_name("counter_smooth", [*]u16, true);
     @export_name("counter_apply_op", [*]u16, true);
@@ -113,11 +115,14 @@ layout{
     @export_name("counter_interp", [*]u16, true);
     @export_name("counter_setup_init", [*]u16, true);
     @export_name("counter_rho_check", [*]u16, true);
+    // kernels
     @export_name("f_enable_timer", fn()void);
     @export_name("f_sync", fn()void);
     @export_name("f_reference_timestamps", fn()void);
     @export_name("f_tic_total", fn()void);
     @export_name("f_toc_total", fn()void);
+    @export_name("f_tic_h2d", fn()void);
+    @export_name("f_toc_h2d", fn()void);
     @export_name("f_gmg_vcycle", fn(i16,i16,i16,i16,i16,f32)void);
     @export_name("rho", [*]f32, true);
 }

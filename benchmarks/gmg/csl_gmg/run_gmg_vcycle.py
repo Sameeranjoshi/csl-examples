@@ -22,7 +22,11 @@ from util import hwl_2_oned_colmajor, oned_to_hwl_colmajor
 
 from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime, MemcpyOrder, MemcpyDataType
 
-DTYPE = np.float32
+DTYPE = np.float32    
+WORDS_PER_TIMESTAMP = 3
+WORDS_PER_START_END = WORDS_PER_TIMESTAMP * 2
+
+
 def l2(v): 
     return float(np.sqrt(np.dot(v.ravel(), v.ravel())))
 
@@ -178,8 +182,6 @@ def copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
     )
 
     return total_bytes
-WORDS_PER_TIMESTAMP = 3
-WORDS_PER_START_END = WORDS_PER_TIMESTAMP * 2
 
 
 def make_u48(words):
@@ -329,7 +331,8 @@ def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
 
     return u_wse_1d, r_wse_1d, total_bytes
 
-def copy_timing_data(height, width, levels, simulator, symbol_timing_smooth, symbol_timing_apply_op, symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, symbol_timing_setup_init, symbol_timing_rho_check, symbol_time_total_start_end, symbol_time_ref, args):
+def copy_timing_data(height, width, levels, simulator, symbol_timing_smooth, symbol_timing_apply_op, symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, symbol_timing_setup_init, symbol_timing_rho_check, symbol_time_total_start_end, symbol_time_h2d, symbol_time_ref, args):
+    """Copy timing data from device"""
     timing_smooth_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_smooth, WORDS_PER_TIMESTAMP)
     timing_residual_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_residual, WORDS_PER_TIMESTAMP)
     timing_apply_op_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_apply_op, WORDS_PER_TIMESTAMP)
@@ -339,8 +342,10 @@ def copy_timing_data(height, width, levels, simulator, symbol_timing_smooth, sym
     timing_rho_check_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_rho_check, WORDS_PER_TIMESTAMP)
     # EXTRA TIMES
     time_total_start_end_hwl = copy_timing(height, width, 1, simulator, symbol_time_total_start_end, WORDS_PER_START_END)    # Not level based
-    timing_ref_hwl = copy_timing(height, width, 1, simulator, symbol_time_ref, WORDS_PER_TIMESTAMP)    # Not level based
-    return timing_smooth_hwl, timing_residual_hwl, timing_apply_op_hwl, timing_restrict_hwl, timing_interp_hwl, timing_setup_init_hwl, timing_rho_check_hwl, time_total_start_end_hwl, timing_ref_hwl
+    time_h2d_hwl = copy_timing(height, width, 1, simulator, symbol_time_h2d, WORDS_PER_TIMESTAMP)    # Not level based
+    time_ref_hwl = copy_timing(height, width, 1, simulator, symbol_time_ref, WORDS_PER_TIMESTAMP)    # Not level based
+    
+    return timing_smooth_hwl, timing_residual_hwl, timing_apply_op_hwl, timing_restrict_hwl, timing_interp_hwl, timing_setup_init_hwl, timing_rho_check_hwl, time_total_start_end_hwl, time_h2d_hwl, time_ref_hwl
 
 def copy_counters(height, width, levels, simulator, symbol_counter):
     """Copy operation counter data from device"""
@@ -449,7 +454,7 @@ def profiling(
     timing_smooth_hwl_levels, timing_residual_hwl_levels,
     timing_restrict_hwl_levels, timing_interp_hwl_levels,
     timing_setup_init_hwl_levels, timing_rho_check_hwl_levels,
-    time_total_start_end_hwl, time_ref_hwl,
+    time_total_start_end_hwl, time_h2d_hwl, time_ref_hwl,
     counter_smooth, counter_residual, counter_restrict, counter_interp, counter_setup_init, counter_rho_check,
     WORDS_PER_TIMESTAMP, WORDS_PER_START_END
     ):
@@ -467,7 +472,7 @@ def profiling(
     timing_rho_check_data = process_timing_data(height, width, args.levels, timing_rho_check_hwl_levels, time_ref_hwl, "rho_check", counter_rho_check, False, WORDS_PER_TIMESTAMP)
     counter_total = np.array([1]) # Because we have only 1 level
     timing_total_start_end_data = process_timing_data(height, width, 1, time_total_start_end_hwl, time_ref_hwl, "total", counter_total, False, WORDS_PER_TIMESTAMP)
-
+    timing_h2d_data = process_timing_data(height, width, 1, time_h2d_hwl, time_ref_hwl, "h2d", counter_total, False, WORDS_PER_TIMESTAMP)
     print("\nTime per operation and level (us[cycles]):")
     operators = [
         ("smooth", timing_smooth_data, counter_smooth),
@@ -555,6 +560,7 @@ def profiling(
     total_time_cycles = grand_total_cycles
 
     print("=" * 100)
+    print(f"Total H2D time: {timing_h2d_data[0]['time_send']:10.3f} us ({timing_h2d_data[0]['cycles_send']:10.0f} cycles)")
     print(f"Total V-cycle time (sum of operations): {total_time_us:10.3f} us ({total_time_cycles:10.0f} cycles)")
     print(f"Total V-cycle time (kernel launch + V cycle time): {timing_total_start_end_data[0]['time_send']:10.3f} us ({timing_total_start_end_data[0]['cycles_send']:10.0f} cycles)")
     print("=" * 100)
@@ -631,6 +637,7 @@ def main():
     symbol_timing_rho_check = simulator.get_id("timing_rho_check")
     symbol_time_ref = simulator.get_id("time_ref")
     symbol_time_total_start_end = simulator.get_id("time_total_start_end")
+    symbol_time_h2d = simulator.get_id("time_h2d")
     # counters
     symbol_counter_smooth = simulator.get_id("counter_smooth")
     symbol_counter_apply_op = simulator.get_id("counter_apply_op")
@@ -645,37 +652,30 @@ def main():
     simulator.load()
     simulator.run()
 
+    # Enable timing and synchronize PEs
+    print("1. Enabling timer...")
+    simulator.launch("f_enable_timer", nonblock=False)
+    
 ############################################################
 # Copy data to device
 ############################################################
     # Copy initial data
-    print("1. Copying initial data to device...")
+    print("2. Copying initial data to device...")
     device_solver.compute_residual(0)
     initial_residual = device_solver.calculate_rho(device_solver.grids[0]['r'])
-    # print(f"Initial residual at level 0: {initial_residual:.6e}")
    
-    h2d_start = time.perf_counter()
-    bytes_h2d = copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, 
+    simulator.launch("f_tic_h2d", nonblock=True)
+    copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, 
                  symbol_u, symbol_f, symbol_hx_array, symbol_hy_array, symbol_hz_array, symbol_jacobi_coeff_array, device_solver, args)
-    h2d_duration = time.perf_counter() - h2d_start
-    bandwidth_stats["H2D initial copy"] = {"bytes": bytes_h2d, "seconds": h2d_duration}
-    if h2d_duration > 0:
-        print(f"   -> {bytes_h2d / (1024 ** 2):.3f} MiB transferred in {h2d_duration * 1e3:.3f} ms "
-              f"({(bytes_h2d / (1024 ** 2)) / h2d_duration:.3f} MiB/s)")
-
+    simulator.launch("f_toc_h2d", nonblock=False)
 ############################################################
 # Kernel launch
 ############################################################
-    # Enable timing and synchronize PEs
-    print("2. Enabling timer...")
-    simulator.launch("f_enable_timer", nonblock=False)
-    
     print("3. Synchronizing PEs for timing...")
     simulator.launch("f_sync", nonblock=False)
     
     print("4. Copying reference clock...")
     simulator.launch("f_reference_timestamps", nonblock=False)
-
 
     # Run GMG V-cycle with convergence checking on device
     print(f"5. Running GMG V-cycle(max_iter={args.max_ite}, levels={args.levels}) on device...")
@@ -688,9 +688,6 @@ def main():
                     np.int16(args.max_ite),  # max_iter parameter
                     np.float32(device_solver.tolerance),  # tolerance parameter
                     nonblock=False)
-
-    # print("Stopping tic_total()")
-    # simulator.launch("f_toc_total", nonblock=False)
 ############################################################
 # Copy results and timing data back
 ############################################################
@@ -698,22 +695,17 @@ def main():
     print("6. Copying results from device...")
     
     print("  6.1. Copying u from device...")
-    d2h_start = time.perf_counter()
-    u_wse_1d, r_wse_1d, bytes_d2h = copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, device_solver, args)
-    d2h_duration = time.perf_counter() - d2h_start
-    bandwidth_stats["D2H solution copy"] = {"bytes": bytes_d2h, "seconds": d2h_duration}
-    if d2h_duration > 0:
-        print(f"   -> {bytes_d2h / (1024 ** 2):.3f} MiB transferred in {d2h_duration * 1e3:.3f} ms "
-              f"({(bytes_d2h / (1024 ** 2)) / d2h_duration:.3f} MiB/s)")
+    u_wse_1d, r_wse_1d, total_bytes_d2h = copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, device_solver, args)
     u_wse_3d = oned_to_hwl_colmajor(height, width, zDim, u_wse_1d, DTYPE)
 
     # Copy timing data from device
     print("  6.2. Copying timing data...")
     timing_smooth_hwl_levels, timing_residual_hwl_levels, timing_apply_op_hwl_levels, \
-        timing_restrict_hwl_levels, timing_interp_hwl_levels, timing_setup_init_hwl_levels, timing_rho_check_hwl_levels, time_total_start_end_hwl, time_ref_hwl = \
+        timing_restrict_hwl_levels, timing_interp_hwl_levels, timing_setup_init_hwl_levels, timing_rho_check_hwl_levels, \
+            time_total_start_end_hwl, time_h2d_hwl, time_ref_hwl = \
             copy_timing_data(height, width, args.levels, simulator, symbol_timing_smooth, symbol_timing_apply_op, 
                              symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, 
-                             symbol_timing_setup_init, symbol_timing_rho_check, symbol_time_total_start_end, symbol_time_ref, args)
+                             symbol_timing_setup_init, symbol_timing_rho_check, symbol_time_total_start_end, symbol_time_h2d, symbol_time_ref, args)
     print("  6.3. Copying operation counters...")
     counter_smooth, counter_residual, counter_apply_op, counter_restrict, counter_interp, counter_setup_init, counter_rho_check = \
         copy_counter_data(height, width, args.levels, simulator, 
@@ -781,7 +773,7 @@ def main():
         timing_smooth_hwl_levels, timing_residual_hwl_levels,
         timing_restrict_hwl_levels, timing_interp_hwl_levels,
         timing_setup_init_hwl_levels, timing_rho_check_hwl_levels,
-        time_total_start_end_hwl, time_ref_hwl,
+        time_total_start_end_hwl, time_h2d_hwl, time_ref_hwl,
         counter_smooth, counter_residual, counter_restrict, counter_interp, counter_setup_init, counter_rho_check,
         WORDS_PER_TIMESTAMP, WORDS_PER_START_END)
     print_bandwidth_summary(bandwidth_stats)
