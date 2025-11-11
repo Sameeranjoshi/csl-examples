@@ -56,7 +56,7 @@ MEM_OUTPUT=$($CS_READELF -m "$SAMPLE_ELF" 2>&1)
 echo "$MEM_OUTPUT"
 
 # Try to extract actual memory usage in bytes from MEM_OUTPUT (works if cs-readelf prints as:
-#   "Main memory used by PE at ...: 33976 bytes"
+#   "(X, Y): 33976 bytes"
 # )
 TOTAL_SIZE=$(echo "$MEM_OUTPUT" | grep -Eo '([0-9]+)[[:space:]]+bytes' | head -1 | awk '{print $1}')
 
@@ -89,66 +89,56 @@ if [ -n "$TOTAL_SIZE" ] && [ "$TOTAL_SIZE" -gt 0 ]; then
     echo "  Overhead (stack/other):   $OVERHEAD bytes ($(awk "BEGIN {printf \"%.2f\", $OVERHEAD/1024}") KB)"
 fi
 
-# echo ""
-# echo "=============================================="
-# echo "Top 15 Largest Data Symbols:"
-# echo "=============================================="
-# SYMBOL_DATA=$($CS_READELF --symbols "$SAMPLE_ELF" 2>&1 | awk '/OBJECT/ && $3 > 0 {print $3, $NF}')
-# echo "$SYMBOL_DATA" | sort -rn | head -15 | awk '{printf "  %-40s %8s bytes\n", $2, $1}'
-
-# # Calculate total data symbol size
-# TOTAL_DATA_SYMBOLS=$(echo "$SYMBOL_DATA" | awk '{sum += $1} END {print sum}')
-# if [ -n "$TOTAL_DATA_SYMBOLS" ] && [ "$TOTAL_DATA_SYMBOLS" -gt 0 ]; then
-#     echo ""
-#     echo "Total from all data symbols (OBJECT type): $TOTAL_DATA_SYMBOLS bytes ($(awk "BEGIN {printf \"%.2f\", $TOTAL_DATA_SYMBOLS/1024}") KB)"
-# fi
-
-# echo ""
-# echo "=============================================="
-# echo "Memory Analysis:"
-# echo "=============================================="
-# # WSE limits
-# WSE2_LIMIT=$((48 * 1024))
-# WSE3_LIMIT=$((48 * 1024))
-
-# echo "WSE-2 Memory Limit: $WSE2_LIMIT bytes (48 KB)"
-# echo "WSE-3 Memory Limit: $WSE3_LIMIT bytes (48 KB)"
-
-# if [ -n "$TOTAL_SIZE" ] && [ "$TOTAL_SIZE" -gt 0 ]; then
-#     echo ""
-#     echo "✓ Total memory used: $TOTAL_SIZE bytes ($(awk "BEGIN {printf \"%.2f\", $TOTAL_SIZE/1024}") KB)"
-    
-#     UTIL_WSE2=$(awk "BEGIN {printf \"%.2f\", 100.0 * $TOTAL_SIZE / $WSE2_LIMIT}")
-#     UTIL_WSE3=$(awk "BEGIN {printf \"%.2f\", 100.0 * $TOTAL_SIZE / $WSE3_LIMIT}")
-    
-#     echo "  WSE-2 Utilization: ${UTIL_WSE2}%"
-#     echo "  WSE-3 Utilization: ${UTIL_WSE3}%"
-    
-#     if [ "$TOTAL_SIZE" -gt "$WSE2_LIMIT" ]; then
-#         echo "  ⚠️  WARNING: Memory usage exceeds WSE-2 limit!"
-#     fi
-    
-#     if [ "$TOTAL_SIZE" -gt "$WSE3_LIMIT" ]; then
-#         echo "  ⚠️  WARNING: Memory usage exceeds WSE-3 limit!"
-#     fi
-# else
-#     echo ""
-#     echo "⚠️  Could not automatically parse memory usage from cs-readelf output"
-#     echo "   Please check the 'Memory Usage Per PE' section above manually"
-# fi
-
+echo ""
 echo "=============================================="
+echo "Top 10 Largest Data Symbols:"
+echo "=============================================="
+SYMBOL_DATA=$($CS_READELF --symbols "$SAMPLE_ELF" 2>&1 | awk '/OBJECT/ && $3 > 0 {print $3, $NF}')
+if [ -n "$SYMBOL_DATA" ]; then
+    echo "$SYMBOL_DATA" | sort -k1,1nr | head -10 | awk '{printf "  %-40s %8s bytes\n", $2, $1}'
+
+    # Calculate total data symbol size
+    TOTAL_DATA_SYMBOLS=$(echo "$SYMBOL_DATA" | awk '{sum += $1} END {print sum}')
+    if [ -n "$TOTAL_DATA_SYMBOLS" ] && [ "$TOTAL_DATA_SYMBOLS" -gt 0 ]; then
+        echo ""
+        echo "Total from all data symbols (OBJECT type): $TOTAL_DATA_SYMBOLS bytes ($(awk "BEGIN {printf \"%.2f\", $TOTAL_DATA_SYMBOLS/1024}") KB)"
+    fi
+else
+    echo "  No OBJECT symbols found."
+fi
+
 echo ""
-echo "Useful commands:"
-echo "  # Show all symbols with sizes and banks:"
-echo "    $CS_READELF --symbols --tile $TILE_X,$TILE_Y $SAMPLE_ELF"
-echo ""
-echo "  # Show fabric size:"
-echo "    $CS_READELF -s $SAMPLE_ELF"
-echo ""
-echo "  # Show memory usage in words instead of bytes:"
-echo "    $CS_READELF -m -u word --tile $TILE_X,$TILE_Y $SAMPLE_ELF"
-echo ""
-echo "  # Visualize which PEs have code/data:"
-echo "    $CS_READELF --visualize $SAMPLE_ELF"
+echo "=============================================="
+echo "Top 10 Largest Code Symbols:"
+echo "=============================================="
+SYMBOL_CODE=$($CS_READELF --symbols "$SAMPLE_ELF" 2>&1 | awk '/FUNC/ && $3 > 0 {print $3, $NF}')
+if [ -n "$SYMBOL_CODE" ]; then
+    echo "$SYMBOL_CODE" | sort -k1,1nr | head -10 | awk '{printf "  %-40s %8s bytes\n", $2, $1}'
+
+    TOTAL_CODE_SYMBOLS=$(echo "$SYMBOL_CODE" | awk '{sum += $1} END {print sum}')
+    if [ -n "$TOTAL_CODE_SYMBOLS" ] && [ "$TOTAL_CODE_SYMBOLS" -gt 0 ]; then
+        echo ""
+        echo "Total from all code symbols (FUNC type): $TOTAL_CODE_SYMBOLS bytes ($(awk "BEGIN {printf \"%.2f\", $TOTAL_CODE_SYMBOLS/1024}") KB)"
+    fi
+else
+    echo "  No FUNC symbols found."
+fi
+
+
+# echo "=============================================="
+# echo ""
+# echo "Useful commands:"
+# echo "  # Show all symbols with sizes and banks:"
+# echo "    $CS_READELF --symbols --tile $TILE_X,$TILE_Y $SAMPLE_ELF"
+# echo ""
+# echo "  # Show fabric size:"
+# echo "    $CS_READELF -s $SAMPLE_ELF"
+# echo ""
+# echo "  # Show memory usage in words instead of bytes:"
+# echo "    $CS_READELF -m -u word --tile $TILE_X,$TILE_Y $SAMPLE_ELF"
+# echo ""
+# echo "  # Visualize which PEs have code/data:"
+# echo "    $CS_READELF --visualize $SAMPLE_ELF"
+
+
 
