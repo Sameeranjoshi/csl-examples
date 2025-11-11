@@ -15,13 +15,7 @@ echo "=============================================="
 
 # Check if cs-readelf or cs_readelf exists
 CS_READELF=""
-if [ -x "./cs_readelf" ]; then
-    CS_READELF="./cs_readelf"
-elif [ -x "../../../cs_readelf" ]; then
-    CS_READELF="../../../cs_readelf"
-elif command -v cs-readelf &> /dev/null; then
-    CS_READELF="cs-readelf"
-elif command -v cs_readelf &> /dev/null; then
+if command -v cs_readelf &> /dev/null; then
     CS_READELF="cs_readelf"
 else
     echo "ERROR: cs-readelf not found"
