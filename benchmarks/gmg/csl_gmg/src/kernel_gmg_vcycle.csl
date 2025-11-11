@@ -1,5 +1,8 @@
 // Geometric Multigrid (GMG) V-cycle kernel with state machine
 // Implements full V-cycle on device without host intervention
+//-------------------------------------------------
+// PARAMETERS TO THIS MODULE
+//-------------------------------------------------
 
 // parameters
 param memcpyParams: comptime_struct;
@@ -10,7 +13,9 @@ param BLOCK_SIZE: i16;
 param LEVELS: i16;
 param STATE: local_task_id;
 
-// libraries
+//-------------------------------------------------
+// LIBRARIES and STATE MACHINE STATES
+//-------------------------------------------------
 const math_lib = @import_module("<math>");
 const blas_lib = @import_module("blas.csl");
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
@@ -35,6 +40,51 @@ const stencil_mod = @import_module("./modified_csl_lib/stencil_3d_7pts/pe.csl", 
      }));
 const layout_mod = @import_module("<layout>");
 const simprint = @import_module("<simprint>", .{.enable = true});
+
+// State definitions
+const STATE_INIT: i16 = 0;
+const STATE_DOWN_INIT: i16 = 1;
+const STATE_DOWN_SMOOTH_APPLY: i16 = 2;
+const STATE_DOWN_SMOOTH_UPDATE: i16 = 3;
+const STATE_DOWN_SMOOTH_CHECK: i16 = 4;
+const STATE_DOWN_RESIDUAL_APPLY: i16 = 5;
+const STATE_DOWN_RESIDUAL_COMPUTE: i16 = 6;
+const STATE_DOWN_RESTRICT_REDUCE: i16 = 7;
+const STATE_DOWN_RESTRICT_DIV: i16 = 8;
+const STATE_DOWN_LEVEL_CHECK: i16 = 9;
+const STATE_COARSE_INIT: i16 = 10;
+const STATE_COARSE_SMOOTH_APPLY: i16 = 11;
+const STATE_COARSE_SMOOTH_UPDATE: i16 = 12;
+const STATE_COARSE_SMOOTH_CHECK: i16 = 13;
+const STATE_UP_INIT: i16 = 14;
+const STATE_UP_EXPAND_Z: i16 = 15;
+const STATE_UP_BCAST: i16 = 16;
+const STATE_UP_INTERP_ADD: i16 = 17;
+const STATE_UP_SMOOTH_APPLY: i16 = 18;
+const STATE_UP_SMOOTH_UPDATE: i16 = 19;
+const STATE_UP_SMOOTH_CHECK: i16 = 20;
+const STATE_UP_LEVEL_CHECK: i16 = 21;
+const STATE_EXIT: i16 = 22;
+const STATE_SYNC: i16 = 23;
+const STATE_CONV_CHECK: i16 = 24;  // Convergence check after V-cycle
+const STATE_CALC_RHO: i16 = 25;  // Calculate rho = |r|^2
+const STATE_RESIDUAL_AFTER_V_CYCLE_APPLY: i16 = 26;  // Apply operator after V-cycle to compute Au
+const STATE_RESIDUAL_AFTER_V_CYCLE_COMPUTE: i16 = 27;  // Compute residual after V-cycle
+
+// Timer identifiers
+const TIMER_ID_SMOOTH: i16 = 0;
+const TIMER_ID_RESIDUAL: i16 = 1;
+const TIMER_ID_RESTRICT: i16 = 2;
+const TIMER_ID_INTERP: i16 = 3;
+const TIMER_ID_TOTAL: i16 = 4;
+const TIMER_ID_SETUP_INIT: i16 = 5;
+const TIMER_ID_RHO_CHECK: i16 = 6;
+const TIMER_ID_H2D: i16 = 7;
+const TIMER_ID_D2H: i16 = 8;
+
+//-------------------------------------------------
+// DATA on 48KB(variables, pointers, DSDs)
+//-------------------------------------------------
 
 // Compute total storage needed for GMG levels using geometric series formula
 // Total = zdim + zdim/2 + zdim/4 + ... + zdim/2^(LEVELS-1)
@@ -140,46 +190,6 @@ var current_smooth_iter: i16 = 0;
 var cur_state: i16 = 0;
 var next_state: i16 = 0;
 
-// State definitions
-const STATE_INIT: i16 = 0;
-const STATE_DOWN_INIT: i16 = 1;
-const STATE_DOWN_SMOOTH_APPLY: i16 = 2;
-const STATE_DOWN_SMOOTH_UPDATE: i16 = 3;
-const STATE_DOWN_SMOOTH_CHECK: i16 = 4;
-const STATE_DOWN_RESIDUAL_APPLY: i16 = 5;
-const STATE_DOWN_RESIDUAL_COMPUTE: i16 = 6;
-const STATE_DOWN_RESTRICT_REDUCE: i16 = 7;
-const STATE_DOWN_RESTRICT_DIV: i16 = 8;
-const STATE_DOWN_LEVEL_CHECK: i16 = 9;
-const STATE_COARSE_INIT: i16 = 10;
-const STATE_COARSE_SMOOTH_APPLY: i16 = 11;
-const STATE_COARSE_SMOOTH_UPDATE: i16 = 12;
-const STATE_COARSE_SMOOTH_CHECK: i16 = 13;
-const STATE_UP_INIT: i16 = 14;
-const STATE_UP_EXPAND_Z: i16 = 15;
-const STATE_UP_BCAST: i16 = 16;
-const STATE_UP_INTERP_ADD: i16 = 17;
-const STATE_UP_SMOOTH_APPLY: i16 = 18;
-const STATE_UP_SMOOTH_UPDATE: i16 = 19;
-const STATE_UP_SMOOTH_CHECK: i16 = 20;
-const STATE_UP_LEVEL_CHECK: i16 = 21;
-const STATE_EXIT: i16 = 22;
-const STATE_SYNC: i16 = 23;
-const STATE_CONV_CHECK: i16 = 24;  // Convergence check after V-cycle
-const STATE_CALC_RHO: i16 = 25;  // Calculate rho = |r|^2
-const STATE_RESIDUAL_AFTER_V_CYCLE_APPLY: i16 = 26;  // Apply operator after V-cycle to compute Au
-const STATE_RESIDUAL_AFTER_V_CYCLE_COMPUTE: i16 = 27;  // Compute residual after V-cycle
-
-// Timer identifiers
-const TIMER_ID_SMOOTH: i16 = 0;
-const TIMER_ID_RESIDUAL: i16 = 1;
-const TIMER_ID_RESTRICT: i16 = 2;
-const TIMER_ID_INTERP: i16 = 3;
-const TIMER_ID_TOTAL: i16 = 4;
-const TIMER_ID_SETUP_INIT: i16 = 5;
-const TIMER_ID_RHO_CHECK: i16 = 6;
-const TIMER_ID_H2D: i16 = 7;
-const TIMER_ID_D2H: i16 = 8;
 // DSDs
 var mem_u_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> u[i] });
 var mem_f_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> f[i] });
@@ -220,6 +230,10 @@ var ptr_counter_interp: [*]u16 = &counter_interp;
 var ptr_counter_setup_init: [*]u16 = &counter_setup_init;
 var ptr_rho: [*]f32 = &rho;
 var ptr_counter_rho_check: [*]u16 = &counter_rho_check;
+
+//-------------------------------------------------
+// HELPER FUNCTIONS
+//-------------------------------------------------
 // Helper functions
 fn isActivePE(px: i16, py: i16, factor_val: u16) bool {
     return (px % @as(i16, factor_val)) == 0 and (py % @as(i16, factor_val)) == 0;
@@ -233,15 +247,65 @@ fn is_top_left_of_restriction_window(px: u16, py: u16, window_width: u16, window
     return (px == window_st_x) and (py == window_st_y);
 }
 
-// Timing helper functions
-fn save_timestamp_start(timer_id: i16) void {
-    timer.start(timer_id);
+// ------------------------------------------------
+// TIMER HELPER FUNCTIONS
+// ------------------------------------------------
+
+// Enable timing
+fn f_enable_timer() void {
+    timer.enable();
+    sys_mod.unblock_cmd_stream();
 }
 
-fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
-    timer.stop(timer_id);
-    const offset: i16 = level * timestamp.tsc_size_words;
-    timer.accumulate_elapsed(timer_id, @ptrcast(*[timer.timestamp_size]u16, &timing_array[offset]));
+// Copy reference clock from allreduce module
+fn f_reference_timestamps() void {
+    time_ref_u16[0] = reduce_mod.tscRefBuffer[0];
+    time_ref_u16[1] = reduce_mod.tscRefBuffer[1];
+    time_ref_u16[2] = reduce_mod.tscRefBuffer[2];
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_tic_total() void {
+    timer.start(TIMER_ID_TOTAL);
+    
+    // timestamp.get_timestamp(&tscStartBuffer);
+    // sys_mod.unblock_cmd_stream();
+}
+
+fn f_toc_total() void {
+    // timestamp.get_timestamp(&tscEndBuffer);
+
+    // time_total_start_end_u16[0] = tscStartBuffer[0];
+    // time_total_start_end_u16[1] = tscStartBuffer[1];
+    // time_total_start_end_u16[2] = tscStartBuffer[2];
+    // time_total_start_end_u16[3] = tscEndBuffer[0];
+    // time_total_start_end_u16[4] = tscEndBuffer[1];
+    // time_total_start_end_u16[5] = tscEndBuffer[2];
+    timer.stop(TIMER_ID_TOTAL);
+    timer.accumulate_elapsed(TIMER_ID_TOTAL, @ptrcast(*[timer.timestamp_size]u16, &time_total_start_end_u16));
+    // sys_mod.unblock_cmd_stream();
+}
+
+fn f_tic_h2d() void {
+    timer.start(TIMER_ID_H2D);
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_toc_h2d() void {
+    timer.stop(TIMER_ID_H2D);
+    timer.elapsed(TIMER_ID_H2D, @ptrcast(*[timer.timestamp_size]u16, &time_h2d_u16));
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_tic_d2h() void {
+    timer.start(TIMER_ID_D2H);
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_toc_d2h() void {
+    timer.stop(TIMER_ID_D2H);
+    timer.elapsed(TIMER_ID_D2H, @ptrcast(*[timer.timestamp_size]u16, &time_d2h_u16));
+    sys_mod.unblock_cmd_stream();
 }
 
 fn print_time_debug() void {
@@ -293,6 +357,20 @@ fn print_time_debug() void {
         }
     }
 }
+
+// Timing helper functions
+fn save_timestamp_start(timer_id: i16) void {
+    timer.start(timer_id);
+}
+
+fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
+    timer.stop(timer_id);
+    const offset: i16 = level * timestamp.tsc_size_words;
+    timer.accumulate_elapsed(timer_id, @ptrcast(*[timer.timestamp_size]u16, &timing_array[offset]));
+}
+//-------------------------------------------------
+// GMG KERNELS
+//-------------------------------------------------
 
 // Apply operator for Jacobi smoothing
 fn f_apply_operator() void {
@@ -519,63 +597,9 @@ fn f_setup_level(level_id: u16, down: i16) void {
     save_timestamp_end(current_level, &timing_setup_init, TIMER_ID_SETUP_INIT);
 }
 
-// Enable timing
-fn f_enable_timer() void {
-    timer.enable();
-    sys_mod.unblock_cmd_stream();
-}
-
-// Copy reference clock from allreduce module
-fn f_reference_timestamps() void {
-    time_ref_u16[0] = reduce_mod.tscRefBuffer[0];
-    time_ref_u16[1] = reduce_mod.tscRefBuffer[1];
-    time_ref_u16[2] = reduce_mod.tscRefBuffer[2];
-    sys_mod.unblock_cmd_stream();
-}
-
-fn f_tic_total() void {
-    timer.start(TIMER_ID_TOTAL);
-    
-    // timestamp.get_timestamp(&tscStartBuffer);
-    // sys_mod.unblock_cmd_stream();
-}
-
-fn f_toc_total() void {
-    // timestamp.get_timestamp(&tscEndBuffer);
-
-    // time_total_start_end_u16[0] = tscStartBuffer[0];
-    // time_total_start_end_u16[1] = tscStartBuffer[1];
-    // time_total_start_end_u16[2] = tscStartBuffer[2];
-    // time_total_start_end_u16[3] = tscEndBuffer[0];
-    // time_total_start_end_u16[4] = tscEndBuffer[1];
-    // time_total_start_end_u16[5] = tscEndBuffer[2];
-    timer.stop(TIMER_ID_TOTAL);
-    timer.accumulate_elapsed(TIMER_ID_TOTAL, @ptrcast(*[timer.timestamp_size]u16, &time_total_start_end_u16));
-    // sys_mod.unblock_cmd_stream();
-}
-
-fn f_tic_h2d() void {
-    timer.start(TIMER_ID_H2D);
-    sys_mod.unblock_cmd_stream();
-}
-
-fn f_toc_h2d() void {
-    timer.stop(TIMER_ID_H2D);
-    timer.elapsed(TIMER_ID_H2D, @ptrcast(*[timer.timestamp_size]u16, &time_h2d_u16));
-    sys_mod.unblock_cmd_stream();
-}
-
-fn f_tic_d2h() void {
-    timer.start(TIMER_ID_D2H);
-    sys_mod.unblock_cmd_stream();
-}
-
-fn f_toc_d2h() void {
-    timer.stop(TIMER_ID_D2H);
-    timer.elapsed(TIMER_ID_D2H, @ptrcast(*[timer.timestamp_size]u16, &time_d2h_u16));
-    sys_mod.unblock_cmd_stream();
-}
-
+// ------------------------------------------------
+// ENTRY POINTS KERNELs
+// ------------------------------------------------
 // Synchronize all PEs using allreduce (also captures reference clock)
 fn f_sync() void {
     cur_state = STATE_SYNC;
@@ -583,14 +607,7 @@ fn f_sync() void {
 }
 
 // Main V-cycle entry point
-fn f_gmg_vcycle(
-    levels: i16, 
-    pre_iter: i16,
-    post_iter: i16,
-    bottom_iter: i16,
-    max_iter_val: i16,
-    tol: f32
-) void {
+fn f_gmg_vcycle(levels: i16, pre_iter: i16, post_iter: i16, bottom_iter: i16, max_iter_val: i16, tol: f32) void {
     f_tic_total();
     num_levels = levels;
     pre_smooth_iter = pre_iter;
@@ -605,12 +622,14 @@ fn f_gmg_vcycle(
     @activate(STATE);
 }
 
+// ------------------------------------------------
+// STATE MACHINE
+// ------------------------------------------------
 fn f_trigger_state_machine() void {
     cur_state = next_state;
     @activate(STATE);
 }
 
-// State machine
 task f_state() void {
     if (STATE_SYNC == cur_state) {
         // sync all PEs by internal allreduce module
@@ -622,10 +641,10 @@ task f_state() void {
         current_level = 0;
         next_state = STATE_DOWN_INIT;
         f_trigger_state_machine();
-    } 
-//########################################################################################
-// DOWN CYCLE
-//########################################################################################    
+    }
+    // ------------------------------------------------
+    // DOWN CYCLE
+    // ------------------------------------------------
     else if (STATE_DOWN_INIT == cur_state) {
         // Initialize current level
         f_setup_level(@as(u16, current_level), 1); // (.. , down=True/False)
@@ -695,9 +714,9 @@ task f_state() void {
         f_trigger_state_machine();
         
     } 
-//########################################################################################
-// COARSE LEVEL
-//########################################################################################    
+    // ------------------------------------------------
+    // COARSE LEVEL
+    // ------------------------------------------------
     else if (STATE_COARSE_INIT == cur_state) {
         // Initialize coarsest level
         f_setup_level(@as(u16, current_level), 1);
@@ -732,9 +751,9 @@ task f_state() void {
         f_trigger_state_machine();
         
     }
-//########################################################################################
-// UP CYCLE
-//########################################################################################    
+    // ------------------------------------------------
+    // UP CYCLE
+    // ------------------------------------------------
     else if (STATE_UP_INIT == cur_state) {
         // Initialize level for up cycle
         f_setup_level(@as(u16, current_level), 0); // (.. , down=False for up cycle)
@@ -841,9 +860,9 @@ task f_state() void {
         f_trigger_state_machine();
         
     }
-//########################################################################################
-// EXIT
-//########################################################################################    
+    // ------------------------------------------------
+    // EXIT
+    // ------------------------------------------------    
     else if (STATE_EXIT == cur_state) {
         f_toc_total();
         sys_mod.unblock_cmd_stream();
@@ -856,7 +875,9 @@ task f_state() void {
     }
 }
 
-// Export symbols
+// ------------------------------------------------
+// EXPORT SYMBOLS
+// ------------------------------------------------
 comptime {
     @bind_local_task(f_state, STATE);
 }
