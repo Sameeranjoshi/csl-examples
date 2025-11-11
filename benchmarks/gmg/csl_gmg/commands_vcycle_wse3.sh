@@ -21,3 +21,4 @@ cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=25,20 --fabric-offset
 cs_python ./run_gmg_vcycle.py -m=8 -n=8 -k=8 --latestlink out_vcycle --channels=8 \
 --width-west-buf=0 --width-east-buf=0 --zDim=8 --run-only --levels=2 --max-ite=100
 
+./check_memory_usage.sh out_vcycle 0 0 --summary
