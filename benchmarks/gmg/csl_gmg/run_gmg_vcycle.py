@@ -450,9 +450,7 @@ def profiling(
         ("restriction", timing_restrict_data, counter_restrict),
         ("interpolation", timing_interp_data, counter_interp),
         ("setup_init", timing_setup_init_data, counter_setup_init),
-        ("rho_check", timing_rho_check_data, counter_rho_check),
-        ("communication", timing_communication_data, 1),
-        ("compute", timing_compute_data, 1),
+        ("rho_check", timing_rho_check_data, counter_rho_check)
     ]
 
     header_cols = ["level"] + [op[0] for op in operators] + ["total"]

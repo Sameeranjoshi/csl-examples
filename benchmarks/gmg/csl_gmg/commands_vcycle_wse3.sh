@@ -14,7 +14,7 @@ echo ""
 # rm -rf out_vcycle sim.log simfab_traces
 
 echo "Compiling..."
-cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=25,20 --fabric-offsets=4,1 \
+cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=15,10 --fabric-offsets=4,1 \
 --params=width:8,height:8,MAX_ZDIM:8,LEVELS:2,BLOCK_SIZE:8 -o=out_vcycle \
 --memcpy --channels=8 --width-west-buf=0 --width-east-buf=0 --max-inlined-iterations=1000000
 

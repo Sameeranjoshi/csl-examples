@@ -237,8 +237,8 @@ var timing_spmv_communication: [timer.timestamp_size]u16 = @zeros([timer.timesta
 var timing_spmv_compute: [timer.timestamp_size]u16 = @zeros([timer.timestamp_size]u16);
 var temp_result: [timer.timestamp_size]u16 = @zeros([timer.timestamp_size]u16);
 
-var TIMER_SPMV_COMMUNICATION_local: i16;
-var TIMER_SPMV_TOTAL_local: i16;
+var TIMER_SPMV_COMMUNICATION: i16;
+var TIMER_SPMV_COMP_COMM_TOTAL: i16;
 // later we will calculate the compute time by subtracting the communication time from the total time
 
 fn save_timestamp_start(timer_id: i16) void {
@@ -270,15 +270,13 @@ fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
 //  if n = 1, we cannot set DSD length with zDim-1 = 0.
 //  so we skip z-direction, just update center in laplacian_z
 //  (n = 1 is a 2D problem)
-fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32, current_level: i16, timing_compute: [*]u16, timing_communication: [*]u16, TIMER_SPMV_COMMUNICATION: i16, TIMER_SPMV_TOTAL: i16) void {
+fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32, current_level: i16, timing_compute: [*]u16, timing_communication: [*]u16, TIMER_ID_COMMUNICATION: i16, TIMER_ID_COMP_COMM_TOTAL: i16) void {
     // do some initial setup here first, save arguments to local variables
-    // timer.enable();
-    TIMER_SPMV_COMMUNICATION_local = TIMER_SPMV_COMMUNICATION;
-    TIMER_SPMV_TOTAL_local = TIMER_SPMV_TOTAL;
     current_level_local = current_level;
     timing_compute_local = timing_compute;
     timing_communication_local = timing_communication;  // we save the pointers locally to use later, tasks don't have arguments
-
+    TIMER_SPMV_COMMUNICATION = TIMER_ID_COMMUNICATION;
+    TIMER_SPMV_COMP_COMM_TOTAL = TIMER_ID_COMP_COMM_TOTAL;
     for (@range(i16, 0, timer.timestamp_size, 1)) |i| {
         timing_spmv_total[i] = 0;
         timing_spmv_communication[i] = 0;
@@ -286,7 +284,7 @@ fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32, current_level: i16, timing
     }
 
     @assert(2 <= n);
-    save_timestamp_start(TIMER_SPMV_TOTAL_local);
+    save_timestamp_start(TIMER_SPMV_COMP_COMM_TOTAL);
     zDim = n;
 
     c_west = (coeff.*)[0];
@@ -479,22 +477,25 @@ fn compute_and_next_send_recv() void {
 // SEND_STATE_SOUTH --> send to south
 task f_send() void {
     if (SEND_STATE_EAST == send_state){ // send to east
-        save_timestamp_start(TIMER_SPMV_COMMUNICATION_local);
+        
         if (can_communicate_east){
+            save_timestamp_start(TIMER_SPMV_COMMUNICATION);
             @load_to_dsr(dest_dsr_send, fab_trans_east_wdsd, .{.async=true, .activate = f_send, .ut_id = out_ut });
             if (is_active_pe){
-                // Active PE: Send data
+                // Active PE: Send data, Inactive PEs forward the ghost zones
                 @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
             } else {
                 @load_to_dsr(src1_dsr_send, mem_west_buf_dsd);
             }
             @mov32(dest_dsr_send, src1_dsr_send, .{.async=true, .ut_id = out_ut} );
+            save_timestamp_end(current_level_local, &timing_spmv_communication, TIMER_SPMV_COMMUNICATION);
         } else {
             @activate(SEND);    //Nothing to send
         }
         send_state = SEND_STATE_WEST;// goto next state
     }else if (SEND_STATE_WEST == send_state){ // send to west
         if (can_communicate_west){
+            save_timestamp_start(TIMER_SPMV_COMMUNICATION);
             @load_to_dsr(dest_dsr_send, fab_trans_west_wdsd, .{.async=true, .activate = f_send, .ut_id = out_ut });
             if (is_active_pe){
                 // Active PE: send own data
@@ -503,12 +504,14 @@ task f_send() void {
                 @load_to_dsr(src1_dsr_send, mem_east_buf_dsd);
             }
             @mov32(dest_dsr_send, src1_dsr_send, .{.async=true, .ut_id = out_ut} );
+            save_timestamp_end(current_level_local, &timing_spmv_communication, TIMER_SPMV_COMMUNICATION);
         } else {
             @activate(SEND);
         }
         send_state = SEND_STATE_NORTH;
     }else if (SEND_STATE_NORTH == send_state){ // send to north
         if (can_communicate_north){
+            save_timestamp_start(TIMER_SPMV_COMMUNICATION);
             @load_to_dsr(dest_dsr_send, fab_trans_north_wdsd, .{.async=true, .activate = f_send, .ut_id = out_ut });
             if (is_active_pe){
                 @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
@@ -516,12 +519,14 @@ task f_send() void {
                 @load_to_dsr(src1_dsr_send, mem_south_buf_dsd);
             }
             @mov32(dest_dsr_send, src1_dsr_send, .{.async=true, .ut_id = out_ut} );
+            save_timestamp_end(current_level_local, &timing_spmv_communication, TIMER_SPMV_COMMUNICATION);
         } else {
             @activate(SEND);
         }
         send_state = SEND_STATE_SOUTH;
     }else if (SEND_STATE_SOUTH == send_state) { // send to south
         if (can_communicate_south){
+            save_timestamp_start(TIMER_SPMV_COMMUNICATION);
             @load_to_dsr(dest_dsr_send, fab_trans_south_wdsd, .{.async=true, .activate = f_send, .ut_id = out_ut });
             if (is_active_pe){
                 @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
@@ -529,12 +534,13 @@ task f_send() void {
                 @load_to_dsr(src1_dsr_send, mem_north_buf_dsd);
             }
             @mov32(dest_dsr_send, src1_dsr_send, .{.async=true, .ut_id = out_ut} );
+            save_timestamp_end(current_level_local, &timing_spmv_communication, TIMER_SPMV_COMMUNICATION);
         } else {
             @activate(SEND); // nothing to send
         }
         send_state = SEND_STATE_DONE;
     }else{
-        save_timestamp_end(current_level_local, &timing_spmv_communication, TIMER_SPMV_COMMUNICATION_local);
+        // save_timestamp_end(current_level_local, &timing_spmv_communication, TIMER_ID_SPMV_COMMUNICATION);
         count_send_recv += 1;
         // if both SEND and RECV are done, perform
         // - compute laplacian on x-y
@@ -556,45 +562,52 @@ task f_send() void {
 //
 task f_recv() void {
     if (RECV_STATE_WEST == recv_state){ // receive from west
-        save_timestamp_start(TIMER_SPMV_COMMUNICATION_local);
         if (can_communicate_west){
             // simprint.fmt_with_coords("RECV WEST: Receiving data, is_active_pe={d}", .{@as(u32, is_active_pe)});
+            save_timestamp_start(TIMER_SPMV_COMMUNICATION);
             @load_to_dsr(dest_dsr_recv, mem_west_buf_dsd);
             @load_to_dsr(src1_dsr_recv, fab_recv_west_wdsd, .{.async=true, .activate = f_recv });
             @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
+            save_timestamp_end(current_level_local, &timing_spmv_communication, TIMER_SPMV_COMMUNICATION);
         } else {
             @activate(RECV); // nothing to receive
         }
         recv_state = RECV_STATE_EAST; // goto next state
     }else if (RECV_STATE_EAST == recv_state){ // receive from east
         if (can_communicate_east){
+            save_timestamp_start(TIMER_SPMV_COMMUNICATION);
             @load_to_dsr(dest_dsr_recv, mem_east_buf_dsd);
             @load_to_dsr(src1_dsr_recv, fab_recv_east_wdsd, .{.async=true, .activate = f_recv });
             @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
+            save_timestamp_end(current_level_local, &timing_spmv_communication, TIMER_SPMV_COMMUNICATION);
         } else {
             @activate(RECV); // nothing to receive
         }
         recv_state = RECV_STATE_SOUTH;
     }else if (RECV_STATE_SOUTH == recv_state){ // receive from south
         if (can_communicate_south){
+            save_timestamp_start(TIMER_SPMV_COMMUNICATION);
             @load_to_dsr(dest_dsr_recv, mem_south_buf_dsd);
             @load_to_dsr(src1_dsr_recv, fab_recv_south_wdsd, .{.async=true, .activate = f_recv });
             @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
+            save_timestamp_end(current_level_local, &timing_spmv_communication, TIMER_SPMV_COMMUNICATION);
         } else {
             @activate(RECV); // nothing to receive
         }
         recv_state = RECV_STATE_NORTH;
     }else if (RECV_STATE_NORTH == recv_state){ // receive from north
         if (can_communicate_north){
+            save_timestamp_start(TIMER_SPMV_COMMUNICATION);
             @load_to_dsr(dest_dsr_recv, mem_north_buf_dsd);
             @load_to_dsr(src1_dsr_recv, fab_recv_north_wdsd, .{.async=true, .activate = f_recv });
             @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
+            save_timestamp_end(current_level_local, &timing_spmv_communication, TIMER_SPMV_COMMUNICATION);
         } else {
             @activate(RECV);
         }
         recv_state = RECV_STATE_DONE;
     }else{
-        save_timestamp_end(current_level_local, &timing_spmv_communication, TIMER_SPMV_COMMUNICATION_local);
+        // save_timestamp_end(current_level_local, &timing_spmv_communication, TIMER_ID_SPMV_COMMUNICATION);
         count_send_recv += 1;
         // simprint.fmt_with_coords("RECV DONE: count_send_recv={d}", .{@as(u32, count_send_recv)});
         // if both SEND and RECV are done, perform
@@ -703,9 +716,9 @@ task f_comm() void {
         laplacian_z(); // laplacian on z-direction
         // spmv finishes
         // save_timestamp_end(current_level_local, &timing_spmv_total, TIMER_SPMV_TOTAL_local);   // compute + communication
-        timer.stop(TIMER_SPMV_TOTAL_local);
+        timer.stop(TIMER_SPMV_COMP_COMM_TOTAL);
         const offset: i16 = current_level_local * timer.timestamp_size;
-        timer.elapsed(TIMER_SPMV_TOTAL_local, @ptrcast(*[timer.timestamp_size]u16, &timing_spmv_total));
+        timer.elapsed(TIMER_SPMV_COMP_COMM_TOTAL, @ptrcast(*[timer.timestamp_size]u16, &timing_spmv_total));
 
         // print total time and level
         // try to use substract here and print into a temp
@@ -715,14 +728,14 @@ task f_comm() void {
         
         const pe_id_x: u16 = layout_mod.get_x_coord();
         const pe_id_y: u16 = layout_mod.get_y_coord();
-        if (current_level_local == 0 and pe_id_x == 0 and pe_id_y == 0) {
+        if (current_level_local == 1 and pe_id_x == 0 and pe_id_y == 0) {
             simprint.fmt_with_coords("SPMV TOTAL TIME: level={d}, total_time={d}, {d}, {d}", .{@as(u16, current_level_local), @as(u16, timing_spmv_total[0]), @as(u16, timing_spmv_total[1]), @as(u16, timing_spmv_total[2])});
             simprint.fmt_with_coords("SPMV COMMUNICATION TIME: level={d}, communication_time={d}, {d}, {d}", .{@as(u16, current_level_local), @as(u16, timing_spmv_communication[0]), @as(u16, timing_spmv_communication[1]), @as(u16, timing_spmv_communication[2])});
             simprint.fmt_with_coords("SPMV COMPUTE TIME(temp = total - comm): level={d}, compute_time={d}, {d}, {d}", .{@as(u16, current_level_local), @as(u16, timing_spmv_compute[0]), @as(u16, timing_spmv_compute[1]), @as(u16, timing_spmv_compute[2])});                            
         }
         // compute before add
-        // // Now add the temp into compute time using timer.add_timestamps
-        if (current_level_local == 0 and pe_id_x == 0 and pe_id_y == 0) {
+        // Now add the temp into compute time using timer.add_timestamps
+        if (current_level_local == 1 and pe_id_x == 0 and pe_id_y == 0) {
             simprint.fmt_with_coords("SPMV COMPUTE TIME (INITIAL): level={d}, compute_time={d}", .{@as(u16, current_level_local), @as(u16, timing_compute_local[offset])});
         }
         timer.add_timestamps(@ptrcast(*[timer.timestamp_size]u16, &timing_compute_local[offset]), 
@@ -731,9 +744,9 @@ task f_comm() void {
         timer.add_timestamps(@ptrcast(*[timer.timestamp_size]u16, &timing_communication_local[offset]), 
                             @ptrcast(*[timer.timestamp_size]u16, &timing_spmv_communication),
                             @ptrcast(*[timer.timestamp_size]u16, &timing_communication_local[offset]));
-        if (current_level_local == 0 and pe_id_x == 0 and pe_id_y == 0) {
-                            simprint.fmt_with_coords("SPMV COMPUTE TIME (AFTER ADD): level={d}, compute_time={d}", .{@as(u16, current_level_local), @as(u16, timing_compute_local[offset])});
-                            simprint.fmt_with_coords("SPMV COMMUNICATION TIME (AFTER ADD): level={d}, communication_time={d}", .{@as(u16, current_level_local), @as(u16, timing_communication_local[offset])});
+        if (current_level_local == 1 and pe_id_x == 0 and pe_id_y == 0) {
+            simprint.fmt_with_coords("SPMV COMPUTE TIME (AFTER ADD): level={d}, compute_time={d}", .{@as(u16, current_level_local), @as(u16, timing_compute_local[offset])});
+            simprint.fmt_with_coords("SPMV COMMUNICATION TIME (AFTER ADD): level={d}, communication_time={d}", .{@as(u16, current_level_local), @as(u16, timing_communication_local[offset])});
         }
         //sys_mod.unblock_cmd_stream();
         f_callback();

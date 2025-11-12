@@ -20,7 +20,7 @@ const math_lib = @import_module("<math>");
 const blas_lib = @import_module("blas.csl");
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
 const timestamp = @import_module("<time>");
-const timer = @import_module("timer_modified.csl", .{ .timerCount = 11 });
+const timer = @import_module("timer_modified.csl", .{ .timerCount = 12 });
 const reduce_mod = @import_module("./modified_csl_lib/allreduce/pe.csl", @concat_structs(reduceParams, .{
      .f_callback = f_trigger_state_machine,
      .queues = [1]u16{2},
@@ -84,7 +84,7 @@ const TIMER_ID_H2D: i16 = 7;
 const TIMER_ID_D2H: i16 = 8;
 const TIMER_ID_COMPUTE: i16 = 9;
 const TIMER_ID_COMMUNICATION: i16 = 10;
-const TIMER_ID_SPMV_TOTAL: i16 = 11;
+const TIMER_ID_COMP_COMM_TOTAL: i16 = 11;
 
 //-------------------------------------------------
 // DATA on 48KB(variables, pointers, DSDs)
@@ -399,7 +399,7 @@ fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
 fn f_apply_operator() void {
     counter_apply_op[current_level] += 1;
     @fmovs(mem_Au_dsd, 0.0);
-    stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_compute, &timing_communication, TIMER_ID_COMMUNICATION, TIMER_ID_SPMV_TOTAL);
+    stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_compute, &timing_communication, TIMER_ID_COMMUNICATION, TIMER_ID_COMP_COMM_TOTAL);
 }
 
 fn f_jacobi_smooth() void {
