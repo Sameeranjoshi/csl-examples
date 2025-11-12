@@ -655,7 +655,7 @@ task f_state_entry() void {
 // Zero buffer for inactive PEs to send (identity for ADD operation)
 // Large enough the max it can go is equal to the problem size zdim, which on 3D cube problem will go to max(H,W) of wafer
 // as the stencils map on wafer 1 to 1 and can't do subproblem on a single PE.
-const MAX_PENCIL_DIM : u16 = 2048;  // Choosen a random number bigger than max(H,W)
+const MAX_PENCIL_DIM : u16 = 512;  // Choosen a random number bigger than max(H,W)
 var zero_buf = @zeros([MAX_PENCIL_DIM]f32);  // Large enough for any reduction size
 var zero_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> zero_buf[i] });
 

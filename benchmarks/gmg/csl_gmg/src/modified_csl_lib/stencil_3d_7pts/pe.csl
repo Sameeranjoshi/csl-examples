@@ -52,6 +52,7 @@ param dest_dsr_ids:[2]u16;
 param src0_dsr_ids:[1]u16;
 param src1_dsr_ids:[2]u16;
 
+param timer: imported_module;
 
 const api_wse3 = @is_arch("wse3");
 
@@ -94,17 +95,18 @@ const stencilParams = .{
 
   .dest_dsr_ids = dest_dsr_ids,
   .src0_dsr_ids = src0_dsr_ids,
-  .src1_dsr_ids = src1_dsr_ids
+  .src1_dsr_ids = src1_dsr_ids,
+
+  .timer = timer
 };
 
 const stencil_mod = @import_module(get_stencil_module(), stencilParams);
 
 const simprint = @import_module("<simprint>", .{ .enable = true });
-
-fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32) void {    
+fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32, current_level: i16, timing_compute: [*]u16, timing_communication: [*]u16, TIMER_SPMV_COMMUNICATION: i16, TIMER_SPMV_COMPUTE: i16) void {
     //Optimization: Skip inactive PEs, saves compute cycles inside PE.
     // Skipping inactive PEs doesn't work, needs more triage.
-    stencil_mod.spmv(n, coeff, x, y);
+    stencil_mod.spmv(n, coeff, x, y, current_level, timing_compute, timing_communication, TIMER_SPMV_COMMUNICATION, TIMER_SPMV_COMPUTE);
 }
 
 // Function to set hop-based communication parameters

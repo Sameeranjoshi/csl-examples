@@ -20,7 +20,7 @@ const math_lib = @import_module("<math>");
 const blas_lib = @import_module("blas.csl");
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
 const timestamp = @import_module("<time>");
-const timer = @import_module("timer_modified.csl", .{ .timerCount = 9 });
+const timer = @import_module("timer_modified.csl", .{ .timerCount = 11 });
 const reduce_mod = @import_module("./modified_csl_lib/allreduce/pe.csl", @concat_structs(reduceParams, .{
      .f_callback = f_trigger_state_machine,
      .queues = [1]u16{2},
@@ -36,7 +36,8 @@ const stencil_mod = @import_module("./modified_csl_lib/stencil_3d_7pts/pe.csl", 
      .BLOCK_SIZE = BLOCK_SIZE,
      .dest_dsr_ids = [2]u16{2,3},
      .src0_dsr_ids = [1]u16{2},
-     .src1_dsr_ids = [2]u16{2,3}
+     .src1_dsr_ids = [2]u16{2,3},
+     .timer = timer
      }));
 const layout_mod = @import_module("<layout>");
 const simprint = @import_module("<simprint>", .{.enable = true});
@@ -81,6 +82,9 @@ const TIMER_ID_SETUP_INIT: i16 = 5;
 const TIMER_ID_RHO_CHECK: i16 = 6;
 const TIMER_ID_H2D: i16 = 7;
 const TIMER_ID_D2H: i16 = 8;
+const TIMER_ID_COMPUTE: i16 = 9;
+const TIMER_ID_COMMUNICATION: i16 = 10;
+const TIMER_ID_SPMV_TOTAL: i16 = 11;
 
 //-------------------------------------------------
 // DATA on 48KB(variables, pointers, DSDs)
@@ -124,6 +128,8 @@ var jacobi_coeff_array = @zeros([LEVELS]f32);
 var timing_smooth = @zeros([LEVELS * timestamp.tsc_size_words]u16); // pre-/post-smoothing accumulated elapsed timing
 var timing_apply_op = @zeros([LEVELS * timestamp.tsc_size_words]u16);    // operator application accumulated elapsed timing
 var timing_residual = @zeros([LEVELS * timestamp.tsc_size_words]u16);    // residual accumulated elapsed timing
+var timing_compute = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // compute accumulated elapsed timing
+var timing_communication = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // communication accumulated elapsed timing
 var timing_restrict = @zeros([LEVELS * timestamp.tsc_size_words]u16);    // restriction accumulated elapsed timing
 var timing_interp = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // interpolation accumulated elapsed timing
 var timing_setup_init = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // setup initialization accumulated elapsed timing
@@ -137,6 +143,8 @@ var counter_restrict = @zeros([LEVELS]u16);     // Number of restriction operati
 var counter_interp = @zeros([LEVELS]u16);       // Number of interpolation operations per level
 var counter_setup_init = @zeros([LEVELS]u16);   // Number of setup initialization operations per level
 var counter_rho_check = @zeros([LEVELS]u16);   // Number of rho check operations per level
+var counter_compute = @zeros([LEVELS]u16);   // Number of compute operations per level
+var counter_communication = @zeros([LEVELS]u16);   // Number of communication operations per level
 // Reference clock from allreduce module (for TSC synchronization)
 // start, end
 var time_total_start_end_u16 = @zeros([1 * timestamp.tsc_size_words * 2]u16);   // this is also elapsed time for entire V-cycle, 1 level
@@ -202,7 +210,7 @@ var mem_r_even_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r[i] });
 var mem_r_odd_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r[i] });
 var mem_f_coarse_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> f[i] });
 
-// Export pointers
+// data pointers
 var ptr_u: [*]f32 = &u;
 var ptr_f: [*]f32 = &f;
 var ptr_r: [*]f32 = &r;
@@ -210,7 +218,7 @@ var ptr_hx_array: [*]f32 = &hx_array;
 var ptr_hy_array: [*]f32 = &hy_array;
 var ptr_hz_array: [*]f32 = &hz_array;
 var ptr_jacobi_coeff_array: [*]f32 = &jacobi_coeff_array;
-
+// timing pointers
 var ptr_timing_smooth: [*]u16 = &timing_smooth;
 var ptr_timing_apply_op: [*]u16 = &timing_apply_op;
 var ptr_timing_residual: [*]u16 = &timing_residual;
@@ -222,6 +230,9 @@ var ptr_time_h2d: [*]u16 = &time_h2d_u16;
 var ptr_time_d2h: [*]u16 = &time_d2h_u16;
 var ptr_time_ref: [*]u16 = &time_ref_u16;
 var ptr_time_total_start_end: [*]u16 = &time_total_start_end_u16;
+var ptr_timing_compute: [*]u16 = &timing_compute;
+var ptr_timing_communication: [*]u16 = &timing_communication;
+// counter pointers
 var ptr_counter_smooth: [*]u16 = &counter_smooth;
 var ptr_counter_apply_op: [*]u16 = &counter_apply_op;
 var ptr_counter_residual: [*]u16 = &counter_residual;
@@ -230,7 +241,8 @@ var ptr_counter_interp: [*]u16 = &counter_interp;
 var ptr_counter_setup_init: [*]u16 = &counter_setup_init;
 var ptr_rho: [*]f32 = &rho;
 var ptr_counter_rho_check: [*]u16 = &counter_rho_check;
-
+var ptr_counter_compute: [*]u16 = &counter_compute;
+var ptr_counter_communication: [*]u16 = &counter_communication;
 //-------------------------------------------------
 // HELPER FUNCTIONS
 //-------------------------------------------------
@@ -346,14 +358,25 @@ fn print_time_debug() void {
             const rho_check_w0 = timing_rho_check[offset + 0];
             const rho_check_w1 = timing_rho_check[offset + 1];
             const rho_check_w2 = timing_rho_check[offset + 2];
-            simprint.fmt_with_coords("TIMING_DEBUG: level={d}, smooth_elapsed=[{d},{d},{d}],residual_elapsed=[{d},{d},{d}], restrict_elapsed=[{d},{d},{d}], interp_elapsed=[{d},{d},{d}], setup_init_elapsed=[{d},{d},{d}], rho_check_elapsed=[{d},{d},{d}]",
+
+            const compute_w0 = timing_compute[offset + 0];
+            const compute_w1 = timing_compute[offset + 1];
+            const compute_w2 = timing_compute[offset + 2];
+
+            const communication_w0 = timing_communication[offset + 0];
+            const communication_w1 = timing_communication[offset + 1];
+            const communication_w2 = timing_communication[offset + 2];
+
+            simprint.fmt_with_coords("TIMING_DEBUG: level={d}, smooth_elapsed=[{d},{d},{d}],residual_elapsed=[{d},{d},{d}], restrict_elapsed=[{d},{d},{d}], interp_elapsed=[{d},{d},{d}], setup_init_elapsed=[{d},{d},{d}], rho_check_elapsed=[{d},{d},{d}], compute_elapsed=[{d},{d},{d}], communication_elapsed=[{d},{d},{d}]",
                 .{@as(u16, level),
                     @as(u16, smooth_w0), @as(u16, smooth_w1), @as(u16, smooth_w2),
                     @as(u16, residual_w0), @as(u16, residual_w1), @as(u16, residual_w2),  
                     @as(u16, restrict_w0), @as(u16, restrict_w1), @as(u16, restrict_w2),
                     @as(u16, interp_w0), @as(u16, interp_w1), @as(u16, interp_w2),
                     @as(u16, setup_init_w0), @as(u16, setup_init_w1), @as(u16, setup_init_w2),
-                    @as(u16, rho_check_w0), @as(u16, rho_check_w1), @as(u16, rho_check_w2)});
+                    @as(u16, rho_check_w0), @as(u16, rho_check_w1), @as(u16, rho_check_w2),
+                    @as(u16, compute_w0), @as(u16, compute_w1), @as(u16, compute_w2),
+                    @as(u16, communication_w0), @as(u16, communication_w1), @as(u16, communication_w2)});
         }
     }
 }
@@ -376,11 +399,12 @@ fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
 fn f_apply_operator() void {
     counter_apply_op[current_level] += 1;
     @fmovs(mem_Au_dsd, 0.0);
-    stencil_mod.spmv(n, &stencil_coeff, &u, &Au);
+    stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_compute, &timing_communication, TIMER_ID_COMMUNICATION, TIMER_ID_SPMV_TOTAL);
 }
 
 fn f_jacobi_smooth() void {
     counter_smooth[current_level] += 1;
+    // save_timestamp_start(TIMER_ID_COMPUTE);
     // Jacobi update
     const jacobi_coeff: f32 = jacobi_coeff_array[current_level];
     if (is_active_pe) {
@@ -390,17 +414,19 @@ fn f_jacobi_smooth() void {
         @fmovs(mem_u_dsd, 0.0);
     }
     @fmovs(mem_save_u_smooth_dsd, mem_u_dsd);
+    // save_timestamp_end(current_level, &timing_compute, TIMER_ID_COMPUTE);
 }
 
 fn f_residual() void {
     counter_residual[current_level] += 1;
+    // save_timestamp_start(TIMER_ID_COMPUTE);
     if (is_active_pe) {
         @fsubs(mem_r_dsd, mem_f_dsd, mem_Au_dsd);
     } else {
         @fmovs(mem_r_dsd, 0.0);
     }
+    // save_timestamp_end(current_level, &timing_compute, TIMER_ID_COMPUTE);
 }
-
 
 // Calculate rho = |r|^2 at level 0 (for convergence checking)
 fn f_compute_rho() void {
@@ -412,11 +438,15 @@ fn f_compute_rho() void {
 }
 
 fn f_reduce_row_col_top_left() void {
+    // save_timestamp_start(TIMER_ID_COMMUNICATION);
     reduce_mod.reduce_row_col_top_left(n, &r, reduce_mod.TYPE_BINARY_OP.ADD);
+    // save_timestamp_end(current_level, &timing_communication, TIMER_ID_COMMUNICATION);
 }
 
 fn f_restriction_division() void {
     counter_restrict[current_level] += 1;
+    // save_timestamp_start(TIMER_ID_COMPUTE);  // timer
+
     const pe_id_x: u16 = layout_mod.get_x_coord();
     const pe_id_y: u16 = layout_mod.get_y_coord();    
     if (is_top_left_of_restriction_window(pe_id_x, pe_id_y, 
@@ -455,9 +485,12 @@ fn f_restriction_division() void {
     } else {
         @fmovs(mem_f_dsd, 0.0);
     }
+
+    // save_timestamp_end(current_level, &timing_compute, TIMER_ID_COMPUTE);
 }
 
 fn f_interpolation_expand_z() void {
+    // save_timestamp_start(TIMER_ID_COMPUTE);  // A compute step as it's done locally.
     // Expand z dimension: duplicate each coarse element to 2 fine elements
     // Reverse of restriction: if restriction sums pairs (0,1)->0, (2,3)->1, ...
     // Then interpolation duplicates: 0->(0,1), 1->(2,3), ...
@@ -491,19 +524,26 @@ fn f_interpolation_expand_z() void {
     // Now u has fine z dimension n with duplicated values
     // Update mem_u_dsd to reflect fine z dimension (n)
     mem_u_dsd = @set_dsd_length(mem_u_dsd, @bitcast(u16, n));
+
+
+    // save_timestamp_end(current_level, &timing_compute, TIMER_ID_COMPUTE);
 }
 
 fn f_interpolation_add() void {
     counter_interp[current_level] += 1;
+    // save_timestamp_start(TIMER_ID_COMPUTE);  // A compute step as it's done locally.
     if (is_active_pe) {
         @fadds(mem_u_dsd, mem_u_dsd, mem_save_u_smooth_dsd);
     } else {
         @fmovs(mem_u_dsd, 0.0);
     }
+    // save_timestamp_end(current_level, &timing_compute, TIMER_ID_COMPUTE);
 }
 
 fn f_bcast_from_top_left() void {
+    // save_timestamp_start(TIMER_ID_COMMUNICATION);
     reduce_mod.broadcast_from_top_left(n, &u);
+    // save_timestamp_end(current_level, &timing_communication, TIMER_ID_COMMUNICATION);
 }
 
 fn f_init_spmv_and_reduce(level_id: u16) void {
@@ -530,6 +570,9 @@ fn f_init_spmv_and_reduce(level_id: u16) void {
 fn f_setup_level(level_id: u16, down: i16) void {
     counter_setup_init[current_level] += 1;
     save_timestamp_start(TIMER_ID_SETUP_INIT);
+    // save_timestamp_start(TIMER_ID_COMPUTE);
+
+
     var const_2: f16 = 2.0;
     factor = @as(u16, math_lib.pow(const_2, @as(f16, level_id)));
     n = MAX_ZDIM/@as(i16, factor);    // zdim/1 --> zdim/2 --> zdim/4 --> ...
@@ -594,6 +637,8 @@ fn f_setup_level(level_id: u16, down: i16) void {
     }
     
     @fmovs(mem_r_dsd, 0.0);
+
+    // save_timestamp_end(current_level, &timing_compute, TIMER_ID_COMPUTE);
     save_timestamp_end(current_level, &timing_setup_init, TIMER_ID_SETUP_INIT);
 }
 
@@ -899,6 +944,8 @@ comptime {
     @export_symbol(ptr_timing_interp, "timing_interp");
     @export_symbol(ptr_timing_setup_init, "timing_setup_init");
     @export_symbol(ptr_timing_rho_check, "timing_rho_check");
+    @export_symbol(ptr_timing_communication, "timing_communication");
+    @export_symbol(ptr_timing_compute, "timing_compute");
     @export_symbol(ptr_time_ref, "time_ref");
     @export_symbol(ptr_time_total_start_end, "time_total_start_end");
     @export_symbol(ptr_time_h2d, "time_h2d");

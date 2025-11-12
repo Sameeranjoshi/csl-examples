@@ -331,7 +331,7 @@ def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
 
     return u_wse_1d, r_wse_1d, total_bytes
 
-def copy_timing_data(height, width, levels, simulator, symbol_timing_smooth, symbol_timing_apply_op, symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, symbol_timing_setup_init, symbol_timing_rho_check, symbol_time_total_start_end, symbol_time_h2d, symbol_time_d2h, symbol_time_ref, args):
+def copy_timing_data(height, width, levels, simulator, symbol_timing_smooth, symbol_timing_apply_op, symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, symbol_timing_setup_init, symbol_timing_rho_check, symbol_time_total_start_end, symbol_time_h2d, symbol_time_d2h, symbol_time_ref, symbol_timing_communication, symbol_timing_compute, args):
     """Copy timing data from device"""
     timing_smooth_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_smooth, WORDS_PER_TIMESTAMP)
     timing_residual_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_residual, WORDS_PER_TIMESTAMP)
@@ -340,13 +340,15 @@ def copy_timing_data(height, width, levels, simulator, symbol_timing_smooth, sym
     timing_interp_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_interp, WORDS_PER_TIMESTAMP)
     timing_setup_init_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_setup_init, WORDS_PER_TIMESTAMP)
     timing_rho_check_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_rho_check, WORDS_PER_TIMESTAMP)
+    timing_communication_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_communication, WORDS_PER_TIMESTAMP)
+    timing_compute_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_compute, WORDS_PER_TIMESTAMP)
     # EXTRA TIMES
     time_total_start_end_hwl = copy_timing(height, width, 1, simulator, symbol_time_total_start_end, WORDS_PER_START_END)    # Not level based
     time_h2d_hwl = copy_timing(height, width, 1, simulator, symbol_time_h2d, WORDS_PER_TIMESTAMP)    # Not level based
     time_d2h_hwl = copy_timing(height, width, 1, simulator, symbol_time_d2h, WORDS_PER_TIMESTAMP)    # Not level based
     time_ref_hwl = copy_timing(height, width, 1, simulator, symbol_time_ref, WORDS_PER_TIMESTAMP)    # Not level based
     
-    return timing_smooth_hwl, timing_residual_hwl, timing_apply_op_hwl, timing_restrict_hwl, timing_interp_hwl, timing_setup_init_hwl, timing_rho_check_hwl, time_total_start_end_hwl, time_h2d_hwl, time_d2h_hwl, time_ref_hwl
+    return timing_smooth_hwl, timing_residual_hwl, timing_apply_op_hwl, timing_restrict_hwl, timing_interp_hwl, timing_setup_init_hwl, timing_rho_check_hwl, time_total_start_end_hwl, time_h2d_hwl, time_d2h_hwl, time_ref_hwl, timing_communication_hwl, timing_compute_hwl
 
 def copy_counters(height, width, levels, simulator, symbol_counter):
     """Copy operation counter data from device"""
@@ -418,6 +420,7 @@ def profiling(
     timing_restrict_hwl_levels, timing_interp_hwl_levels,
     timing_setup_init_hwl_levels, timing_rho_check_hwl_levels,
     time_total_start_end_hwl, time_h2d_hwl, time_d2h_hwl, time_ref_hwl,
+    timing_communication_hwl_levels, timing_compute_hwl_levels,
     counter_smooth, counter_residual, counter_restrict, counter_interp, counter_setup_init, counter_rho_check,
     WORDS_PER_TIMESTAMP, WORDS_PER_START_END, total_bytes_h2d, total_bytes_d2h
     ):
@@ -433,10 +436,13 @@ def profiling(
     timing_interp_data = process_timing_data(height, width, args.levels, timing_interp_hwl_levels, time_ref_hwl, "interpolation", counter_interp, False, WORDS_PER_TIMESTAMP)
     timing_setup_init_data = process_timing_data(height, width, args.levels, timing_setup_init_hwl_levels, time_ref_hwl, "setup_init", counter_setup_init, False, WORDS_PER_TIMESTAMP)
     timing_rho_check_data = process_timing_data(height, width, args.levels, timing_rho_check_hwl_levels, time_ref_hwl, "rho_check", counter_rho_check, False, WORDS_PER_TIMESTAMP)
-    counter_total = np.array([1]) # Because we have only 1 level
-    timing_total_start_end_data = process_timing_data(height, width, 1, time_total_start_end_hwl, time_ref_hwl, "total", counter_total, False, WORDS_PER_TIMESTAMP)
-    timing_h2d_data = process_timing_data(height, width, 1, time_h2d_hwl, time_ref_hwl, "h2d", counter_total, False, WORDS_PER_TIMESTAMP)
-    timing_d2h_data = process_timing_data(height, width, 1, time_d2h_hwl, time_ref_hwl, "d2h", counter_total, False, WORDS_PER_TIMESTAMP)
+    counter_one = np.array([1]) # Because we have only 1 level
+    ones = np.ones(args.levels, dtype=int)
+    timing_total_start_end_data = process_timing_data(height, width, 1, time_total_start_end_hwl, time_ref_hwl, "total", counter_one, False, WORDS_PER_TIMESTAMP)
+    timing_h2d_data = process_timing_data(height, width, 1, time_h2d_hwl, time_ref_hwl, "h2d", counter_one, False, WORDS_PER_TIMESTAMP)
+    timing_d2h_data = process_timing_data(height, width, 1, time_d2h_hwl, time_ref_hwl, "d2h", counter_one, False, WORDS_PER_TIMESTAMP)
+    timing_communication_data = process_timing_data(height, width, args.levels, timing_communication_hwl_levels, time_ref_hwl, "communication", ones, False, WORDS_PER_TIMESTAMP)
+    timing_compute_data = process_timing_data(height, width, args.levels, timing_compute_hwl_levels, time_ref_hwl, "compute", ones, False, WORDS_PER_TIMESTAMP)
     print("\nTime per operation and level (us[cycles]):")
     operators = [
         ("smooth", timing_smooth_data, counter_smooth),
@@ -445,6 +451,8 @@ def profiling(
         ("interpolation", timing_interp_data, counter_interp),
         ("setup_init", timing_setup_init_data, counter_setup_init),
         ("rho_check", timing_rho_check_data, counter_rho_check),
+        ("communication", timing_communication_data, 1),
+        ("compute", timing_compute_data, 1),
     ]
 
     header_cols = ["level"] + [op[0] for op in operators] + ["total"]
@@ -494,6 +502,59 @@ def profiling(
     print("|" + "|".join(total_row_entries) + "|")
     print(build_divider(header_cols, "="))
 
+    # ------------------------------------------------------------
+    # Compute vs Communication Timing Summary
+    # ------------------------------------------------------------
+    print("\nCompute vs Communication Time per Level (us[cycles]):")
+    compute_comm_header = ["level", "compute", "communication", "sum"]
+    print(build_divider(compute_comm_header, "="))
+    print("|" + "|".join(f"{name:^{col_width}}" for name in compute_comm_header) + "|")
+    print(build_divider(compute_comm_header))
+
+    compute_total_cycles = 0
+    comm_total_cycles = 0
+    compute_total_time = 0.0
+    comm_total_time = 0.0
+
+    for level in range(args.levels):
+        compute_entry = timing_compute_data[level]
+        comm_entry = timing_communication_data[level]
+
+        compute_time = compute_entry["time_send"]
+        comm_time = comm_entry["time_send"]
+        compute_cycles = compute_entry["cycles_send"]
+        comm_cycles = comm_entry["cycles_send"]
+
+        total_time = compute_time + comm_time
+        total_cycles = compute_cycles + comm_cycles
+
+        compute_total_cycles += compute_cycles
+        comm_total_cycles += comm_cycles
+        compute_total_time += compute_time
+        comm_total_time += comm_time
+
+        row = [
+            f"{level:^{col_width}}",
+            f"{compute_time:6.3f}us({compute_cycles:7.0f})".center(col_width),
+            f"{comm_time:6.3f}us({comm_cycles:7.0f})".center(col_width),
+            f"{total_time:6.3f}us({total_cycles:7.0f})".center(col_width)
+        ]
+        print("|" + "|".join(row) + "|")
+        print(build_divider(compute_comm_header))
+
+    # Totals across all levels
+    total_time_sum = compute_total_time + comm_total_time
+    total_cycles_sum = compute_total_cycles + comm_total_cycles
+    total_row = [
+        f"{'total':^{col_width}}",
+        f"{compute_total_time:6.3f}us({compute_total_cycles:7.0f})".center(col_width),
+        f"{comm_total_time:6.3f}us({comm_total_cycles:7.0f})".center(col_width),
+        f"{total_time_sum:6.3f}us({total_cycles_sum:7.0f})".center(col_width)
+    ]
+    print("|" + "|".join(total_row) + "|")
+    print(build_divider(compute_comm_header, "="))
+
+    
     print("\nOperation counts per level:")
     count_header_cols = ["level"] + [op[0] for op in operators]
     print(build_divider(count_header_cols, "="))
@@ -602,6 +663,8 @@ def main():
     symbol_timing_interp = simulator.get_id("timing_interp")
     symbol_timing_setup_init = simulator.get_id("timing_setup_init")
     symbol_timing_rho_check = simulator.get_id("timing_rho_check")
+    symbol_timing_communication = simulator.get_id("timing_communication")
+    symbol_timing_compute = simulator.get_id("timing_compute")
     symbol_time_ref = simulator.get_id("time_ref")
     symbol_time_total_start_end = simulator.get_id("time_total_start_end")
     symbol_time_h2d = simulator.get_id("time_h2d")
@@ -672,10 +735,10 @@ def main():
     print("  6.2. Copying timing data...")
     timing_smooth_hwl_levels, timing_residual_hwl_levels, timing_apply_op_hwl_levels, \
         timing_restrict_hwl_levels, timing_interp_hwl_levels, timing_setup_init_hwl_levels, timing_rho_check_hwl_levels, \
-            time_total_start_end_hwl, time_h2d_hwl, time_d2h_hwl, time_ref_hwl = \
+            time_total_start_end_hwl, time_h2d_hwl, time_d2h_hwl, time_ref_hwl, timing_communication_hwl_levels, timing_compute_hwl_levels = \
             copy_timing_data(height, width, args.levels, simulator, symbol_timing_smooth, symbol_timing_apply_op, 
                              symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, 
-                             symbol_timing_setup_init, symbol_timing_rho_check, symbol_time_total_start_end, symbol_time_h2d, symbol_time_d2h, symbol_time_ref, args)
+                             symbol_timing_setup_init, symbol_timing_rho_check, symbol_time_total_start_end, symbol_time_h2d, symbol_time_d2h, symbol_time_ref, symbol_timing_communication, symbol_timing_compute, args)
     print("  6.3. Copying operation counters...")
     counter_smooth, counter_residual, counter_apply_op, counter_restrict, counter_interp, counter_setup_init, counter_rho_check = \
         copy_counter_data(height, width, args.levels, simulator, 
@@ -744,6 +807,7 @@ def main():
         timing_restrict_hwl_levels, timing_interp_hwl_levels,
         timing_setup_init_hwl_levels, timing_rho_check_hwl_levels,
         time_total_start_end_hwl, time_h2d_hwl, time_d2h_hwl, time_ref_hwl,
+        timing_communication_hwl_levels, timing_compute_hwl_levels,
         counter_smooth, counter_residual, counter_restrict, counter_interp, counter_setup_init, counter_rho_check,
         WORDS_PER_TIMESTAMP, WORDS_PER_START_END, total_bytes_h2d, total_bytes_d2h)
     print_configuration_summary(
