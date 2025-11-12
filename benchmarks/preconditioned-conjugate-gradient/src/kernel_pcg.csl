@@ -36,7 +36,7 @@ const blas_lib = @import_module("blas.csl");
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
 
 // allreduce uses input queue/output queue 1
-const reduce_mod = @import_module( "../../csl-libs/allreduce/pe.csl", @concat_structs(reduceParams, .{
+const reduce_mod = @import_module( "./csl-libs/allreduce/pe.csl", @concat_structs(reduceParams, .{
      .f_callback = f_trigger_state_machine,
      .queues = [1]u16{2},
      .dest_dsr_ids = [1]u16{1},
@@ -45,7 +45,7 @@ const reduce_mod = @import_module( "../../csl-libs/allreduce/pe.csl", @concat_st
      }));
 
 // output queue cannot overlap input queues
-const stencil_mod = @import_module( "../../csl-libs/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
+const stencil_mod = @import_module( "./csl-libs/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
      .f_callback = f_trigger_state_machine,
      .input_queues = [4]u16{4, 5, 6, 7},
      .output_queues = if (@is_arch("wse3")) [4]u16{4, 5, 6, 7} else [1]u16{3},
