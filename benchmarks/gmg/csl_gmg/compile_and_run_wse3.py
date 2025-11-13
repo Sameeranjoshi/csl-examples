@@ -5,6 +5,11 @@ from cerebras.sdk.client import SdkCompiler
 from cerebras.sdk.client import SdkLauncher
 import glob
 import shutil
+import json
+import logging
+from cerebras.appliance import logger
+logging.basicConfig(level=logging.DEBUG)
+
 ###############################################################################
 #### Parameters
 ###############################################################################
@@ -16,23 +21,26 @@ parser = argparse.ArgumentParser(description="Compile and run GMG V-cycle for WS
 parser.add_argument('--size', type=int, default=8, help='Grid size (default: 8)')
 parser.add_argument('--levels', type=int, default=2, help='Number of levels (default: 2)')
 parser.add_argument('--channels', type=int, default=5, help='Number of channels (default: 5)')
-
 args = parser.parse_args()
 size = args.size
 levels = args.levels
 channels = args.channels
 
 
+###############################################################################
 # More or less doesn't change
 out_path = f"out_dir_{size}x{size}x{size}_L{levels}_C{channels}"
 os.makedirs(out_path, exist_ok=True)
+###############################################################################
 layout_file = "./src/layout_gmg_vcycle.csl"
 Compile_command = f"--arch=wse3 --fabric-dims=762,1172 --fabric-offsets=4,1 --params=width:{size},height:{size},MAX_ZDIM:{size},LEVELS:{levels} \
     --params=BLOCK_SIZE:{size} --memcpy --channels={channels} \
     --width-west-buf=0 --width-east-buf=0 -o out_vcycle --max-inlined-iterations=1000000"
 Run_command = f"cs_python run_gmg_vcycle.py -m={size} -n={size} -k={size} --latestlink out_vcycle --channels={channels} \
---width-west-buf=0 --width-east-buf=0 --zDim={size} --run-only --levels={levels} --max-ite=1 --cmaddr=%CMADDR%"
-
+--width-west-buf=0 --width-east-buf=0 --zDim={size} --run-only --levels={levels} --max-ite=1 --cmaddr %CMADDR%"
+###############################################################################
+print(f"Compile command: {Compile_command}")
+print(f"Run command: {Run_command}")
 # write into reponse.txt file
 with open(f"./{out_path}/response.txt", "w") as f:
     f.write(f"########################################################\n")
@@ -45,7 +53,7 @@ with open(f"./{out_path}/response.txt", "w") as f:
 ###############################################################################
 # Time the compilation process
 compile_start = time.time()
-with SdkCompiler(resource_cpu=48000, resource_mem=64<<30, disable_version_check=True) as compiler:
+with SdkCompiler(disable_version_check=True) as compiler:
     artifact_path = compiler.compile(
         app_path=".",
         csl_main=layout_file,
@@ -54,14 +62,11 @@ with SdkCompiler(resource_cpu=48000, resource_mem=64<<30, disable_version_check=
     )
 compile_end = time.time()
 compile_duration = compile_end - compile_start
-###############################################################################
-#### RUNNING
-###############################################################################
+
+# ###############################################################################
+# #### RUNNING
+# ###############################################################################
 print(f"Artifact path: {artifact_path}")
-# artifact_path contains the path to the compiled artifact.
-# It will be transferred and extracted in the appliance.
-# The extracted directory will be the working directory.
-# Set simulator=False if running on CS system within appliance.
 
 with SdkLauncher(artifact_path, simulator=False, disable_version_check=True) as launcher:
 
@@ -69,12 +74,15 @@ with SdkLauncher(artifact_path, simulator=False, disable_version_check=True) as 
     files_to_stage = [
         "cmd_parser.py",
         "run_gmg_vcycle.py",
-        "util.py",
+        "util.py"
     ]
     # stage the entire python_gmg directory to preserve directory structure
     files_to_stage.append("python_gmg")
     for file_to_stage in files_to_stage:
         launcher.stage(file_to_stage)
+
+    print("Staged files on appliance")
+    print("printing inside the appliance ----------------------------------------")
     response = launcher.run(
         "pwd",
         "ls",
@@ -82,19 +90,20 @@ with SdkLauncher(artifact_path, simulator=False, disable_version_check=True) as 
     )
     print("Test response: ", response)
 
-    # run now.
+    print("Running host code on appliance ----------------------------------------")
     run_start = time.time()
     response = launcher.run(Run_command)
     run_end = time.time()
     print("Host code execution response: ", response)
+    print("Run completed on appliance ----------------------------------------")
 
-    # cleanup and files
-    # launcher.download_artifact("../sim.log", f"./{out_path}/sim.log")
+    print("Cleaning up and files on appliance ----------------------------------------")
+    launcher.download_artifact("../sim.log", f"./{out_path}/sim.log")
     # launcher.download_artifact("simfab_traces", f"./{out_path}")  # takes too long to download
     with open(f"./{out_path}/response.txt", "w") as f:
         f.write(response)
-    # os.rename("python_gmg.tar.gz", f"./{out_path}/python_gmg.tar.gz")
-    # os.rename("run_meta.json", f"./{out_path}/run_meta.json")
+    os.rename("python_gmg.tar.gz", f"./{out_path}/python_gmg.tar.gz")
+    os.rename("run_meta.json", f"./{out_path}/run_meta.json")
     for file in glob.glob("wsjob-*.json"):
         shutil.move(file, f"./{out_path}/")
 
