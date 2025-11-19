@@ -96,11 +96,12 @@ const TIMER_ID_COMP_COMM_TOTAL: i16 = 11;
 fn compute_total_gmg_size() i16 {
     var total: i16 = 0;
     var level: i16 = 0;
-    var factor: u16 = 1;  // Start with 2^0 = 1
+
+    // geometric series: z + z/2 + z/4 + ... for LEVELS terms
     while (level < LEVELS) : (level += 1) {
-        total += MAX_ZDIM / @as(i16, factor);
-        factor *= 2;  // Double the factor: 1, 2, 4, 8, ...
+        total += @as(i16, @as(u16, MAX_ZDIM) >> level);
     }
+
     return total;
 }
 
@@ -570,13 +571,15 @@ fn f_init_spmv_and_reduce(level_id: u16) void {
 fn f_setup_level(level_id: u16, down: i16) void {
     counter_setup_init[current_level] += 1;
     save_timestamp_start(TIMER_ID_SETUP_INIT);
-    // save_timestamp_start(TIMER_ID_COMPUTE);
+    save_timestamp_start(TIMER_ID_COMPUTE);
 
 
     var const_2: f16 = 2.0;
-    factor = @as(u16, math_lib.pow(const_2, @as(f16, level_id)));
-    n = MAX_ZDIM/@as(i16, factor);    // zdim/1 --> zdim/2 --> zdim/4 --> ...
+    // factor = @as(u16, math_lib.pow(const_2, @as(f16, level_id)));
+    // n = MAX_ZDIM/@as(i16, factor);    // zdim/1 --> zdim/2 --> zdim/4 --> ...
+    n = @as(i16, @as(u16, MAX_ZDIM) >> level_id);    // zdim/1 --> zdim/2 --> zdim/4 --> ...
     // print n
+    // simprint.fmt("LEVEL_ID: {d}, FACTOR: {d}, N: {d}", .{@as(u16, level_id), @as(u16, factor), @as(u16, n)});
     current_level_id = level_id;
     hx_level = hx_array[level_id];
     hy_level = hy_array[level_id];
@@ -591,12 +594,12 @@ fn f_setup_level(level_id: u16, down: i16) void {
     
     // Setup save arrays - compute offset as sum of sizes of all previous levels
     // This implements the geometric series: zdim + zdim/2 + zdim/4 + ...
+
     var start_idx: i16 = 0;
     var temp_level: u16 = 0;
-    var temp_factor: u16 = 1;  // Start with factor = 1 for level 0
+    // Using right-shifts instead of division.
     while (temp_level < current_level_id) : (temp_level += 1) {
-        start_idx += MAX_ZDIM / @as(i16, temp_factor);
-        temp_factor *= 2;  // Double the factor: 1, 2, 4, 8, ...
+        start_idx += @as(i16, @as(u16, MAX_ZDIM) >> temp_level);    // sums up the index as per the data structure used
     }
     
     mem_save_u_smooth_dsd = @set_dsd_base_addr(mem_save_u_smooth_dsd, &save_u_smooth);
@@ -638,7 +641,7 @@ fn f_setup_level(level_id: u16, down: i16) void {
     
     @fmovs(mem_r_dsd, 0.0);
 
-    // save_timestamp_end(current_level, &timing_compute, TIMER_ID_COMPUTE);
+    save_timestamp_end(current_level, &timing_compute, TIMER_ID_COMPUTE);
     save_timestamp_end(current_level, &timing_setup_init, TIMER_ID_SETUP_INIT);
 }
 
