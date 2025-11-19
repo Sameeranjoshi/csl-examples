@@ -701,7 +701,7 @@ def main():
 # Kernel launch
 ############################################################
     print("3. Synchronizing PEs for timing...")
-    simulator.launch("f_sync", nonblock=False)
+    # simulator.launch("f_sync", nonblock=False)
     
     print("4. Copying reference clock...")
     simulator.launch("f_reference_timestamps", nonblock=False)

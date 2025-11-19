@@ -8,7 +8,7 @@ import shutil
 import json
 import logging
 from cerebras.appliance import logger
-logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.INFO)
 
 ###############################################################################
 #### Parameters
@@ -37,7 +37,7 @@ Compile_command = f"--arch=wse3 --fabric-dims=762,1172 --fabric-offsets=4,1 --pa
     --params=BLOCK_SIZE:{size} --memcpy --channels={channels} \
     --width-west-buf=0 --width-east-buf=0 -o out_vcycle --max-inlined-iterations=1000000"
 Run_command = f"cs_python run_gmg_vcycle.py -m={size} -n={size} -k={size} --latestlink out_vcycle --channels={channels} \
---width-west-buf=0 --width-east-buf=0 --zDim={size} --run-only --levels={levels} --max-ite=1 --cmaddr %CMADDR%"
+--width-west-buf=0 --width-east-buf=0 --zDim={size} --run-only --levels={levels} --max-ite=1 --pre-iter=1 --cmaddr %CMADDR%"
 ###############################################################################
 print(f"Compile command: {Compile_command}")
 print(f"Run command: {Run_command}")
