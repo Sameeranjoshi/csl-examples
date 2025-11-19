@@ -12,7 +12,7 @@ param MAX_ZDIM: i16;
 param BLOCK_SIZE: i16;
 param LEVELS: i16;
 param STATE: local_task_id;
-param STATE_TESTING: local_task_id;
+
 //-------------------------------------------------
 // LIBRARIES and STATE MACHINE STATES
 //-------------------------------------------------
@@ -71,7 +71,6 @@ const STATE_CONV_CHECK: i16 = 24;  // Convergence check after V-cycle
 const STATE_CALC_RHO: i16 = 25;  // Calculate rho = |r|^2
 const STATE_RESIDUAL_AFTER_V_CYCLE_APPLY: i16 = 26;  // Apply operator after V-cycle to compute Au
 const STATE_RESIDUAL_AFTER_V_CYCLE_COMPUTE: i16 = 27;  // Compute residual after V-cycle
-const STATE_TESTING_SETUP: i16 = 28;  // Testing setup function
 
 // Timer identifiers
 const TIMER_ID_SMOOTH: i16 = 0;
@@ -97,11 +96,12 @@ const TIMER_ID_COMP_COMM_TOTAL: i16 = 11;
 fn compute_total_gmg_size() i16 {
     var total: i16 = 0;
     var level: i16 = 0;
-    var factor: u16 = 1;  // Start with 2^0 = 1
+
+    // geometric series: z + z/2 + z/4 + ... for LEVELS terms
     while (level < LEVELS) : (level += 1) {
-        total += MAX_ZDIM / @as(i16, factor);
-        factor *= 2;  // Double the factor: 1, 2, 4, 8, ...
+        total += @as(i16, @as(u16, MAX_ZDIM) >> level);
     }
+
     return total;
 }
 
@@ -569,80 +569,80 @@ fn f_init_spmv_and_reduce(level_id: u16) void {
 }
 
 fn f_setup_level(level_id: u16, down: i16) void {
-    // counter_setup_init[current_level] += 1;
-    // save_timestamp_start(TIMER_ID_SETUP_INIT);
-    // save_timestamp_start(TIMER_ID_COMPUTE);
+    counter_setup_init[current_level] += 1;
+    save_timestamp_start(TIMER_ID_SETUP_INIT);
+    save_timestamp_start(TIMER_ID_COMPUTE);
 
 
     var const_2: f16 = 2.0;
-    factor = @as(u16, math_lib.pow(const_2, @as(f16, level_id)));
-    n = MAX_ZDIM/@as(i16, factor);    // zdim/1 --> zdim/2 --> zdim/4 --> ...
-    // n = @as(i16, @as(u16, MAX_ZDIM) >> level_id);    // zdim/1 --> zdim/2 --> zdim/4 --> ...
+    // factor = @as(u16, math_lib.pow(const_2, @as(f16, level_id)));
+    // n = MAX_ZDIM/@as(i16, factor);    // zdim/1 --> zdim/2 --> zdim/4 --> ...
+    n = @as(i16, @as(u16, MAX_ZDIM) >> level_id);    // zdim/1 --> zdim/2 --> zdim/4 --> ...
     // print n
-    simprint.fmt("LEVEL_ID: {d}, FACTOR: {d}, N: {d}", .{@as(u16, level_id), @as(u16, factor), @as(u16, n)});
-    // current_level_id = level_id;
-    // hx_level = hx_array[level_id];
-    // hy_level = hy_array[level_id];
-    // hz_level = hz_array[level_id];
+    // simprint.fmt("LEVEL_ID: {d}, FACTOR: {d}, N: {d}", .{@as(u16, level_id), @as(u16, factor), @as(u16, n)});
+    current_level_id = level_id;
+    hx_level = hx_array[level_id];
+    hy_level = hy_array[level_id];
+    hz_level = hz_array[level_id];
     
-    // // Set DSD lengths
-    // mem_u_dsd = @set_dsd_length(mem_u_dsd, @bitcast(u16, n));
-    // mem_f_dsd = @set_dsd_length(mem_f_dsd, @bitcast(u16, n));
-    // mem_r_dsd = @set_dsd_length(mem_r_dsd, @bitcast(u16, n));
-    // mem_Au_dsd = @set_dsd_length(mem_Au_dsd, @bitcast(u16, n));
-    // mem_residual_temp_dsd = @set_dsd_length(mem_residual_temp_dsd, @bitcast(u16, n));
+    // Set DSD lengths
+    mem_u_dsd = @set_dsd_length(mem_u_dsd, @bitcast(u16, n));
+    mem_f_dsd = @set_dsd_length(mem_f_dsd, @bitcast(u16, n));
+    mem_r_dsd = @set_dsd_length(mem_r_dsd, @bitcast(u16, n));
+    mem_Au_dsd = @set_dsd_length(mem_Au_dsd, @bitcast(u16, n));
+    mem_residual_temp_dsd = @set_dsd_length(mem_residual_temp_dsd, @bitcast(u16, n));
     
-    // // Setup save arrays - compute offset as sum of sizes of all previous levels
-    // // This implements the geometric series: zdim + zdim/2 + zdim/4 + ...
-    // var start_idx: i16 = 0;
-    // var temp_level: u16 = 0;
-    // var temp_factor: u16 = 1;  // Start with factor = 1 for level 0
-    // while (temp_level < current_level_id) : (temp_level += 1) {
-    //     start_idx += MAX_ZDIM / @as(i16, temp_factor);
-    //     temp_factor *= 2;  // Double the factor: 1, 2, 4, 8, ...
-    // }
-    
-    // mem_save_u_smooth_dsd = @set_dsd_base_addr(mem_save_u_smooth_dsd, &save_u_smooth);
-    // mem_save_u_smooth_dsd = @increment_dsd_offset(mem_save_u_smooth_dsd, start_idx, f32);
-    // mem_save_u_smooth_dsd = @set_dsd_length(mem_save_u_smooth_dsd, @bitcast(u16, n));
-    
-    // mem_save_f_down_dsd = @set_dsd_base_addr(mem_save_f_down_dsd, &save_f_down);
-    // mem_save_f_down_dsd = @increment_dsd_offset(mem_save_f_down_dsd, start_idx, f32);
-    // mem_save_f_down_dsd = @set_dsd_length(mem_save_f_down_dsd, @bitcast(u16, n));
-    
-    // // Update stencil coefficients
-    // const BETA: f32 = 1.0;
-    // const hx_sq: f32 = hx_level * hx_level;
-    // const hy_sq: f32 = hy_level * hy_level;
-    // const hz_sq: f32 = hz_level * hz_level;
-    // const center_coeff: f32 = -2.0 * (1.0 / hx_sq + 1.0 / hy_sq + 1.0 / hz_sq);
-    
-    // stencil_coeff[0] = BETA / hx_sq;
-    // stencil_coeff[1] = BETA / hx_sq;
-    // stencil_coeff[2] = BETA / hy_sq;
-    // stencil_coeff[3] = BETA / hy_sq;
-    // stencil_coeff[4] = BETA / hz_sq;
-    // stencil_coeff[5] = BETA / hz_sq;
-    // stencil_coeff[6] = center_coeff;
-    
-    // f_init_spmv_and_reduce(current_level_id);
-    
-    // if (down == 1) {
-    //     // Only reset u to 0 if we're not at level 0, or if we're at level 0 and it's the first iteration (k == 0)
-    //     // At level 0, for subsequent iterations, we want to preserve the solution from the previous iteration
-    //     if (level_id != 0) {
-    //         @fmovs(mem_u_dsd, 0.0);
-    //     }
-    //     @fmovs(mem_save_f_down_dsd, mem_f_dsd);  // Save current f (RHS for this level)
-    // } else {
-    //     // Up cycle: restore the f values saved during down cycle
-    //     @fmovs(mem_f_dsd, mem_save_f_down_dsd);
-    // }
-    
-    // @fmovs(mem_r_dsd, 0.0);
+    // Setup save arrays - compute offset as sum of sizes of all previous levels
+    // This implements the geometric series: zdim + zdim/2 + zdim/4 + ...
 
-    // save_timestamp_end(current_level, &timing_compute, TIMER_ID_COMPUTE);
-    // save_timestamp_end(current_level, &timing_setup_init, TIMER_ID_SETUP_INIT);
+    var start_idx: i16 = 0;
+    var temp_level: u16 = 0;
+    // Using right-shifts instead of division.
+    while (temp_level < current_level_id) : (temp_level += 1) {
+        start_idx += @as(i16, @as(u16, MAX_ZDIM) >> temp_level);    // sums up the index as per the data structure used
+    }
+    
+    mem_save_u_smooth_dsd = @set_dsd_base_addr(mem_save_u_smooth_dsd, &save_u_smooth);
+    mem_save_u_smooth_dsd = @increment_dsd_offset(mem_save_u_smooth_dsd, start_idx, f32);
+    mem_save_u_smooth_dsd = @set_dsd_length(mem_save_u_smooth_dsd, @bitcast(u16, n));
+    
+    mem_save_f_down_dsd = @set_dsd_base_addr(mem_save_f_down_dsd, &save_f_down);
+    mem_save_f_down_dsd = @increment_dsd_offset(mem_save_f_down_dsd, start_idx, f32);
+    mem_save_f_down_dsd = @set_dsd_length(mem_save_f_down_dsd, @bitcast(u16, n));
+    
+    // Update stencil coefficients
+    const BETA: f32 = 1.0;
+    const hx_sq: f32 = hx_level * hx_level;
+    const hy_sq: f32 = hy_level * hy_level;
+    const hz_sq: f32 = hz_level * hz_level;
+    const center_coeff: f32 = -2.0 * (1.0 / hx_sq + 1.0 / hy_sq + 1.0 / hz_sq);
+    
+    stencil_coeff[0] = BETA / hx_sq;
+    stencil_coeff[1] = BETA / hx_sq;
+    stencil_coeff[2] = BETA / hy_sq;
+    stencil_coeff[3] = BETA / hy_sq;
+    stencil_coeff[4] = BETA / hz_sq;
+    stencil_coeff[5] = BETA / hz_sq;
+    stencil_coeff[6] = center_coeff;
+    
+    f_init_spmv_and_reduce(current_level_id);
+    
+    if (down == 1) {
+        // Only reset u to 0 if we're not at level 0, or if we're at level 0 and it's the first iteration (k == 0)
+        // At level 0, for subsequent iterations, we want to preserve the solution from the previous iteration
+        if (level_id != 0) {
+            @fmovs(mem_u_dsd, 0.0);
+        }
+        @fmovs(mem_save_f_down_dsd, mem_f_dsd);  // Save current f (RHS for this level)
+    } else {
+        // Up cycle: restore the f values saved during down cycle
+        @fmovs(mem_f_dsd, mem_save_f_down_dsd);
+    }
+    
+    @fmovs(mem_r_dsd, 0.0);
+
+    save_timestamp_end(current_level, &timing_compute, TIMER_ID_COMPUTE);
+    save_timestamp_end(current_level, &timing_setup_init, TIMER_ID_SETUP_INIT);
 }
 
 // ------------------------------------------------
@@ -667,8 +667,7 @@ fn f_gmg_vcycle(levels: i16, pre_iter: i16, post_iter: i16, bottom_iter: i16, ma
     
     current_level = 0;
     cur_state = STATE_INIT;
-    // @activate(STATE);
-    @activate(STATE_TESTING);
+    @activate(STATE);
 }
 
 // ------------------------------------------------
@@ -677,28 +676,6 @@ fn f_gmg_vcycle(levels: i16, pre_iter: i16, post_iter: i16, bottom_iter: i16, ma
 fn f_trigger_state_machine() void {
     cur_state = next_state;
     @activate(STATE);
-}
-
-fn f_trigger_testing_machine() void {
-    cur_state = next_state;
-    @activate(STATE_TESTING);
-}
-
-task testing_machine() void {
-    if (STATE_INIT == cur_state) {
-        f_setup_level(@as(u16, current_level), 1);
-        next_state = STATE_EXIT;
-        f_trigger_testing_machine();
-    }
-    else if (STATE_EXIT == cur_state) {
-        sys_mod.unblock_cmd_stream();
-        
-    } else {
-        @assert(false); // Error: unknown state
-        // assert() is ignored by HW, it could hang here
-        // To avoid a stall, trigger callback (the caveat is the wrong result)
-        sys_mod.unblock_cmd_stream();
-    }
 }
 
 task f_state() void {
@@ -951,7 +928,6 @@ task f_state() void {
 // ------------------------------------------------
 comptime {
     @bind_local_task(f_state, STATE);
-    @bind_local_task(testing_machine, STATE_TESTING);
 }
 
 comptime {

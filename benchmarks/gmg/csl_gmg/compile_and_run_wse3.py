@@ -37,7 +37,7 @@ Compile_command = f"--arch=wse3 --fabric-dims=762,1172 --fabric-offsets=4,1 --pa
     --params=BLOCK_SIZE:{size} --memcpy --channels={channels} \
     --width-west-buf=0 --width-east-buf=0 -o out_vcycle --max-inlined-iterations=1000000"
 Run_command = f"cs_python run_gmg_vcycle.py -m={size} -n={size} -k={size} --latestlink out_vcycle --channels={channels} \
---width-west-buf=0 --width-east-buf=0 --zDim={size} --run-only --levels={levels} --max-ite=1 --pre-iter=1 --cmaddr %CMADDR%"
+--width-west-buf=0 --width-east-buf=0 --zDim={size} --run-only --levels={levels} --max-ite=100 --cmaddr %CMADDR%"
 ###############################################################################
 print(f"Compile command: {Compile_command}")
 print(f"Run command: {Run_command}")
@@ -98,12 +98,12 @@ with SdkLauncher(artifact_path, simulator=False, disable_version_check=True) as 
     print("Run completed on appliance ----------------------------------------")
 
     print("Cleaning up and files on appliance ----------------------------------------")
-    launcher.download_artifact("../sim.log", f"./{out_path}/sim.log")
+    # launcher.download_artifact("../sim.log", f"./{out_path}/sim.log")
     # launcher.download_artifact("simfab_traces", f"./{out_path}")  # takes too long to download
     with open(f"./{out_path}/response.txt", "w") as f:
         f.write(response)
-    os.rename("python_gmg.tar.gz", f"./{out_path}/python_gmg.tar.gz")
-    os.rename("run_meta.json", f"./{out_path}/run_meta.json")
+    # os.rename("python_gmg.tar.gz", f"./{out_path}/python_gmg.tar.gz")
+    # os.rename("run_meta.json", f"./{out_path}/run_meta.json")
     for file in glob.glob("wsjob-*.json"):
         shutil.move(file, f"./{out_path}/")
 

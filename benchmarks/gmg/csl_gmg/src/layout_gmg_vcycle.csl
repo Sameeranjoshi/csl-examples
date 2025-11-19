@@ -32,7 +32,6 @@ const C8: color = @get_color(8);
 
 // State machine entrypoint
 const STATE: local_task_id = @get_local_task_id(12);
-const STATE_TESTING: local_task_id = @get_local_task_id(13);
 
 // Stencil entrypoints
 const EN_STENCIL_1: local_task_id = @get_local_task_id(14);
@@ -83,7 +82,6 @@ layout{
                 .stencilParams = stencilParams,
                 .LEVELS = LEVELS,
                 .STATE = STATE,
-                .STATE_TESTING = STATE_TESTING
             };
 
             @set_tile_code(px, py, "kernel_gmg_vcycle.csl", params);
