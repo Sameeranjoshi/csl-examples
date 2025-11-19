@@ -729,25 +729,25 @@ def main():
     simulator.launch("f_toc_d2h", nonblock=False)
     u_wse_3d = oned_to_hwl_colmajor(height, width, zDim, u_wse_1d, DTYPE)
 
-    # Copy timing data from device
-    print("  6.2. Copying timing data...")
-    timing_smooth_hwl_levels, timing_residual_hwl_levels, timing_apply_op_hwl_levels, \
-        timing_restrict_hwl_levels, timing_interp_hwl_levels, timing_setup_init_hwl_levels, timing_rho_check_hwl_levels, \
-            time_total_start_end_hwl, time_h2d_hwl, time_d2h_hwl, time_ref_hwl, timing_communication_hwl_levels, timing_compute_hwl_levels = \
-            copy_timing_data(height, width, args.levels, simulator, symbol_timing_smooth, symbol_timing_apply_op, 
-                             symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, 
-                             symbol_timing_setup_init, symbol_timing_rho_check, symbol_time_total_start_end, symbol_time_h2d, symbol_time_d2h, symbol_time_ref, symbol_timing_communication, symbol_timing_compute, args)
-    print("  6.3. Copying operation counters...")
-    counter_smooth, counter_residual, counter_apply_op, counter_restrict, counter_interp, counter_setup_init, counter_rho_check = \
-        copy_counter_data(height, width, args.levels, simulator, 
-                         symbol_counter_smooth, symbol_counter_residual, 
-                         symbol_counter_apply_op, symbol_counter_restrict, 
-                         symbol_counter_interp, symbol_counter_setup_init, symbol_counter_rho_check, args)
-    # Copy rho (convergence metric) from device
-    print("  6.4. Copying final rho from device...")
-    rho_wse = np.zeros(1, np.float32)
-    simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1, streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
-    rho_device = rho_wse[0]
+    # # Copy timing data from device
+    # print("  6.2. Copying timing data...")
+    # timing_smooth_hwl_levels, timing_residual_hwl_levels, timing_apply_op_hwl_levels, \
+    #     timing_restrict_hwl_levels, timing_interp_hwl_levels, timing_setup_init_hwl_levels, timing_rho_check_hwl_levels, \
+    #         time_total_start_end_hwl, time_h2d_hwl, time_d2h_hwl, time_ref_hwl, timing_communication_hwl_levels, timing_compute_hwl_levels = \
+    #         copy_timing_data(height, width, args.levels, simulator, symbol_timing_smooth, symbol_timing_apply_op, 
+    #                          symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, 
+    #                          symbol_timing_setup_init, symbol_timing_rho_check, symbol_time_total_start_end, symbol_time_h2d, symbol_time_d2h, symbol_time_ref, symbol_timing_communication, symbol_timing_compute, args)
+    # print("  6.3. Copying operation counters...")
+    # counter_smooth, counter_residual, counter_apply_op, counter_restrict, counter_interp, counter_setup_init, counter_rho_check = \
+    #     copy_counter_data(height, width, args.levels, simulator, 
+    #                      symbol_counter_smooth, symbol_counter_residual, 
+    #                      symbol_counter_apply_op, symbol_counter_restrict, 
+    #                      symbol_counter_interp, symbol_counter_setup_init, symbol_counter_rho_check, args)
+    # # Copy rho (convergence metric) from device
+    # print("  6.4. Copying final rho from device...")
+    # rho_wse = np.zeros(1, np.float32)
+    # simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1, streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    # rho_device = rho_wse[0]
 
 ############################################################
 # Stop simulator
@@ -755,7 +755,7 @@ def main():
     print("7. Stopping simulator...")
     simulator.stop()
     device_solver.grids[0]['u'] = u_wse_3d
-    device_solver.grids[0]['rho_up'] = rho_device
+    # device_solver.grids[0]['rho_up'] = rho_device
 
 ############################################################
 # Verification
