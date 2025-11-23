@@ -34,11 +34,11 @@ os.makedirs(out_path, exist_ok=True)
 ###############################################################################
 layout_file = "./src/layout_gmg_vcycle.csl"
 if size > 256:
-    BSIZE = size // 2
-    INLINE_THRESHOLD = 0    # Don't inline
+    BSIZE = size // 2           # data segment
 else:
     BSIZE = size
-    INLINE_THRESHOLD = 256    # Inline
+
+INLINE_THRESHOLD = 256    # inline always good for speed, # code segment
 
 Compile_command = f"--arch=wse3 --fabric-dims=762,1172 --fabric-offsets=4,1 --params=width:{size},height:{size},MAX_ZDIM:{size},LEVELS:{levels} \
     --params=BLOCK_SIZE:{BSIZE} --memcpy --channels={channels} \

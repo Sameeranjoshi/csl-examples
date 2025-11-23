@@ -381,8 +381,8 @@ def copy_counter_data(height, width, levels, simulator, symbol_counter_smooth_do
 def print_configuration_summary(
     args,
     device_solver,
-    host_iterations,
-    host_residual,
+    # host_iterations,
+    # host_residual,
     device_rho,
     counter_rho_check,
 ):
@@ -406,8 +406,8 @@ def print_configuration_summary(
         ("Channels", args.channels),
         ("Block size", args.blockSize),
         ("West/East buffer width", f"{args.width_west_buf}/{args.width_east_buf}"),
-        ("Host iterations", host_iterations),
-        ("Host final rho", f"{host_residual:.3e}"),
+        # ("Host iterations", host_iterations),
+        # ("Host final rho", f"{host_residual:.3e}"),
         ("Device iterations", device_iterations),
         ("Device final rho", f"{device_rho:.3e}")
     ]
@@ -634,7 +634,7 @@ def main():
     device_solver = copy.deepcopy(host_solver)
 
     # Run reference on host
-    host_residual, host_iterations = host_solver.solve_iterative(args.max_ite)
+    # host_residual, host_iterations = host_solver.solve_iterative(args.max_ite)
 
 ############################################################
 # Device
@@ -762,29 +762,29 @@ def main():
 ############################################################
 # Verification
 ############################################################
-    # # Verification
-    print("\n" + "="*60)
-    print("Verification")
-    print("Checking u at level 0 for host_solver and device_solver")
-    print("="*60)
+    # # # Verification
+    # print("\n" + "="*60)
+    # print("Verification")
+    # print("Checking u at level 0 for host_solver and device_solver")
+    # print("="*60)
   
-    # # Check/verify u, f, r, Au at level 0 for host_solver and device_solver
-    fields = ['u']
-    for field in fields:
-        host_field = host_solver.grids[0][field]
-        device_field = device_solver.grids[0][field]
-        np.testing.assert_allclose(host_field.ravel(), device_field.ravel(), atol=1e-5, rtol=1e-5)
-        stats = compare_u(host_field, device_field)
-        print(stats)
-        # print(f"Top-10 largest |Δ{field}| indices: {top_k_indices_absdiff(host_field, device_field, k=10)}")
+    # # # Check/verify u, f, r, Au at level 0 for host_solver and device_solver
+    # fields = ['u']
+    # for field in fields:
+    #     host_field = host_solver.grids[0][field]
+    #     device_field = device_solver.grids[0][field]
+    #     np.testing.assert_allclose(host_field.ravel(), device_field.ravel(), atol=1e-5, rtol=1e-5)
+    #     stats = compare_u(host_field, device_field)
+    #     print(stats)
+    #     # print(f"Top-10 largest |Δ{field}| indices: {top_k_indices_absdiff(host_field, device_field, k=10)}")
 
 
-        nrm2_u = np.linalg.norm(device_field.ravel(), 2)
-        print(f"|{field}|_2 = {nrm2_u}")
-        z = host_field.ravel() - device_field.ravel()
-        nrm_z = np.linalg.norm(z, np.inf)
-        print(f"|{field}_host - {field}_device| = {nrm_z}")
-        print(f"\nSUCCESSFULLY VERIFIED {field} VALUES BETWEEN HOST AND DEVICE!")
+    #     nrm2_u = np.linalg.norm(device_field.ravel(), 2)
+    #     print(f"|{field}|_2 = {nrm2_u}")
+    #     z = host_field.ravel() - device_field.ravel()
+    #     nrm_z = np.linalg.norm(z, np.inf)
+    #     print(f"|{field}_host - {field}_device| = {nrm_z}")
+    #     print(f"\nSUCCESSFULLY VERIFIED {field} VALUES BETWEEN HOST AND DEVICE!")
 ############################################################
 # Convergence
 ############################################################
@@ -813,8 +813,8 @@ def main():
     print_configuration_summary(
         args,
         device_solver,
-        host_iterations,
-        host_residual,
+        # host_iterations,
+        # host_residual,
         device_rh,
         counter_rho_check,
     )

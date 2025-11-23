@@ -7,9 +7,9 @@ Compares expected memory usage from CSL code with actual ELF output
 import sys
 
 # Parameters from the compilation
-MAX_ZDIM = 256
-LEVELS = 9
-BLOCK_SIZE = 256
+MAX_ZDIM = 512
+LEVELS = 7
+BLOCK_SIZE = 512
 TSC_SIZE_WORDS = 3  # From timestamp.tsc_size_words
 TIMER_COUNT = 12  # From timer module
 
