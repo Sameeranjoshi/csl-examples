@@ -5,7 +5,7 @@ Demonstrates the Python implementation with various problem sizes
 """
 
 import argparse
-from gmg import SimpleGMG
+# from gmg import SimpleGMG
 from gmgoscar import SimpleGMG as SimpleGMGOSCAR
 import time
 
@@ -35,6 +35,8 @@ def main():
     # Test problems (nx, ny, nz, levels, max_iterations, tolerance, pre_iter, post_iter, bottom_iter)
     problems = [
         (16, 16, 16, 3, 10, 1e-3, 6, 6, 10),   # Small problem
+        (32, 32, 32, 4, 100, 1e-6, 6, 6, 10),   # Small problem
+        (64, 64, 64, 5, 400, 1e-6, 6, 6, 10),   # Medium problem
         # (24, 24, 8, 3, 12, 1e-4, 6, 6, 100),    # Rectangular grid, moderate z
         # (32, 32, 16, 4, 20, 1e-5, 8, 8, 150),   # Medium problem, more levels
         # (32, 32, 32, 4, 20, 1e-6, 6, 6, 100),   # Medium cube
