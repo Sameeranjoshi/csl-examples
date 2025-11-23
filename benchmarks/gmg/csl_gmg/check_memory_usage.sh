@@ -88,7 +88,7 @@ if [ "$SUMMARY" = "false" ]; then
     echo "=============================================="
     SYMBOL_DATA=$($CS_READELF --symbols "$SAMPLE_ELF" 2>&1 | awk '/OBJECT/ && $3 > 0 {print $3, $NF}')
     if [ -n "$SYMBOL_DATA" ]; then
-        echo "$SYMBOL_DATA" | sort -k1,1nr | head -10 | awk '{printf "  %-40s %8s bytes\n", $2, $1}'
+        echo "$SYMBOL_DATA" | sort -k1,1nr | head -20 | awk '{printf "  %-40s %8s bytes\n", $2, $1}'
 
         # Calculate total data symbol size
         TOTAL_DATA_SYMBOLS=$(echo "$SYMBOL_DATA" | awk '{sum += $1} END {print sum}')
@@ -106,7 +106,7 @@ if [ "$SUMMARY" = "false" ]; then
     echo "=============================================="
     SYMBOL_CODE=$($CS_READELF --symbols "$SAMPLE_ELF" 2>&1 | awk '/FUNC/ && $3 > 0 {print $3, $NF}')
     if [ -n "$SYMBOL_CODE" ]; then
-        echo "$SYMBOL_CODE" | sort -k1,1nr | head -10 | awk '{printf "  %-40s %8s bytes\n", $2, $1}'
+        echo "$SYMBOL_CODE" | sort -k1,1nr | head -20 | awk '{printf "  %-40s %8s bytes\n", $2, $1}'
 
         TOTAL_CODE_SYMBOLS=$(echo "$SYMBOL_CODE" | awk '{sum += $1} END {print sum}')
         if [ -n "$TOTAL_CODE_SYMBOLS" ] && [ "$TOTAL_CODE_SYMBOLS" -gt 0 ]; then

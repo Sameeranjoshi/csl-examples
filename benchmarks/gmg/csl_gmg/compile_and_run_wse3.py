@@ -34,8 +34,10 @@ os.makedirs(out_path, exist_ok=True)
 ###############################################################################
 layout_file = "./src/layout_gmg_vcycle.csl"
 Compile_command = f"--arch=wse3 --fabric-dims=762,1172 --fabric-offsets=4,1 --params=width:{size},height:{size},MAX_ZDIM:{size},LEVELS:{levels} \
-    --params=BLOCK_SIZE:{size} --memcpy --channels={channels} \
-    --width-west-buf=0 --width-east-buf=0 -o out_vcycle --max-inlined-iterations=1000000"
+    --params=BLOCK_SIZE:{size // 2} --memcpy --channels={channels} \
+    --width-west-buf=0 --width-east-buf=0 -o out_vcycle \
+    --llvm-option=--inline-threshold=0 --llvm-option=--unroll-threshold=0"
+
 Run_command = f"cs_python run_gmg_vcycle.py -m={size} -n={size} -k={size} --latestlink out_vcycle --channels={channels} \
 --width-west-buf=0 --width-east-buf=0 --zDim={size} --run-only --levels={levels} --max-ite=100 --cmaddr %CMADDR%"
 ###############################################################################
@@ -74,19 +76,19 @@ with SdkLauncher(artifact_path, simulator=False, disable_version_check=True) as 
     files_to_stage = [
         "cmd_parser.py",
         "run_gmg_vcycle.py",
-        "util.py"
+        "util.py", 
+        "python_gmg/gmgoscar.py",
     ]
     # stage the entire python_gmg directory to preserve directory structure
-    files_to_stage.append("python_gmg")
+    # files_to_stage.append("python_gmg")
     for file_to_stage in files_to_stage:
         launcher.stage(file_to_stage)
 
     print("Staged files on appliance")
     print("printing inside the appliance ----------------------------------------")
     response = launcher.run(
-        "pwd",
         "ls",
-        "tar -xvf python_gmg.tar.gz",
+        # "tar -xvf python_gmg.tar.gz",
     )
     print("Test response: ", response)
 
@@ -94,19 +96,20 @@ with SdkLauncher(artifact_path, simulator=False, disable_version_check=True) as 
     run_start = time.time()
     response = launcher.run(Run_command)
     run_end = time.time()
-    print("Host code execution response: ", response)
+    print(response)
     print("Run completed on appliance ----------------------------------------")
-
-    print("Cleaning up and files on appliance ----------------------------------------")
+    print("Copying data from appliance ----------------------------------------")
     # launcher.download_artifact("../sim.log", f"./{out_path}/sim.log")
     # launcher.download_artifact("simfab_traces", f"./{out_path}")  # takes too long to download
     with open(f"./{out_path}/response.txt", "w") as f:
         f.write(response)
+
     # os.rename("python_gmg.tar.gz", f"./{out_path}/python_gmg.tar.gz")
     # os.rename("run_meta.json", f"./{out_path}/run_meta.json")
-    for file in glob.glob("wsjob-*.json"):
-        shutil.move(file, f"./{out_path}/")
+    # for file in glob.glob("wsjob-*.json"):
+    #     shutil.move(file, f"./{out_path}/")
 
+    print("Done ----------------------------------------")
     # Time
     run_duration = run_end - run_start
 

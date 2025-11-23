@@ -14,7 +14,7 @@
 
 
 
-const math_lib = @import_module("<math>");
+// const math_lib = @import_module("<math>");
 
 const dummy = @zeros([1]i16);
 
@@ -91,89 +91,89 @@ var mem_y_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy[i] });
 //    alpha = 1.0
 //    inv_alpha = 1.0
 //
-fn approx(x: f32, alpha: *f32, inv_alpha: *f32) void {
-   const MASK_EXPONENT: u32 = 0x7F800000;
-   const MASK_MANTISSA: u32 = 0x007FFFFF;
-   const x_u32: u32 = @bitcast(u32, x);
-   // x is presented by (sign | E | mantissa)
-   // sign has 1 bit, E has 8 bits and mantissa has 23 bits
-   // E = (x & MASK_EXPONEN) >> 23
-   const exp: u32 = (x_u32 & MASK_EXPONENT);
-   // mantissa = b22b21...b1b0 has 23-bit, need u32
-   const mantissa: u32 = (x_u32) & MASK_MANTISSA;
-   // E has 8-bit, use u16
-   var E: u16 = @as(u16, (exp >> 23));
+// fn approx(x: f32, alpha: *f32, inv_alpha: *f32) void {
+//    const MASK_EXPONENT: u32 = 0x7F800000;
+//    const MASK_MANTISSA: u32 = 0x007FFFFF;
+//    const x_u32: u32 = @bitcast(u32, x);
+//    // x is presented by (sign | E | mantissa)
+//    // sign has 1 bit, E has 8 bits and mantissa has 23 bits
+//    // E = (x & MASK_EXPONEN) >> 23
+//    const exp: u32 = (x_u32 & MASK_EXPONENT);
+//    // mantissa = b22b21...b1b0 has 23-bit, need u32
+//    const mantissa: u32 = (x_u32) & MASK_MANTISSA;
+//    // E has 8-bit, use u16
+//    var E: u16 = @as(u16, (exp >> 23));
 
-   // case 1: 0 < E < 255, x is normal
-   // the following if-clause handles case 2, 3 and 4
-   if (0 == E){
-        if (0 == mantissa){
-            // case 3: x = 0
-            // reset alpha = 1
-            E = 127;
-        }else{
-            // case 2: x is subnormal
-            // reset alpha= 2^(-126)
-            E = 1;
-        }
-    }
-    if (255 == E){
-        // case 4: x = inf or NAN
-        // reset alpha = 1
-        E = 127;
-    }
-    // alpha and inv_alpha are u32
-    // alpha = 2^(E - 127)
-    // inv_alpha = 1/alpha = 2^(127 - E)
-    var alpha_u32: u32 = (@as(u32, E) << 23);
-    var inv_alpha_u32: u32 = @as(u32, (254 - E)) << 23;
+//    // case 1: 0 < E < 255, x is normal
+//    // the following if-clause handles case 2, 3 and 4
+//    if (0 == E){
+//         if (0 == mantissa){
+//             // case 3: x = 0
+//             // reset alpha = 1
+//             E = 127;
+//         }else{
+//             // case 2: x is subnormal
+//             // reset alpha= 2^(-126)
+//             E = 1;
+//         }
+//     }
+//     if (255 == E){
+//         // case 4: x = inf or NAN
+//         // reset alpha = 1
+//         E = 127;
+//     }
+//     // alpha and inv_alpha are u32
+//     // alpha = 2^(E - 127)
+//     // inv_alpha = 1/alpha = 2^(127 - E)
+//     var alpha_u32: u32 = (@as(u32, E) << 23);
+//     var inv_alpha_u32: u32 = @as(u32, (254 - E)) << 23;
 
-    alpha.* = @bitcast(f32, alpha_u32);
-    inv_alpha.* = @bitcast(f32, inv_alpha_u32);
-}
+//     alpha.* = @bitcast(f32, alpha_u32);
+//     inv_alpha.* = @bitcast(f32, inv_alpha_u32);
+// }
 
 
 
-// kernel of ymax = max(|y|)
-// return max(ymax, |yval|)
-fn reduce_fabs(yval : f32, ymax : *f32) f32 {
-    var yreg: f32 = math_lib.abs(yval);
-    if (yreg > ymax.*){
-        return yreg;
-    }else{
-        return ymax.*;
-    }
-}
+// // kernel of ymax = max(|y|)
+// // return max(ymax, |yval|)
+// fn reduce_fabs(yval : f32, ymax : *f32) f32 {
+//     var yreg: f32 = math_lib.abs(yval);
+//     if (yreg > ymax.*){
+//         return yreg;
+//     }else{
+//         return ymax.*;
+//     }
+// }
 
-// kernel of sum = reduce( (y/alpha)^2, +)
-// return sum + (yval/alpha)**2
-fn reduce_scale_square(yval: f32, inv_alpha: f32, sum: *f32) f32 {
-    var yreg: f32 = yval * inv_alpha;
-    return sum.* + yreg * yreg;
-}
+// // kernel of sum = reduce( (y/alpha)^2, +)
+// // return sum + (yval/alpha)**2
+// fn reduce_scale_square(yval: f32, inv_alpha: f32, sum: *f32) f32 {
+//     var yreg: f32 = yval * inv_alpha;
+//     return sum.* + yreg * yreg;
+// }
 
-// return |y[0:n]|_2
-fn nrm2(n:i16, y: [*]f32) f32 {
-    var alpha: f32;
-    var inv_alpha: f32;
+// // return |y[0:n]|_2
+// fn nrm2(n:i16, y: [*]f32) f32 {
+//     var alpha: f32;
+//     var inv_alpha: f32;
 
-    // step 1: ymax = max(|y|)
-    var ymax: f32 = @as(f32,0);
-    mem_y_dsd = @set_dsd_base_addr(mem_y_dsd, y);
-    mem_y_dsd = @set_dsd_length(mem_y_dsd, @bitcast(u16,n));
-    @map(reduce_fabs, mem_y_dsd, &ymax, &ymax);
+//     // step 1: ymax = max(|y|)
+//     var ymax: f32 = @as(f32,0);
+//     mem_y_dsd = @set_dsd_base_addr(mem_y_dsd, y);
+//     mem_y_dsd = @set_dsd_length(mem_y_dsd, @bitcast(u16,n));
+//     @map(reduce_fabs, mem_y_dsd, &ymax, &ymax);
 
-    // step 2: ymax = alpha * (ymax/alpha)
-    approx(ymax, &alpha, &inv_alpha);
+//     // step 2: ymax = alpha * (ymax/alpha)
+//     approx(ymax, &alpha, &inv_alpha);
 
-    // step 3: sum = reduce( (y/alpha)^2, +)
-    var sum: f32 = @as(f32, 0);
-    @map(reduce_scale_square, mem_y_dsd, inv_alpha, &sum, &sum);
+//     // step 3: sum = reduce( (y/alpha)^2, +)
+//     var sum: f32 = @as(f32, 0);
+//     @map(reduce_scale_square, mem_y_dsd, inv_alpha, &sum, &sum);
 
-    // step 4: nrm2 = |y|_2 locally
-    sum = math_lib.sqrt(sum);
-    return (sum * alpha);
-}
+//     // step 4: nrm2 = |y|_2 locally
+//     sum = math_lib.sqrt(sum);
+//     return (sum * alpha);
+// }
 
 // kernel of sum = reduce( (y/alpha)^2, +)
 // return sum + (yval/alpha)**2

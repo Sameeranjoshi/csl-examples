@@ -28,12 +28,12 @@ echo "============================================"
 echo "Done"
 echo "============================================"
 echo "Compiling..."
-cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=26,20 --fabric-offsets=4,1 \
---params=width:4,height:4,MAX_ZDIM:4,LEVELS:2,BLOCK_SIZE:4 -o=out_vcycle \
+cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=16,12 --fabric-offsets=4,1 \
+--params=width:8,height:8,MAX_ZDIM:8,LEVELS:3,BLOCK_SIZE:8 -o=out_vcycle \
 --memcpy --channels=4 --width-west-buf=0 --width-east-buf=0 --max-inlined-iterations=1000000
 
-cs_python ./run_gmg_vcycle.py -m=4 -n=4 -k=4 --latestlink out_vcycle --channels=4 \
---width-west-buf=0 --width-east-buf=0 --zDim=4 --run-only --levels=2 --max-ite=1
+cs_python ./run_gmg_vcycle.py -m=8 -n=8 -k=8 --latestlink out_vcycle --channels=4 \
+--width-west-buf=0 --width-east-buf=0 --zDim=8 --run-only --levels=3 --max-ite=100
 
 ./check_memory_usage.sh out_vcycle 0 0 --summary
 

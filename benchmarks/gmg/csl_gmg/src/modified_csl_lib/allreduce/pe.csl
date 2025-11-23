@@ -154,12 +154,14 @@ param queues:[1]u16;
 param dest_dsr_ids: [1]u16;
 param src0_dsr_ids: [1]u16;
 param src1_dsr_ids: [1]u16;
+// OPTIMIZATION: Make MAX_PENCIL_DIM a parameter instead of fixed constant to save memory
+param MAX_PENCIL_DIM: u16;  // Default to 512 for backward compatibility, but can be set per problem size
 
 const timestamp = @import_module("<time>");
 
-const math_lib = @import_module("<math>");
+// const math_lib = @import_module("<math>");
 const layout_mod = @import_module("<layout>");
-const simprint = @import_module("<simprint>", .{.enable = true});
+// const simprint = @import_module("<simprint>", .{.enable = true});
 
 
 // Windowed reduction parameters
@@ -385,43 +387,43 @@ var nrm2_x_copy: f32;
 // - common case is n = 1
 // - no SIMD on sqrt
 //
-fn allreduce_nrm2(in_tensor: [*]f32) void {
+// fn allreduce_nrm2(in_tensor: [*]f32) void {
 
-    x = in_tensor;
-    functor = TYPE_BINARY_OP.MAX;
-    wvlts_per_pe = 1; // nrm2 of x[0]
+//     x = in_tensor;
+//     functor = TYPE_BINARY_OP.MAX;
+//     wvlts_per_pe = 1; // nrm2 of x[0]
 
-    // x <-- |xj|
-    var xreg = x[0];
-    xreg = math_lib.abs(xreg);
-    x[0] = xreg;
-    // nrm2_x_copy can keep either xj or |xj|
-    nrm2_x_copy = xreg;
+//     // x <-- |xj|
+//     var xreg = x[0];
+//     xreg = math_lib.abs(xreg);
+//     x[0] = xreg;
+//     // nrm2_x_copy can keep either xj or |xj|
+//     nrm2_x_copy = xreg;
 
-    // setup state sequence
-    // (1) allreduce(MAX)
-    state_seq[0] = STATE_ROW_REDUCE;
-    state_seq[1] = STATE_COL_REDUCE;
-    state_seq[2] = STATE_BCAST;
-    // x[0] = max(|xj|)
-    // (2) SCALE_AND_SQUARE
-    // x[0] = (|xj|/alpha)^2
-    state_seq[3] = STATE_SCALE_AND_SQUARE; // next operation is ADD
-    // (3) allreduce(ADD)
-    state_seq[4] = STATE_ROW_REDUCE;
-    state_seq[5] = STATE_COL_REDUCE;
-    state_seq[6] = STATE_BCAST;
-    // x[0] = sum{(|xj|/alpha)^2}
-    // (4) NRM2
-    // x[0] = |x|_2
-    state_seq[7] = STATE_NRM2;
-    // (5) END
-    state_seq[8] = STATE_DONE;
+//     // setup state sequence
+//     // (1) allreduce(MAX)
+//     state_seq[0] = STATE_ROW_REDUCE;
+//     state_seq[1] = STATE_COL_REDUCE;
+//     state_seq[2] = STATE_BCAST;
+//     // x[0] = max(|xj|)
+//     // (2) SCALE_AND_SQUARE
+//     // x[0] = (|xj|/alpha)^2
+//     state_seq[3] = STATE_SCALE_AND_SQUARE; // next operation is ADD
+//     // (3) allreduce(ADD)
+//     state_seq[4] = STATE_ROW_REDUCE;
+//     state_seq[5] = STATE_COL_REDUCE;
+//     state_seq[6] = STATE_BCAST;
+//     // x[0] = sum{(|xj|/alpha)^2}
+//     // (4) NRM2
+//     // x[0] = |x|_2
+//     state_seq[7] = STATE_NRM2;
+//     // (5) END
+//     state_seq[8] = STATE_DONE;
 
-    state_idx = 0;
-    cur_state = state_seq[0];
-    @activate(C_STATE_ENTRY);
-}
+//     state_idx = 0;
+//     cur_state = state_seq[0];
+//     @activate(C_STATE_ENTRY);
+// }
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -608,36 +610,36 @@ task f_state_entry() void {
         state_idx += 1;
         next_state = state_seq[state_idx];
 
-    }else if (STATE_SCALE_AND_SQUARE == cur_state){
-        // Assume allreduce(MAX) is done
-        // x[0] = xmax = max({|xj|})
+    // }else if (STATE_SCALE_AND_SQUARE == cur_state){
+    //     // Assume allreduce(MAX) is done
+    //     // x[0] = xmax = max({|xj|})
 
-        // Update x[0] by (xmax/alpha)^2
-        scale_and_square();
-        // next reduction is allreduce(ADD)
-        functor = TYPE_BINARY_OP.ADD;
+    //     // Update x[0] by (xmax/alpha)^2
+    //     scale_and_square();
+    //     // next reduction is allreduce(ADD)
+    //     functor = TYPE_BINARY_OP.ADD;
 
-        // prefetch next state which will be copied into cur_state in teardown handler
-        // sequential code: f_lock is not triggered to assign (cur_state = next_state)
-        // update cur_state directly
-        state_idx += 1;
-        cur_state = state_seq[state_idx];
+    //     // prefetch next state which will be copied into cur_state in teardown handler
+    //     // sequential code: f_lock is not triggered to assign (cur_state = next_state)
+    //     // update cur_state directly
+    //     state_idx += 1;
+    //     cur_state = state_seq[state_idx];
 
-        @activate(C_STATE_ENTRY);
+    //     @activate(C_STATE_ENTRY);
 
-    }else if (STATE_NRM2 == cur_state){
-        // Assume allreduce(ADD) is done
-        // x[0] = sum({(|xj|/alpha)^2})
-        // Update x[0] by |x|_2
-        nrm2_postprocessing();
+    // }else if (STATE_NRM2 == cur_state){
+        // // Assume allreduce(ADD) is done
+        // // x[0] = sum({(|xj|/alpha)^2})
+        // // Update x[0] by |x|_2
+        // nrm2_postprocessing();
 
-        // prefetch next state which will be copied into cur_state in teardown handler
-        // sequential code: f_lock is not triggered to assign (cur_state = next_state)
-        // update cur_state directly
-        state_idx += 1;
-        cur_state = state_seq[state_idx];
+        // // prefetch next state which will be copied into cur_state in teardown handler
+        // // sequential code: f_lock is not triggered to assign (cur_state = next_state)
+        // // update cur_state directly
+        // state_idx += 1;
+        // cur_state = state_seq[state_idx];
 
-        @activate(C_STATE_ENTRY);
+        // @activate(C_STATE_ENTRY);
 
     }else if (STATE_DONE == cur_state){
         // state machine is done, return control back to the caller
@@ -655,7 +657,6 @@ task f_state_entry() void {
 // Zero buffer for inactive PEs to send (identity for ADD operation)
 // Large enough the max it can go is equal to the problem size zdim, which on 3D cube problem will go to max(H,W) of wafer
 // as the stencils map on wafer 1 to 1 and can't do subproblem on a single PE.
-const MAX_PENCIL_DIM : u16 = 512;  // Choosen a random number bigger than max(H,W)
 var zero_buf = @zeros([MAX_PENCIL_DIM]f32);  // Large enough for any reduction size
 var zero_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> zero_buf[i] });
 
@@ -776,30 +777,30 @@ var inv_alpha: f32;
 // Update x[0] by (x[0]/alpha)^2
 // where
 //     alpha = 2^(E-127) approximates x[0]
-//
-fn scale_and_square() void {
-    var xreg: f32 = x[0];
-    // (1) compute alpha
-    approx(xreg, &alpha, &inv_alpha);
-    // (2) scale x by x/alpha
-    xreg = nrm2_x_copy;
-    xreg = xreg * inv_alpha;
-    // (3) square x
-    // xreg is O(1), SQUARE does not overflow
-    x[0] = xreg * xreg;
-}
+// //
+// fn scale_and_square() void {
+//     var xreg: f32 = x[0];
+//     // (1) compute alpha
+//     approx(xreg, &alpha, &inv_alpha);
+//     // (2) scale x by x/alpha
+//     xreg = nrm2_x_copy;
+//     xreg = xreg * inv_alpha;
+//     // (3) square x
+//     // xreg is O(1), SQUARE does not overflow
+//     x[0] = xreg * xreg;
+// }
 
-// Assume the caller has computed
-//   x[0] = allreduce(ADD, (xj/alpha)^2)
-//
-// Update x[0] by |x|_2
-//
-fn nrm2_postprocessing() void{
-    // x[0] = sum({(xj/alpha)^2}) = |x|^2 / alpha^2
-    var xreg: f32 = x[0];
-    xreg = math_lib.sqrt(xreg);
-    x[0] = xreg * alpha;
-}
+// // Assume the caller has computed
+// //   x[0] = allreduce(ADD, (xj/alpha)^2)
+// //
+// // Update x[0] by |x|_2
+// //
+// fn nrm2_postprocessing() void{
+//     // x[0] = sum({(xj/alpha)^2}) = |x|^2 / alpha^2
+//     var xreg: f32 = x[0];
+//     xreg = math_lib.sqrt(xreg);
+//     x[0] = xreg * alpha;
+// }
 
 // last PE does not send data, it only receives data
 // row-reduce sequence: f_send_data() --> f_send_ctrl()
@@ -957,46 +958,46 @@ task f_lock() void {
 //    alpha = 1.0
 //    inv_alpha = 1.0
 //
-fn approx(x: f32, alpha: *f32, inv_alpha: *f32) void {
-   const MASK_EXPONENT: u32 = 0x7F800000;
-   const MASK_MANTISSA: u32 = 0x007FFFFF;
-   const x_u32: u32 = @bitcast(u32, x);
-   // x is presented by (sign | E | mantissa)
-   // sign has 1 bit, E has 8 bits and mantissa has 23 bits
-   // E = (x & MASK_EXPONEN) >> 23
-   const exp: u32 = (x_u32 & MASK_EXPONENT);
-   // mantissa = b22b21...b1b0 has 23-bit, need u32
-   const mantissa: u32 = (x_u32) & MASK_MANTISSA;
-   // E has 8-bit, use u16
-   var E: u16 = @as(u16, (exp >> 23));
+// fn approx(x: f32, alpha: *f32, inv_alpha: *f32) void {
+//    const MASK_EXPONENT: u32 = 0x7F800000;
+//    const MASK_MANTISSA: u32 = 0x007FFFFF;
+//    const x_u32: u32 = @bitcast(u32, x);
+//    // x is presented by (sign | E | mantissa)
+//    // sign has 1 bit, E has 8 bits and mantissa has 23 bits
+//    // E = (x & MASK_EXPONEN) >> 23
+//    const exp: u32 = (x_u32 & MASK_EXPONENT);
+//    // mantissa = b22b21...b1b0 has 23-bit, need u32
+//    const mantissa: u32 = (x_u32) & MASK_MANTISSA;
+//    // E has 8-bit, use u16
+//    var E: u16 = @as(u16, (exp >> 23));
 
-   // case 1: 0 < E < 255, x is normal
-   // the following if-clause handles case 2, 3 and 4
-   if (0 == E){
-        if (0 == mantissa){
-            // case 3: x = 0
-            // reset alpha = 1
-            E = 127;
-        }else{
-            // case 2: x is subnormal
-            // reset alpha= 2^(-126)
-            E = 1;
-        }
-    }
-    if (255 == E){
-        // case 4: x = inf or NAN
-        // reset alpha = 1
-        E = 127;
-    }
-    // alpha and inv_alpha are u32
-    // alpha = 2^(E - 127)
-    // inv_alpha = 1/alpha = 2^(127 - E)
-    var alpha_u32: u32 = (@as(u32, E) << 23);
-    var inv_alpha_u32: u32 = @as(u32, (254 - E)) << 23;
+//    // case 1: 0 < E < 255, x is normal
+//    // the following if-clause handles case 2, 3 and 4
+//    if (0 == E){
+//         if (0 == mantissa){
+//             // case 3: x = 0
+//             // reset alpha = 1
+//             E = 127;
+//         }else{
+//             // case 2: x is subnormal
+//             // reset alpha= 2^(-126)
+//             E = 1;
+//         }
+//     }
+//     if (255 == E){
+//         // case 4: x = inf or NAN
+//         // reset alpha = 1
+//         E = 127;
+//     }
+//     // alpha and inv_alpha are u32
+//     // alpha = 2^(E - 127)
+//     // inv_alpha = 1/alpha = 2^(127 - E)
+//     var alpha_u32: u32 = (@as(u32, E) << 23);
+//     var inv_alpha_u32: u32 = @as(u32, (254 - E)) << 23;
 
-    alpha.* = @bitcast(f32, alpha_u32);
-    inv_alpha.* = @bitcast(f32, inv_alpha_u32);
-}
+//     alpha.* = @bitcast(f32, alpha_u32);
+//     inv_alpha.* = @bitcast(f32, inv_alpha_u32);
+// }
 
 
 comptime {

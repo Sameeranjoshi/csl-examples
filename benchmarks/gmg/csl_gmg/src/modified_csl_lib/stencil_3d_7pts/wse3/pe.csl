@@ -726,28 +726,28 @@ task f_comm() void {
                             @ptrcast(*[timer.timestamp_size]u16, &timing_spmv_communication), 
                             @ptrcast(*[timer.timestamp_size]u16, &timing_spmv_compute));  // result = a - b , therefore compute = compute - communication
         
-        const pe_id_x: u16 = layout_mod.get_x_coord();
-        const pe_id_y: u16 = layout_mod.get_y_coord();
-        if (current_level_local == 1 and pe_id_x == 0 and pe_id_y == 0) {
-            simprint.fmt_with_coords("SPMV TOTAL TIME: level={d}, total_time={d}, {d}, {d}", .{@as(u16, current_level_local), @as(u16, timing_spmv_total[0]), @as(u16, timing_spmv_total[1]), @as(u16, timing_spmv_total[2])});
-            simprint.fmt_with_coords("SPMV COMMUNICATION TIME: level={d}, communication_time={d}, {d}, {d}", .{@as(u16, current_level_local), @as(u16, timing_spmv_communication[0]), @as(u16, timing_spmv_communication[1]), @as(u16, timing_spmv_communication[2])});
-            simprint.fmt_with_coords("SPMV COMPUTE TIME(temp = total - comm): level={d}, compute_time={d}, {d}, {d}", .{@as(u16, current_level_local), @as(u16, timing_spmv_compute[0]), @as(u16, timing_spmv_compute[1]), @as(u16, timing_spmv_compute[2])});                            
-        }
+        // const pe_id_x: u16 = layout_mod.get_x_coord();
+        // const pe_id_y: u16 = layout_mod.get_y_coord();
+        // if (current_level_local == 1 and pe_id_x == 0 and pe_id_y == 0) {
+        //     simprint.fmt_with_coords("SPMV TOTAL TIME: level={d}, total_time={d}, {d}, {d}", .{@as(u16, current_level_local), @as(u16, timing_spmv_total[0]), @as(u16, timing_spmv_total[1]), @as(u16, timing_spmv_total[2])});
+        //     simprint.fmt_with_coords("SPMV COMMUNICATION TIME: level={d}, communication_time={d}, {d}, {d}", .{@as(u16, current_level_local), @as(u16, timing_spmv_communication[0]), @as(u16, timing_spmv_communication[1]), @as(u16, timing_spmv_communication[2])});
+        //     simprint.fmt_with_coords("SPMV COMPUTE TIME(temp = total - comm): level={d}, compute_time={d}, {d}, {d}", .{@as(u16, current_level_local), @as(u16, timing_spmv_compute[0]), @as(u16, timing_spmv_compute[1]), @as(u16, timing_spmv_compute[2])});                            
+        // }
         // compute before add
         // Now add the temp into compute time using timer.add_timestamps
-        if (current_level_local == 1 and pe_id_x == 0 and pe_id_y == 0) {
-            simprint.fmt_with_coords("SPMV COMPUTE TIME (INITIAL): level={d}, compute_time={d}", .{@as(u16, current_level_local), @as(u16, timing_compute_local[offset])});
-        }
+        // if (current_level_local == 1 and pe_id_x == 0 and pe_id_y == 0) {
+        //     simprint.fmt_with_coords("SPMV COMPUTE TIME (INITIAL): level={d}, compute_time={d}", .{@as(u16, current_level_local), @as(u16, timing_compute_local[offset])});
+        // }
         timer.add_timestamps(@ptrcast(*[timer.timestamp_size]u16, &timing_compute_local[offset]), 
                             @ptrcast(*[timer.timestamp_size]u16, &timing_spmv_compute),
                             @ptrcast(*[timer.timestamp_size]u16, &timing_compute_local[offset]));
         timer.add_timestamps(@ptrcast(*[timer.timestamp_size]u16, &timing_communication_local[offset]), 
                             @ptrcast(*[timer.timestamp_size]u16, &timing_spmv_communication),
                             @ptrcast(*[timer.timestamp_size]u16, &timing_communication_local[offset]));
-        if (current_level_local == 1 and pe_id_x == 0 and pe_id_y == 0) {
-            simprint.fmt_with_coords("SPMV COMPUTE TIME (AFTER ADD): level={d}, compute_time={d}", .{@as(u16, current_level_local), @as(u16, timing_compute_local[offset])});
-            simprint.fmt_with_coords("SPMV COMMUNICATION TIME (AFTER ADD): level={d}, communication_time={d}", .{@as(u16, current_level_local), @as(u16, timing_communication_local[offset])});
-        }
+        // if (current_level_local == 1 and pe_id_x == 0 and pe_id_y == 0) {
+        //     simprint.fmt_with_coords("SPMV COMPUTE TIME (AFTER ADD): level={d}, compute_time={d}", .{@as(u16, current_level_local), @as(u16, timing_compute_local[offset])});
+        //     simprint.fmt_with_coords("SPMV COMMUNICATION TIME (AFTER ADD): level={d}, communication_time={d}", .{@as(u16, current_level_local), @as(u16, timing_communication_local[offset])});
+        // }
         //sys_mod.unblock_cmd_stream();
         f_callback();
     }

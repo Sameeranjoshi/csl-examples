@@ -16,7 +16,7 @@ import numpy as np
 import copy
 
 # sys.path.append(os.path.join(os.path.dirname(__file__), '..', "python_gmg"))
-from python_gmg.gmgoscar import SimpleGMG as SimpleGMGOSCAR
+from gmgoscar import SimpleGMG as SimpleGMGOSCAR
 from cmd_parser import parse_args, print_arguments
 from util import hwl_2_oned_colmajor, oned_to_hwl_colmajor
 
@@ -394,6 +394,8 @@ def print_configuration_summary(
     print("=" * 60)
 
     config_items = [
+        # problem/PE size.
+        ("HeightxWidthxZDim", f"{args.m}x{args.n}x{args.zDim}"),
         ("Levels", args.levels),
         ("Max iterations", args.max_ite),
         ("Tolerance", f"{device_solver.tolerance:.2e}"),

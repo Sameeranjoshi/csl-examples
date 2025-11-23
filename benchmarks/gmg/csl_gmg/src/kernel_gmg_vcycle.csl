@@ -17,7 +17,7 @@ param STATE: local_task_id;
 // LIBRARIES and STATE MACHINE STATES
 //-------------------------------------------------
 const math_lib = @import_module("<math>");
-const blas_lib = @import_module("blas.csl");
+const blas_lib = @import_module("blas.csl"); // modified reduced some code.
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
 const timestamp = @import_module("<time>");
 const timer = @import_module("timer_modified.csl", .{ .timerCount = 12 });
@@ -26,7 +26,8 @@ const reduce_mod = @import_module("./modified_csl_lib/allreduce/pe.csl", @concat
      .queues = [1]u16{2},
      .dest_dsr_ids = [1]u16{1},
      .src0_dsr_ids = [1]u16{1},
-     .src1_dsr_ids = [1]u16{1}
+     .src1_dsr_ids = [1]u16{1},
+     .MAX_PENCIL_DIM = MAX_ZDIM  // OPTIMIZATION: Pass MAX_ZDIM to size zero_buf dynamically, saves ~1KB for 256 problem
      }));
 const stencil_mod = @import_module("./modified_csl_lib/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
      .f_callback = f_trigger_state_machine,
@@ -279,23 +280,23 @@ fn f_reference_timestamps() void {
 }
 
 fn f_tic_total() void {
-    timer.start(TIMER_ID_TOTAL);
+    // timer.start(TIMER_ID_TOTAL);
     
-    // timestamp.get_timestamp(&tscStartBuffer);
+    timestamp.get_timestamp(&tscStartBuffer);
     // sys_mod.unblock_cmd_stream();
 }
 
 fn f_toc_total() void {
-    // timestamp.get_timestamp(&tscEndBuffer);
+    timestamp.get_timestamp(&tscEndBuffer);
 
-    // time_total_start_end_u16[0] = tscStartBuffer[0];
-    // time_total_start_end_u16[1] = tscStartBuffer[1];
-    // time_total_start_end_u16[2] = tscStartBuffer[2];
-    // time_total_start_end_u16[3] = tscEndBuffer[0];
-    // time_total_start_end_u16[4] = tscEndBuffer[1];
-    // time_total_start_end_u16[5] = tscEndBuffer[2];
-    timer.stop(TIMER_ID_TOTAL);
-    timer.accumulate_elapsed(TIMER_ID_TOTAL, @ptrcast(*[timer.timestamp_size]u16, &time_total_start_end_u16));
+    time_total_start_end_u16[0] = tscStartBuffer[0];
+    time_total_start_end_u16[1] = tscStartBuffer[1];
+    time_total_start_end_u16[2] = tscStartBuffer[2];
+    time_total_start_end_u16[3] = tscEndBuffer[0];
+    time_total_start_end_u16[4] = tscEndBuffer[1];
+    time_total_start_end_u16[5] = tscEndBuffer[2];
+    // timer.stop(TIMER_ID_TOTAL);
+    // timer.accumulate_elapsed(TIMER_ID_TOTAL, @ptrcast(*[timer.timestamp_size]u16, &time_total_start_end_u16));
     // sys_mod.unblock_cmd_stream();
 }
 
@@ -321,66 +322,66 @@ fn f_toc_d2h() void {
     sys_mod.unblock_cmd_stream();
 }
 
-fn print_time_debug() void {
-    const pe_id_x: u16 = layout_mod.get_x_coord();
-    const pe_id_y: u16 = layout_mod.get_y_coord();
-    if (current_level_id == 0 and pe_id_x == 0 and pe_id_y == 0) {
-        // print reference clock
-        const time_ref_w0 = time_ref_u16[0];
-        const time_ref_w1 = time_ref_u16[1];
-        const time_ref_w2 = time_ref_u16[2];
-        simprint.fmt_with_coords("TIMING_DEBUG: time_ref=[{d},{d},{d}]", .{@as(u16, time_ref_w0), @as(u16, time_ref_w1), @as(u16, time_ref_w2)});
-        for (@range(i16, 0, num_levels, 1)) |level| {
-            const offset: i16 = level * timestamp.tsc_size_words;
-            const smooth_w0 = timing_smooth[offset + 0];
-            const smooth_w1 = timing_smooth[offset + 1];
-            const smooth_w2 = timing_smooth[offset + 2];
+// fn print_time_debug() void {
+//     const pe_id_x: u16 = layout_mod.get_x_coord();
+//     const pe_id_y: u16 = layout_mod.get_y_coord();
+//     if (current_level_id == 0 and pe_id_x == 0 and pe_id_y == 0) {
+//         // print reference clock
+//         const time_ref_w0 = time_ref_u16[0];
+//         const time_ref_w1 = time_ref_u16[1];
+//         const time_ref_w2 = time_ref_u16[2];
+//         simprint.fmt_with_coords("TIMING_DEBUG: time_ref=[{d},{d},{d}]", .{@as(u16, time_ref_w0), @as(u16, time_ref_w1), @as(u16, time_ref_w2)});
+//         for (@range(i16, 0, num_levels, 1)) |level| {
+//             const offset: i16 = level * timestamp.tsc_size_words;
+//             const smooth_w0 = timing_smooth[offset + 0];
+//             const smooth_w1 = timing_smooth[offset + 1];
+//             const smooth_w2 = timing_smooth[offset + 2];
 
-            const apply_w0 = timing_apply_op[offset + 0];
-            const apply_w1 = timing_apply_op[offset + 1];
-            const apply_w2 = timing_apply_op[offset + 2];
+//             const apply_w0 = timing_apply_op[offset + 0];
+//             const apply_w1 = timing_apply_op[offset + 1];
+//             const apply_w2 = timing_apply_op[offset + 2];
 
-            const restrict_w0 = timing_restrict[offset + 0];
-            const restrict_w1 = timing_restrict[offset + 1];
-            const restrict_w2 = timing_restrict[offset + 2];
+//             const restrict_w0 = timing_restrict[offset + 0];
+//             const restrict_w1 = timing_restrict[offset + 1];
+//             const restrict_w2 = timing_restrict[offset + 2];
 
-            const interp_w0 = timing_interp[offset + 0];
-            const interp_w1 = timing_interp[offset + 1];
-            const interp_w2 = timing_interp[offset + 2];
+//             const interp_w0 = timing_interp[offset + 0];
+//             const interp_w1 = timing_interp[offset + 1];
+//             const interp_w2 = timing_interp[offset + 2];
 
-            const residual_w0 = timing_residual[offset + 0];
-            const residual_w1 = timing_residual[offset + 1];
-            const residual_w2 = timing_residual[offset + 2];
+//             const residual_w0 = timing_residual[offset + 0];
+//             const residual_w1 = timing_residual[offset + 1];
+//             const residual_w2 = timing_residual[offset + 2];
 
-            const setup_init_w0 = timing_setup_init[offset + 0];
-            const setup_init_w1 = timing_setup_init[offset + 1];
-            const setup_init_w2 = timing_setup_init[offset + 2];
+//             const setup_init_w0 = timing_setup_init[offset + 0];
+//             const setup_init_w1 = timing_setup_init[offset + 1];
+//             const setup_init_w2 = timing_setup_init[offset + 2];
             
-            const rho_check_w0 = timing_rho_check[offset + 0];
-            const rho_check_w1 = timing_rho_check[offset + 1];
-            const rho_check_w2 = timing_rho_check[offset + 2];
+//             const rho_check_w0 = timing_rho_check[offset + 0];
+//             const rho_check_w1 = timing_rho_check[offset + 1];
+//             const rho_check_w2 = timing_rho_check[offset + 2];
 
-            const compute_w0 = timing_compute[offset + 0];
-            const compute_w1 = timing_compute[offset + 1];
-            const compute_w2 = timing_compute[offset + 2];
+//             const compute_w0 = timing_compute[offset + 0];
+//             const compute_w1 = timing_compute[offset + 1];
+//             const compute_w2 = timing_compute[offset + 2];
 
-            const communication_w0 = timing_communication[offset + 0];
-            const communication_w1 = timing_communication[offset + 1];
-            const communication_w2 = timing_communication[offset + 2];
+//             const communication_w0 = timing_communication[offset + 0];
+//             const communication_w1 = timing_communication[offset + 1];
+//             const communication_w2 = timing_communication[offset + 2];
 
-            simprint.fmt_with_coords("TIMING_DEBUG: level={d}, smooth_elapsed=[{d},{d},{d}],residual_elapsed=[{d},{d},{d}], restrict_elapsed=[{d},{d},{d}], interp_elapsed=[{d},{d},{d}], setup_init_elapsed=[{d},{d},{d}], rho_check_elapsed=[{d},{d},{d}], compute_elapsed=[{d},{d},{d}], communication_elapsed=[{d},{d},{d}]",
-                .{@as(u16, level),
-                    @as(u16, smooth_w0), @as(u16, smooth_w1), @as(u16, smooth_w2),
-                    @as(u16, residual_w0), @as(u16, residual_w1), @as(u16, residual_w2),  
-                    @as(u16, restrict_w0), @as(u16, restrict_w1), @as(u16, restrict_w2),
-                    @as(u16, interp_w0), @as(u16, interp_w1), @as(u16, interp_w2),
-                    @as(u16, setup_init_w0), @as(u16, setup_init_w1), @as(u16, setup_init_w2),
-                    @as(u16, rho_check_w0), @as(u16, rho_check_w1), @as(u16, rho_check_w2),
-                    @as(u16, compute_w0), @as(u16, compute_w1), @as(u16, compute_w2),
-                    @as(u16, communication_w0), @as(u16, communication_w1), @as(u16, communication_w2)});
-        }
-    }
-}
+//             simprint.fmt_with_coords("TIMING_DEBUG: level={d}, smooth_elapsed=[{d},{d},{d}],residual_elapsed=[{d},{d},{d}], restrict_elapsed=[{d},{d},{d}], interp_elapsed=[{d},{d},{d}], setup_init_elapsed=[{d},{d},{d}], rho_check_elapsed=[{d},{d},{d}], compute_elapsed=[{d},{d},{d}], communication_elapsed=[{d},{d},{d}]",
+//                 .{@as(u16, level),
+//                     @as(u16, smooth_w0), @as(u16, smooth_w1), @as(u16, smooth_w2),
+//                     @as(u16, residual_w0), @as(u16, residual_w1), @as(u16, residual_w2),  
+//                     @as(u16, restrict_w0), @as(u16, restrict_w1), @as(u16, restrict_w2),
+//                     @as(u16, interp_w0), @as(u16, interp_w1), @as(u16, interp_w2),
+//                     @as(u16, setup_init_w0), @as(u16, setup_init_w1), @as(u16, setup_init_w2),
+//                     @as(u16, rho_check_w0), @as(u16, rho_check_w1), @as(u16, rho_check_w2),
+//                     @as(u16, compute_w0), @as(u16, compute_w1), @as(u16, compute_w2),
+//                     @as(u16, communication_w0), @as(u16, communication_w1), @as(u16, communication_w2)});
+//         }
+//     }
+// }
 
 // Timing helper functions
 fn save_timestamp_start(timer_id: i16) void {
@@ -554,6 +555,7 @@ fn f_init_spmv_and_reduce(level_id: u16) void {
     var const_2: f16 = 2.0;
     factor = @as(u16, math_lib.pow(const_2, @as(f16, level_id)));
     hops = factor;
+
     restriction_window_width = @as(u16, math_lib.pow(const_2, @as(f16, level_id + 1)));
     restriction_window_height = @as(u16, math_lib.pow(const_2, @as(f16, level_id + 1)));
     active_pes_in_restriction_window_x = 2;
@@ -904,7 +906,7 @@ task f_state() void {
         }
         save_timestamp_end(current_level, &timing_rho_check, TIMER_ID_RHO_CHECK);
         counter_rho_check[current_level] += 1;
-        print_time_debug();
+        // print_time_debug();
         f_trigger_state_machine();
         
     }
