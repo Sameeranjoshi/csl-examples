@@ -33,13 +33,20 @@ out_path = f"out_dir_{size}x{size}x{size}_L{levels}_C{channels}"
 os.makedirs(out_path, exist_ok=True)
 ###############################################################################
 layout_file = "./src/layout_gmg_vcycle.csl"
+if size > 256:
+    BSIZE = size // 2
+    INLINE_THRESHOLD = 0    # Don't inline
+else:
+    BSIZE = size
+    INLINE_THRESHOLD = 256    # Inline
+
 Compile_command = f"--arch=wse3 --fabric-dims=762,1172 --fabric-offsets=4,1 --params=width:{size},height:{size},MAX_ZDIM:{size},LEVELS:{levels} \
-    --params=BLOCK_SIZE:{size // 2} --memcpy --channels={channels} \
+    --params=BLOCK_SIZE:{BSIZE} --memcpy --channels={channels} \
     --width-west-buf=0 --width-east-buf=0 -o out_vcycle \
-    --llvm-option=--inline-threshold=0 --llvm-option=--unroll-threshold=0"
+    --llvm-option=--inline-threshold={INLINE_THRESHOLD} --llvm-option=--unroll-threshold=256"
 
 Run_command = f"cs_python run_gmg_vcycle.py -m={size} -n={size} -k={size} --latestlink out_vcycle --channels={channels} \
---width-west-buf=0 --width-east-buf=0 --zDim={size} --run-only --levels={levels} --max-ite=100 --cmaddr %CMADDR%"
+--width-west-buf=0 --width-east-buf=0 --zDim={size} --run-only --levels={levels} --max-ite=400 --blockSize={BSIZE} --cmaddr %CMADDR%"
 ###############################################################################
 print(f"Compile command: {Compile_command}")
 print(f"Run command: {Run_command}")
