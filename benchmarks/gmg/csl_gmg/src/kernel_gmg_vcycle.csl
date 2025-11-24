@@ -894,10 +894,10 @@ task f_state() void {
 
     } else if (STATE_CONV_CHECK == cur_state) {
         // Compute rho = |r|^2
-        // if |r|^2 < tol, then exit
-        // if (rho > tolerance) and (k < max_iter), continue
+        // if |r|_2 < tol, then exit (i.e., if |r|^2 < tol^2, then exit)
+        // if (rho > tolerance_squared) and (k < max_iter), continue
         k = k + 1;
-        if ((rho[0] > tolerance) and (k < max_iter)) {
+        if ((rho[0] > (tolerance * tolerance)) and (k < max_iter)) {
             // Not converged and iterations remaining: increment counter and start next V-cycle
             next_state = STATE_INIT;
         } else {

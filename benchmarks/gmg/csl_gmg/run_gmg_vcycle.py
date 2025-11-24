@@ -398,7 +398,9 @@ def print_configuration_summary(
         ("HeightxWidthxZDim", f"{args.m}x{args.n}x{args.zDim}"),
         ("Levels", args.levels),
         ("Max iterations", args.max_ite),
-        ("Tolerance", f"{device_solver.tolerance:.2e}"),
+        ("Tolerance (abs)", f"{device_solver.abs_tolerance:.2e}"),
+        ("Tolerance (rel)", f"{device_solver.rel_tolerance:.2e}"),
+        ("Tolerance (rel)^2", f"{device_solver.rel_tolerance * device_solver.rel_tolerance:.2e}"),
         ("Pre/Post/Bottom iter", f"{args.pre_iter}/{args.post_iter}/{args.bottom_iter}"),
         ("Datatype", dtype_name),
         ("Jacobi omega", f"{device_solver.omega:.6f}"),
@@ -409,7 +411,7 @@ def print_configuration_summary(
         # ("Host iterations", host_iterations),
         # ("Host final rho", f"{host_residual:.3e}"),
         ("Device iterations", device_iterations),
-        ("Device final rho", f"{device_rho:.3e}")
+        ("Device final |rho|_2", f"{device_rho:.3e}")
     ]
 
     key_width = 32
@@ -717,7 +719,7 @@ def main():
                     np.int16(args.post_iter),
                     np.int16(args.bottom_iter),
                     np.int16(args.max_ite),  # max_iter parameter
-                    np.float32(device_solver.tolerance),  # tolerance parameter
+                    np.float32(device_solver.rel_tolerance),  # tolerance parameter (relative tolerance, will be squared in kernel)
                     nonblock=False)
 ############################################################
 # Copy results and timing data back
@@ -794,8 +796,10 @@ def main():
     device_rh = device_solver.grids[0]['rho_up']
 
     print(f"[GMG] rho = |b-A*x|^2 = {device_rh:.6e}")
-    print(f"  Tolerance = {(device_solver.tolerance):.6e}")
-    converged = device_rh <= (device_solver.tolerance)
+    # Use rel_tolerance^2 for convergence check (matching solve_iterative pattern)
+    tolerance_squared = device_solver.rel_tolerance * device_solver.rel_tolerance
+    print(f"  Tolerance^2 = {tolerance_squared:.6e}")
+    converged = device_rh <= tolerance_squared
     print(f"  Converged: {'Yes' if converged else 'No'}")
 
 ############################################################
