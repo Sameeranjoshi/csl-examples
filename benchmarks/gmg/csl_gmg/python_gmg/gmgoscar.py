@@ -166,7 +166,7 @@ class SimpleGMG:
     """Simplest possible GMG solver for 3D Poisson equation"""
     
     def __init__(self, nx: int, ny: int, nz: int, num_levels: int = 4, 
-                verbose: bool = False, tolerance: float = 1e-6, 
+                verbose: bool = False, abs_tolerance: float = 1e-5, 
                 pre_iter: int = 6, post_iter: int = 6, bottom_iter: int = 100):
         """
         Initialize the GMG solver
@@ -186,9 +186,18 @@ class SimpleGMG:
         self.num_levels = num_levels
         self.verbose = verbose
         
+        # Create grid hierarchy
+        self.grids = self._create_grids()
+        
+        # Initialize RHS
+        self._init_rhs()
+        
         # Simple parameters
-        self.omega = 2.0 / 3.0  # Jacobi relaxation parameter
-        self.tolerance = tolerance
+        self.omega = 0.75  # Jacobi relaxation parameter
+
+        self.nrm_b = np.linalg.norm(self.grids[0]['f'].ravel(), 2)
+        self.abs_tolerance = abs_tolerance
+        self.rel_tolerance = self.abs_tolerance * self.nrm_b
         self.ALPHA = -6.0
         self.BETA = 1.0
 
@@ -196,12 +205,6 @@ class SimpleGMG:
         self.PRE_SMOOTH_ITER = pre_iter
         self.POST_SMOOTH_ITER = post_iter
         self.BOTTOM_SOLVER_ITER = bottom_iter
-        
-        # Create grid hierarchy
-        self.grids = self._create_grids()
-        
-        # Initialize RHS
-        self._init_rhs()
         
         # Print level information if verbose
         if self.verbose:
@@ -324,7 +327,8 @@ class SimpleGMG:
         print()
         
         print("Convergence Parameters:")
-        print(f"  Tolerance: {self.tolerance:.2e}")
+        print(f"  Relative Tolerance: {self.rel_tolerance:.6e}")
+        print(f"  Absolute Tolerance: {self.abs_tolerance:.6e}")
         print()
         
         print("Right-hand Side Initialization:")
@@ -595,7 +599,7 @@ class SimpleGMG:
         
         print(f"Starting GMG solve with {max_iter} max iterations")
         print(f"Grid size: {self.nx}x{self.ny}x{self.nz}, Levels: {self.num_levels}")
-        print(f"Tolerance: {self.tolerance}")
+        print(f"Tolerance: {self.tolerance:.6e}")
         print("-" * 50)
         
         # calculate residual and print before any cycle starts at level 0.
@@ -636,34 +640,32 @@ class SimpleGMG:
         # Initialize solution
         for grid in self.grids:
             grid['u'].fill(0.0)
-        
+        print("=" * 50)
         print(f"Starting GMG solve with {max_iter} max iterations")
         print(f"Grid size: {self.nx}x{self.ny}x{self.nz}, Levels: {self.num_levels}")
-        print(f"Tolerance: {self.tolerance}")
+        print(f"Tolerance(abs): {self.abs_tolerance:.6e}")
+        print(f"|b|_2 = {self.nrm_b:.6e}")
+        print(f"Tolerance(rel): {self.rel_tolerance:.6e}")
+        print(f"max_ite = {max_iter}")
         print("-" * 50)
         
         # calculate residual and print before any cycle starts at level 0.
         self.compute_residual(0)
-        residual = self.calculate_rho(self.grids[0]['r'])
-        print(f"Initial residual at level 0: {residual:.6e}")
+        xi_squared = self.calculate_rho(self.grids[0]['r'])
+        initial_rho = np.sqrt(xi_squared)  # Actual L2 norm for display
+        print(f"Initial |rho|_2 at level 0: {xi_squared:.6e}")
         
         start_time = time.time()
         iterations = 0
-        residual = 1000.0
+        # residual = 1000.0
         
-        while residual > self.tolerance and iterations < max_iter:
+        while (xi_squared > self.rel_tolerance * self.rel_tolerance) and (iterations < max_iter):
         # while iterations < max_iter:
             # Perform V-cycle
             cycle_start = time.time()
             self.only_down_cycle()
             self.solve_coarse()
-            # print u after solve_coarse layer by layer over z
-            u = self.grids[self.num_levels - 1]['u']
-            nz = u.shape[2]
-            # print(f"u at coarsest level after solve_coarse (layer by layer over z):")
-            # for z in range(nz):
-            #     print(f"  z={z}:")
-            #     print(u[:, :, z])
+
             # temporary fix.
             self.grids[self.num_levels - 1]['rho_up'] = self.grids[self.num_levels - 1]['rho']
             self.only_up_cycle(self.num_levels - 2)
@@ -671,21 +673,22 @@ class SimpleGMG:
             
             # Check convergence
             self.compute_residual(0)
-            residual = self.calculate_rho(self.grids[0]['r'])
+            xi_squared = self.calculate_rho(self.grids[0]['r'])
+            print(f"Iteration {iterations:2d}: |rho|_2 = {xi_squared:.6e}, tolerance^2 = {self.rel_tolerance * self.rel_tolerance:.6e}, Time = {cycle_time:.4f}s")
             iterations += 1
-            
-            print(f"Iteration {iterations:2d}: Residual = {residual:.6e}, Time = {cycle_time:.4f}s")
-        
+
+
         total_time = time.time() - start_time
         
         print("-" * 50)
         print(f"After {iterations} iterations")
-        print(f"Final residual: {residual:.6e}")
-        print(f"Tolerance: {self.tolerance:.6e}")
-        converged = "Yes" if residual < self.tolerance else "No"
+        print(f"Final |rho|_2: {xi_squared:.6e}")
+        converged = "Yes" if xi_squared < (self.rel_tolerance * self.rel_tolerance) else "No"
         print(f"Converged: {converged}")
         print(f"Total time: {total_time:.4f}s")
+        print("=" * 50)
         
-        return residual, iterations
+        return xi_squared, iterations
 
     #########################################################
+

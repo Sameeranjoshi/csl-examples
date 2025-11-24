@@ -10,16 +10,17 @@ from gmgoscar import SimpleGMG as SimpleGMGOSCAR
 import time
 
 
-def benchmark_problem(nx, ny, nz, num_levels, verbose, tolerance, pre_iter, post_iter, bottom_iter, max_iterations):
+def benchmark_problem(nx, ny, nz, num_levels, verbose, abs_tolerance, pre_iter, post_iter, bottom_iter, max_iterations):
     """Benchmark a single problem size"""
     print(f"\nBenchmarking {nx}x{ny}x{nz} grid with {num_levels} levels...")
     # solver = SimpleGMG(nx, ny, nz, num_levels, verbose, tolerance, pre_iter, post_iter, bottom_iter)
-    solver = SimpleGMGOSCAR(nx, ny, nz, num_levels, verbose, tolerance, pre_iter, post_iter, bottom_iter)
+    solver = SimpleGMGOSCAR(nx, ny, nz, num_levels, verbose, abs_tolerance, pre_iter, post_iter, bottom_iter)
     start_time = time.time()
     # residual, iterations = solver.solve(max_iterations)
-    residual, iterations = solver.solve_iterative(max_iterations)
+    rho_squared, iterations = solver.solve_iterative(max_iterations)
+    reltol = solver.rel_tolerance
     total_time = time.time() - start_time
-    return residual, iterations, total_time
+    return rho_squared, iterations, total_time, reltol
 
 
 def main():
@@ -32,43 +33,38 @@ def main():
                        help='Print detailed level information')
     args = parser.parse_args()
     
-    # Test problems (nx, ny, nz, levels, max_iterations, tolerance, pre_iter, post_iter, bottom_iter)
+    # Test problems (nx, ny, nz, levels, max_iterations, abs_tolerance, pre_iter, post_iter, bottom_iter)
     problems = [
-        (16, 16, 16, 3, 10, 1e-3, 6, 6, 10),   # Small problem
-        (32, 32, 32, 4, 100, 1e-6, 6, 6, 10),   # Small problem
-        (64, 64, 64, 5, 400, 1e-6, 6, 6, 10),   # Medium problem
-        # (24, 24, 8, 3, 12, 1e-4, 6, 6, 100),    # Rectangular grid, moderate z
-        # (32, 32, 16, 4, 20, 1e-5, 8, 8, 150),   # Medium problem, more levels
-        # (32, 32, 32, 4, 20, 1e-6, 6, 6, 100),   # Medium cube
-        # (48, 24, 12, 4, 25, 1e-6, 8, 8, 200),   # Non-cube, more levels
-        # (64, 32, 8, 4, 30, 1e-7, 10, 10, 200),  # Large, flat in z
-        # (64, 64, 16, 5, 40, 1e-8, 10, 10, 250), # Large, more levels
-        # (128, 64, 8, 5, 50, 1e-8, 12, 12, 300), # Very large, flat in z
-        # (128, 128, 32, 6, 60, 1e-9, 12, 12, 400), # Huge, may be slow
+        (8, 8, 8, 3, 100, 1e-4, 6, 6, 10),   # Tiny problem
+        (16, 16, 16, 4, 100, 1e-4, 6, 6, 10),   # Small problem
+        (32, 32, 32, 5, 100, 1e-4, 6, 6, 10),   # Small problem
+        (64, 64, 64, 6, 100, 1e-4, 6, 6, 10),   # Medium problem - increased smoothing and bottom solver
+        (128, 128, 128, 7, 100, 1e-4, 20, 20, 50),   # Large problem - increased smoothing and bottom solver
+        (256, 256, 256, 7, 100, 1e-4, 30, 30, 90),   # Very large: reduce pre/post (40 was over-smoothing), massively increase bottom solver
     ]
     
     results = []
     
-    for nx, ny, nz, levels, max_iter, tolerance, pre_iter, post_iter, bottom_iter in problems:
+    for nx, ny, nz, levels, max_iter, abs_tolerance, pre_iter, post_iter, bottom_iter in problems:
         try:
-            residual, iterations, total_time = benchmark_problem(nx, ny, nz, levels, args.verbose, tolerance, pre_iter, post_iter, bottom_iter, max_iter)
-            results.append((nx, ny, nz, residual, iterations, total_time))
+            rho_squared, iterations, total_time, reltol = benchmark_problem(nx, ny, nz, levels, args.verbose, abs_tolerance, pre_iter, post_iter, bottom_iter, max_iter)
+            results.append((nx, ny, nz, rho_squared, iterations, total_time, reltol))
         except Exception as e:
             print(f"Failed: {e}")
-            results.append((nx, ny, nz, float('inf'), 0, 0))
+            results.append((nx, ny, nz, float('inf'), 0, 0, float('inf')))
     
     # Summary
     print("\n" + "=" * 70)
     print("Benchmark Summary")
     print("=" * 70)
-    print(f"{'Grid Size':<15} {'Residual':<12} {'Tolerance':<12} {'Iterations':<10} {'Time (s)':<10} {'Converged':<10}")
+    print(f"{'Grid Size':<15} {'|rho|_2':<12} {'(Rel Tolerance)^2':<12} {'Absolute Tolerance':<12} {'Iterations':<10} {'Time (s)':<10} {'Converged':<10}")
     print("-" * 70)
     
-    for problem_idx, (nx, ny, nz, residual, iterations, total_time) in enumerate(results):
+    for problem_idx, (nx, ny, nz, rho_squared, iterations, total_time, reltol) in enumerate(results):
         grid_size = f"{nx}x{ny}x{nz}"
-        tolerance = problems[problem_idx][5]
-        converged = "Yes" if residual < tolerance else "No"
-        print(f"{grid_size:<15} {residual:<12.2e} {tolerance:<12.2e} {iterations:<10} {total_time:<10.4f} {converged:<10}")
+        tolerance = reltol * reltol
+        converged = "Yes" if rho_squared < tolerance else "No"
+        print(f"{grid_size:<15} {rho_squared:<12.2e} {tolerance:<12.2e} {abs_tolerance:<12.2e} {iterations:<10} {total_time:<10.4f} {converged:<10}")
 
 if __name__ == "__main__":
     main()
