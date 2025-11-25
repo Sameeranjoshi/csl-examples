@@ -38,7 +38,6 @@ const stencil_mod = @import_module("./modified_csl_lib/stencil_3d_7pts/pe.csl", 
      .dest_dsr_ids = [2]u16{2,3},
      .src0_dsr_ids = [1]u16{2},
      .src1_dsr_ids = [2]u16{2,3},
-     .timer = timer
      }));
 const layout_mod = @import_module("<layout>");
 const simprint = @import_module("<simprint>", .{.enable = true});
@@ -136,6 +135,8 @@ var timing_restrict = @zeros([LEVELS * timestamp.tsc_size_words]u16);    // rest
 var timing_interp = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // interpolation accumulated elapsed timing
 var timing_setup_init = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // setup initialization accumulated elapsed timing
 var timing_rho_check = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // rho check accumulated elapsed timing
+var timing_spmv_total = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // spmv total accumulated elapsed timing
+var timing_spmv_communication = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // spmv communication accumulated elapsed timing
 
 // Operation counters - track number of operations at each level
 var counter_smooth = @zeros([LEVELS]u16);    // Number of up smoothing iterations per level
@@ -147,9 +148,10 @@ var counter_setup_init = @zeros([LEVELS]u16);   // Number of setup initializatio
 var counter_rho_check = @zeros([LEVELS]u16);   // Number of rho check operations per level
 var counter_compute = @zeros([LEVELS]u16);   // Number of compute operations per level
 var counter_communication = @zeros([LEVELS]u16);   // Number of communication operations per level
+
 // Reference clock from allreduce module (for TSC synchronization)
 // start, end
-var time_total_start_end_u16 = @zeros([1 * timestamp.tsc_size_words * 2]u16);   // this is also elapsed time for entire V-cycle, 1 level
+var time_total_start_end_u16 = @zeros([timestamp.tsc_size_words]u16);   // this is also elapsed time for entire V-cycle, 1 level
 var time_ref_u16 = @zeros([timestamp.tsc_size_words]u16);
 var time_h2d_u16 = @zeros([timestamp.tsc_size_words]u16);
 var time_d2h_u16 = @zeros([timestamp.tsc_size_words]u16);
@@ -234,6 +236,9 @@ var ptr_time_ref: [*]u16 = &time_ref_u16;
 var ptr_time_total_start_end: [*]u16 = &time_total_start_end_u16;
 var ptr_timing_compute: [*]u16 = &timing_compute;
 var ptr_timing_communication: [*]u16 = &timing_communication;
+var ptr_timing_spmv_total: [*]u16 = &timing_spmv_total;
+var ptr_timing_spmv_communication: [*]u16 = &timing_spmv_communication;
+
 // counter pointers
 var ptr_counter_smooth: [*]u16 = &counter_smooth;
 var ptr_counter_apply_op: [*]u16 = &counter_apply_op;
@@ -245,6 +250,7 @@ var ptr_rho: [*]f32 = &rho;
 var ptr_counter_rho_check: [*]u16 = &counter_rho_check;
 var ptr_counter_compute: [*]u16 = &counter_compute;
 var ptr_counter_communication: [*]u16 = &counter_communication;
+
 //-------------------------------------------------
 // HELPER FUNCTIONS
 //-------------------------------------------------
@@ -267,7 +273,7 @@ fn is_top_left_of_restriction_window(px: u16, py: u16, window_width: u16, window
 
 // Enable timing
 fn f_enable_timer() void {
-    timer.enable();
+    stencil_mod.enable_timer();
     sys_mod.unblock_cmd_stream();
 }
 
@@ -280,23 +286,23 @@ fn f_reference_timestamps() void {
 }
 
 fn f_tic_total() void {
-    // timer.start(TIMER_ID_TOTAL);
+    timer.start(TIMER_ID_TOTAL);
     
-    timestamp.get_timestamp(&tscStartBuffer);
+    // timestamp.get_timestamp(&tscStartBuffer);
     // sys_mod.unblock_cmd_stream();
 }
 
 fn f_toc_total() void {
-    timestamp.get_timestamp(&tscEndBuffer);
+    // timestamp.get_timestamp(&tscEndBuffer);
 
-    time_total_start_end_u16[0] = tscStartBuffer[0];
-    time_total_start_end_u16[1] = tscStartBuffer[1];
-    time_total_start_end_u16[2] = tscStartBuffer[2];
-    time_total_start_end_u16[3] = tscEndBuffer[0];
-    time_total_start_end_u16[4] = tscEndBuffer[1];
-    time_total_start_end_u16[5] = tscEndBuffer[2];
-    // timer.stop(TIMER_ID_TOTAL);
-    // timer.accumulate_elapsed(TIMER_ID_TOTAL, @ptrcast(*[timer.timestamp_size]u16, &time_total_start_end_u16));
+    // time_total_start_end_u16[0] = tscStartBuffer[0];
+    // time_total_start_end_u16[1] = tscStartBuffer[1];
+    // time_total_start_end_u16[2] = tscStartBuffer[2];
+    // time_total_start_end_u16[3] = tscEndBuffer[0];
+    // time_total_start_end_u16[4] = tscEndBuffer[1];
+    // time_total_start_end_u16[5] = tscEndBuffer[2];
+    timer.stop(TIMER_ID_TOTAL);
+    timer.accumulate_elapsed(TIMER_ID_TOTAL, @ptrcast(*[timer.timestamp_size]u16, &time_total_start_end_u16));
     // sys_mod.unblock_cmd_stream();
 }
 
@@ -307,7 +313,8 @@ fn f_tic_h2d() void {
 
 fn f_toc_h2d() void {
     timer.stop(TIMER_ID_H2D);
-    timer.elapsed(TIMER_ID_H2D, @ptrcast(*[timer.timestamp_size]u16, &time_h2d_u16));
+    // timer.elapsed(TIMER_ID_H2D, @ptrcast(*[timer.timestamp_size]u16, &time_h2d_u16));
+    timer.accumulate_elapsed(TIMER_ID_H2D, @ptrcast(*[timer.timestamp_size]u16, &time_h2d_u16));
     sys_mod.unblock_cmd_stream();
 }
 
@@ -318,7 +325,8 @@ fn f_tic_d2h() void {
 
 fn f_toc_d2h() void {
     timer.stop(TIMER_ID_D2H);
-    timer.elapsed(TIMER_ID_D2H, @ptrcast(*[timer.timestamp_size]u16, &time_d2h_u16));
+    // timer.elapsed(TIMER_ID_D2H, @ptrcast(*[timer.timestamp_size]u16, &time_d2h_u16));
+    timer.accumulate_elapsed(TIMER_ID_D2H, @ptrcast(*[timer.timestamp_size]u16, &time_d2h_u16));
     sys_mod.unblock_cmd_stream();
 }
 
@@ -401,7 +409,14 @@ fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
 fn f_apply_operator() void {
     counter_apply_op[current_level] += 1;
     @fmovs(mem_Au_dsd, 0.0);
-    stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_compute, &timing_communication, TIMER_ID_COMMUNICATION, TIMER_ID_COMP_COMM_TOTAL);
+    const pe_id_x: u16 = layout_mod.get_x_coord();
+    const pe_id_y: u16 = layout_mod.get_y_coord();
+    if (pe_id_x == 0 and pe_id_y == 0) {
+    // print timing_spmv_total and timing_spmv_communication level by level using simprint.
+        simprint.fmt_with_coords("TIMING_SPMV_TOTAL: level={d}, time={d}, communication={d}", .{@as(u16, current_level), timing_spmv_total[current_level], timing_spmv_communication[current_level]});
+        simprint.fmt_with_coords("TIMING_SPMV_COMMUNICATION: level={d}, time={d}, communication={d}", .{@as(u16, current_level), timing_spmv_total[current_level], timing_spmv_communication[current_level]});
+    }
+    stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_spmv_total, &timing_spmv_communication);
 }
 
 fn f_jacobi_smooth() void {
@@ -955,6 +970,8 @@ comptime {
     @export_symbol(ptr_time_total_start_end, "time_total_start_end");
     @export_symbol(ptr_time_h2d, "time_h2d");
     @export_symbol(ptr_time_d2h, "time_d2h");
+    @export_symbol(ptr_timing_spmv_total, "timing_spmv_total");
+    @export_symbol(ptr_timing_spmv_communication, "timing_spmv_communication");
     // counters
     @export_symbol(ptr_counter_smooth, "counter_smooth");
     @export_symbol(ptr_counter_apply_op, "counter_apply_op");

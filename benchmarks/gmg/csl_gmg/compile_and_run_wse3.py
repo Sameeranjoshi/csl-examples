@@ -46,7 +46,7 @@ Compile_command = f"--arch=wse3 --fabric-dims=762,1172 --fabric-offsets=4,1 --pa
     --llvm-option=--inline-threshold={INLINE_THRESHOLD} --llvm-option=--unroll-threshold=256"
 
 Run_command = f"cs_python run_gmg_vcycle.py -m={size} -n={size} -k={size} --latestlink out_vcycle --channels={channels} \
---width-west-buf=0 --width-east-buf=0 --zDim={size} --run-only --levels={levels} --max-ite=100 --blockSize={BSIZE} --cmaddr %CMADDR%"
+--width-west-buf=0 --width-east-buf=0 --zDim={size} --run-only --levels={levels} --max-ite=200 --blockSize={BSIZE} --cmaddr %CMADDR%"
 
 ###############################################################################
 print(f"Compile command: {Compile_command}")
