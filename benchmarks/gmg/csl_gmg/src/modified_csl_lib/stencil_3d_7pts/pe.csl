@@ -103,10 +103,10 @@ const stencilParams = .{
 const stencil_mod = @import_module(get_stencil_module(), stencilParams);
 
 const simprint = @import_module("<simprint>", .{ .enable = true });
-fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32, current_level: i16, timing_spmv_total: [*]u16, timing_spmv_communication: [*]u16) void {
+fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32, current_level: i16, timing_spmv_total: [*]u16, timing_spmv_communication: [*]u16, timing_spmv_compute: [*]u16) void {
     //Optimization: Skip inactive PEs, saves compute cycles inside PE.
     // Skipping inactive PEs doesn't work, needs more triage.
-    stencil_mod.spmv(n, coeff, x, y, current_level, timing_spmv_total, timing_spmv_communication);
+    stencil_mod.spmv(n, coeff, x, y, current_level, timing_spmv_total, timing_spmv_communication, timing_spmv_compute);
 }
 
 // Function to set hop-based communication parameters

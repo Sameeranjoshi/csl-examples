@@ -137,6 +137,7 @@ var timing_setup_init = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // 
 var timing_rho_check = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // rho check accumulated elapsed timing
 var timing_spmv_total = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // spmv total accumulated elapsed timing
 var timing_spmv_communication = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // spmv communication accumulated elapsed timing
+var timing_spmv_compute = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // spmv compute accumulated elapsed timing
 
 // Operation counters - track number of operations at each level
 var counter_smooth = @zeros([LEVELS]u16);    // Number of up smoothing iterations per level
@@ -238,6 +239,7 @@ var ptr_timing_compute: [*]u16 = &timing_compute;
 var ptr_timing_communication: [*]u16 = &timing_communication;
 var ptr_timing_spmv_total: [*]u16 = &timing_spmv_total;
 var ptr_timing_spmv_communication: [*]u16 = &timing_spmv_communication;
+var ptr_timing_spmv_compute: [*]u16 = &timing_spmv_compute;
 
 // counter pointers
 var ptr_counter_smooth: [*]u16 = &counter_smooth;
@@ -409,14 +411,7 @@ fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
 fn f_apply_operator() void {
     counter_apply_op[current_level] += 1;
     @fmovs(mem_Au_dsd, 0.0);
-    const pe_id_x: u16 = layout_mod.get_x_coord();
-    const pe_id_y: u16 = layout_mod.get_y_coord();
-    if (pe_id_x == 0 and pe_id_y == 0) {
-    // print timing_spmv_total and timing_spmv_communication level by level using simprint.
-        simprint.fmt_with_coords("TIMING_SPMV_TOTAL: level={d}, time={d}, communication={d}", .{@as(u16, current_level), timing_spmv_total[current_level], timing_spmv_communication[current_level]});
-        simprint.fmt_with_coords("TIMING_SPMV_COMMUNICATION: level={d}, time={d}, communication={d}", .{@as(u16, current_level), timing_spmv_total[current_level], timing_spmv_communication[current_level]});
-    }
-    stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_spmv_total, &timing_spmv_communication);
+    stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute);
 }
 
 fn f_jacobi_smooth() void {
@@ -588,7 +583,7 @@ fn f_init_spmv_and_reduce(level_id: u16) void {
 fn f_setup_level(level_id: u16, down: i16) void {
     counter_setup_init[current_level] += 1;
     save_timestamp_start(TIMER_ID_SETUP_INIT);
-    save_timestamp_start(TIMER_ID_COMPUTE);
+    // save_timestamp_start(TIMER_ID_COMPUTE);
 
 
     var const_2: f16 = 2.0;
@@ -658,7 +653,7 @@ fn f_setup_level(level_id: u16, down: i16) void {
     
     @fmovs(mem_r_dsd, 0.0);
 
-    save_timestamp_end(current_level, &timing_compute, TIMER_ID_COMPUTE);
+    // save_timestamp_end(current_level, &timing_compute, TIMER_ID_COMPUTE);
     save_timestamp_end(current_level, &timing_setup_init, TIMER_ID_SETUP_INIT);
 }
 
@@ -972,6 +967,7 @@ comptime {
     @export_symbol(ptr_time_d2h, "time_d2h");
     @export_symbol(ptr_timing_spmv_total, "timing_spmv_total");
     @export_symbol(ptr_timing_spmv_communication, "timing_spmv_communication");
+    @export_symbol(ptr_timing_spmv_compute, "timing_spmv_compute");
     // counters
     @export_symbol(ptr_counter_smooth, "counter_smooth");
     @export_symbol(ptr_counter_apply_op, "counter_apply_op");
