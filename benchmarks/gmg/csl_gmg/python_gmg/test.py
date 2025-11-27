@@ -17,10 +17,10 @@ def benchmark_problem(nx, ny, nz, num_levels, verbose, abs_tolerance, pre_iter, 
     solver = SimpleGMGOSCAR(nx, ny, nz, num_levels, verbose, abs_tolerance, pre_iter, post_iter, bottom_iter)
     start_time = time.time()
     # residual, iterations = solver.solve(max_iterations)
-    rho_squared, iterations = solver.solve_iterative(max_iterations)
+    rho_max, iterations = solver.solve_iterative(max_iterations)
     reltol = solver.rel_tolerance
     total_time = time.time() - start_time
-    return rho_squared, iterations, total_time, reltol
+    return rho_max, iterations, total_time, reltol
 
 
 def main():
@@ -35,20 +35,21 @@ def main():
     
     # Test problems (nx, ny, nz, levels, max_iterations, abs_tolerance, pre_iter, post_iter, bottom_iter)
     problems = [
-        # (8, 8, 8, 3, 100, 1e-6, 6, 6, 10),   # Tiny problem (7 host, 8 device)
-        # (16, 16, 16, 4, 100, 1e-4, 6, 6, 10),   # Small problem
-        # (32, 32, 32, 5, 100, 1e-4, 6, 6, 10),   # Small problem
-        # (64, 64, 64, 6, 100, 1e-4, 6, 6, 10),   # Medium problem - increased smoothing and bottom solver
-        (128, 128, 128, 7, 100, 1e-4, 20, 20, 50),   # Large problem - increased smoothing and bottom solver
-        # (256, 256, 256, 7, 100, 1e-4, 30, 30, 90),   # Very large: reduce pre/post (40 was over-smoothing), massively increase bottom solver
+        (2, 2, 2, 1, 100, 1e-6, 6, 6, 10),   # Tiny problem (7 host, 8 device)
+        (16, 16, 16, 4, 100, 1e-6, 6, 6, 10),   # Small problem
+        (32, 32, 32, 5, 100, 1e-6, 6, 6, 10),   # Small problem
+        (64, 64, 64, 6, 100, 1e-6, 6, 6, 10),   # Medium problem - increased smoothing and bottom solver
+        (128, 128, 128, 5, 100, 1e-6, 6, 6, 50),   # Large problem - increased smoothing and bottom solver
+        (256, 256, 256, 6, 100, 1e-6, 6, 6, 90),   # Very large: reduce pre/post (40 was over-smoothing), massively increase bottom solver
+        (512, 512, 512, 7, 20, 1e-6, 6, 6, 90),   # Very large: reduce pre/post (40 was over-smoothing), massively increase bottom solver
     ]
     
     results = []
     
     for nx, ny, nz, levels, max_iter, abs_tolerance, pre_iter, post_iter, bottom_iter in problems:
         try:
-            rho_squared, iterations, total_time, reltol = benchmark_problem(nx, ny, nz, levels, args.verbose, abs_tolerance, pre_iter, post_iter, bottom_iter, max_iter)
-            results.append((nx, ny, nz, rho_squared, iterations, total_time, reltol))
+            rho_max, iterations, total_time, reltol = benchmark_problem(nx, ny, nz, levels, args.verbose, abs_tolerance, pre_iter, post_iter, bottom_iter, max_iter)
+            results.append((nx, ny, nz, rho_max, iterations, total_time, reltol))
         except Exception as e:
             print(f"Failed: {e}")
             results.append((nx, ny, nz, float('inf'), 0, 0, float('inf')))
@@ -57,14 +58,31 @@ def main():
     print("\n" + "=" * 70)
     print("Benchmark Summary")
     print("=" * 70)
-    print(f"{'Grid Size':<15} {'|rho|_2':<12} {'(Rel Tolerance)^2':<12} {'Absolute Tolerance':<12} {'Iterations':<10} {'Time (s)':<10} {'Converged':<10}")
-    print("-" * 70)
+    header = (
+        f"{'Grid Size':<15} | "
+        f"{'|rho|_inf':>11} | "
+        f"{'(Rel Tolerance)^2':>17} | "
+        f"{'Absolute Tol.':>14} | "
+        f"{'Iters':>7} | "
+        f"{'Time (s)':>9} | "
+        f"{'Converged':>9}"
+    )
+    print(header)
+    print("-" * len(header))
     
-    for problem_idx, (nx, ny, nz, rho_squared, iterations, total_time, reltol) in enumerate(results):
+    for problem_idx, (nx, ny, nz, rho_max, iterations, total_time, reltol) in enumerate(results):
         grid_size = f"{nx}x{ny}x{nz}"
-        tolerance = reltol * reltol
-        converged = "Yes" if rho_squared < tolerance else "No"
-        print(f"{grid_size:<15} {rho_squared:<12.2e} {tolerance:<12.2e} {abs_tolerance:<12.2e} {iterations:<10} {total_time:<10.4f} {converged:<10}")
+        tolerance = reltol
+        converged = "Yes" if rho_max < tolerance else "No"
+        print(
+            f"{grid_size:<15} | "
+            f"{rho_max:>11.2e} | "
+            f"{tolerance:>17.2e} | "
+            f"{abs_tolerance:>14.2e} | "
+            f"{iterations:>7} | "
+            f"{total_time:>9.4f} | "
+            f"{converged:>9}"
+        )
 
 if __name__ == "__main__":
     main()

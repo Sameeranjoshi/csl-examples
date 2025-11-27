@@ -38,7 +38,6 @@ DTYPE = np.float32
 # ============================================================================
 # Optimized helper functions with Numba JIT compilation
 # ============================================================================
-
 if NUMBA_AVAILABLE:
     @jit(nopython=True, parallel=True, fastmath=True)
     def _apply_operator_jit(u, Au, nx, ny, nz, hx, hy, hz, beta):
@@ -59,6 +58,10 @@ if NUMBA_AVAILABLE:
                         val_x += beta * u[i-1, j, k]
                     if i < nx-1:
                         val_x += beta * u[i+1, j, k]
+                    if i == 0:     
+                        val_x += beta * -1.0 * u[0, j, k]
+                    if i == nx-1:     
+                        val_x += beta * -1.0 * u[nx-1, j, k]
                     val_x *= hx2_inv
                     
                     # south/north
@@ -66,6 +69,10 @@ if NUMBA_AVAILABLE:
                         val_y += beta * u[i, j-1, k]
                     if j < ny-1:
                         val_y += beta * u[i, j+1, k]
+                    if j == 0:     
+                        val_y += beta * -1.0 * u[i, 0, k]
+                    if j == ny-1:     
+                        val_y += beta * -1.0 * u[i, ny-1, k]
                     val_y *= hy2_inv
                     
                     # bottom/top
@@ -73,6 +80,10 @@ if NUMBA_AVAILABLE:
                         val_z += beta * u[i, j, k-1]
                     if k < nz-1:
                         val_z += beta * u[i, j, k+1]
+                    if k == 0:     
+                        val_z += beta * -1.0 * u[i, j, 0]
+                    if k == nz-1:     
+                        val_z += beta * -1.0 * u[i, j, nz-1]
                     val_z *= hz2_inv
                     
                     Au[i, j, k] = val_x + val_y + val_z
@@ -116,51 +127,6 @@ if NUMBA_AVAILABLE:
                     fine_u[fi+1, fj,   fk+1] += coarse_val
                     fine_u[fi,   fj+1, fk+1] += coarse_val
                     fine_u[fi+1, fj+1, fk+1] += coarse_val
-
-else:
-    # Fallback vectorized NumPy versions (faster than pure loops, slower than Numba)
-    def _apply_operator_vectorized(u, Au, nx, ny, nz, hx, hy, hz, beta):
-        """Vectorized 7-point Laplacian operator (fallback when Numba unavailable)"""
-        hx2_inv = 1.0 / (hx * hx)
-        hy2_inv = 1.0 / (hy * hy)
-        hz2_inv = 1.0 / (hz * hz)
-        
-        Au.fill(0.0)
-        
-        # Interior points: vectorized computation
-        # X-direction
-        Au[1:, :, :] += hx2_inv * beta * u[:-1, :, :]  # west
-        Au[:-1, :, :] += hx2_inv * beta * u[1:, :, :]  # east
-        Au[:, :, :] += hx2_inv * (-2.0) * u  # center
-        
-        # Y-direction
-        Au[:, 1:, :] += hy2_inv * beta * u[:, :-1, :]  # south
-        Au[:, :-1, :] += hy2_inv * beta * u[:, 1:, :]  # north
-        Au[:, :, :] += hy2_inv * (-2.0) * u  # center
-        
-        # Z-direction
-        Au[:, :, 1:] += hz2_inv * beta * u[:, :, :-1]  # bottom
-        Au[:, :, :-1] += hz2_inv * beta * u[:, :, 1:]  # top
-        Au[:, :, :] += hz2_inv * (-2.0) * u  # center
-    
-    def _restrict_vectorized(fine_r, coarse_f, Xdim, Ydim, Zdim):
-        """Vectorized restriction operator (fallback when Numba unavailable)"""
-        coarse_f.fill(0.0)
-        # Use advanced indexing for vectorized restriction
-        for i in range(Xdim):
-            for j in range(Ydim):
-                for k in range(Zdim):
-                    fi, fj, fk = 2*i, 2*j, 2*k
-                    coarse_f[i, j, k] = np.mean(fine_r[fi:fi+2, fj:fj+2, fk:fk+2])
-    
-    def _interpolate_vectorized(coarse_u, fine_u, coarse_nx, coarse_ny, coarse_nz):
-        """Vectorized interpolation operator (fallback when Numba unavailable)"""
-        for i in range(coarse_nx):
-            for j in range(coarse_ny):
-                for k in range(coarse_nz):
-                    fi, fj, fk = 2*i, 2*j, 2*k
-                    coarse_val = coarse_u[i, j, k]
-                    fine_u[fi:fi+2, fj:fj+2, fk:fk+2] += coarse_val
 
 class SimpleGMG:
     """Simplest possible GMG solver for 3D Poisson equation"""
@@ -364,7 +330,11 @@ class SimpleGMG:
             
             # Simple test function: f = sin(πx)sin(πy)sin(πz)
             pi = DTYPE(np.pi)
-            grid['f'] = np.sin(pi * X) * np.sin(pi * Y) * np.sin(pi * Z)
+            hx = grid['hx']
+            #print(f"X: {X}")
+            #print(f"hx: {hx}")
+            grid['f'] = np.sin(2*pi * ((X+0.5)*hx)) * np.sin(2*pi * ((Y+0.5)*hx)) * np.sin(2*pi * ((Z+0.5)*hx))
+            #print(f"f: {grid['f']}")
 
     def calculate_rho(self, residual_3d):
         """Calculate the L2 norm squared of the residual vector
@@ -381,7 +351,8 @@ class SimpleGMG:
         Example:
             rho = self.calculate_rho(residual_3d_first)
         """
-        rho = np.dot(residual_3d.flatten(), residual_3d.flatten())
+        # rho = np.dot(residual_3d.flatten(), residual_3d.flatten())
+        rho = np.max(residual_3d.flatten())
         # Flatten the 3D array to 1D vector
         # residual_1d = residual_3d.flatten()
         
@@ -408,12 +379,8 @@ class SimpleGMG:
         beta = DTYPE(self.BETA)
         
         # Clear Au (handled inside vectorized version, but needed for JIT version)
-        if NUMBA_AVAILABLE:
-            Au.fill(0.0)
-            _apply_operator_jit(u, Au, nx, ny, nz, hx, hy, hz, beta)
-        else:
-            # Fallback to vectorized NumPy version (faster than pure loops, clears Au internally)
-            _apply_operator_vectorized(u, Au, nx, ny, nz, hx, hy, hz, beta)
+        Au.fill(0.0)
+        _apply_operator_jit(u, Au, nx, ny, nz, hx, hy, hz, beta)
 
     def compute_residual(self, level: int):
         """Compute residual r = f - Au"""
@@ -449,7 +416,6 @@ class SimpleGMG:
             diagonal = DTYPE(-2.0) / (hx*hx) + DTYPE(-2.0) / (hy*hy) + DTYPE(-2.0) / (hz*hz)
             diag_inv = 1.0 / diagonal
             update = self.omega * diag_inv * (f - Au)  # Correct sign: f - Au, if you make it Au - f, it will give nan
-            #update = (-1.0/8192.0) * (f - Au)
             
             u[:] += update[:]  # update all cells, boundary handled by apply_operator
     
@@ -466,11 +432,7 @@ class SimpleGMG:
         Xdim, Ydim, Zdim = coarse_f.shape
         
         # Use optimized JIT-compiled function if Numba is available
-        if NUMBA_AVAILABLE:
-            _restrict_jit(fine_r, coarse_f, Xdim, Ydim, Zdim)
-        else:
-            # Fallback to vectorized NumPy version
-            _restrict_vectorized(fine_r, coarse_f, Xdim, Ydim, Zdim)
+        _restrict_jit(fine_r, coarse_f, Xdim, Ydim, Zdim)
         
 
     def interpolate(self, fine_level: int):
@@ -492,11 +454,7 @@ class SimpleGMG:
         coarse_nx, coarse_ny, coarse_nz = coarse['nx'], coarse['ny'], coarse['nz']
         
         # Use optimized JIT-compiled function if Numba is available
-        if NUMBA_AVAILABLE:
-            _interpolate_jit(coarse_u, fine_u, coarse_nx, coarse_ny, coarse_nz)
-        else:
-            # Fallback to vectorized NumPy version
-            _interpolate_vectorized(coarse_u, fine_u, coarse_nx, coarse_ny, coarse_nz)
+        _interpolate_jit(coarse_u, fine_u, coarse_nx, coarse_ny, coarse_nz)
             
     def v_cycle(self, level: int = 0):
         """V-cycle multigrid"""
@@ -639,7 +597,7 @@ class SimpleGMG:
         """Solve using iterative version"""
         # Initialize solution
         for grid in self.grids:
-            grid['u'].fill(0.0)
+            grid['u'].fill(10.0)
         print("=" * 50)
         print(f"Starting GMG solve with {max_iter} max iterations")
         print(f"Grid size: {self.nx}x{self.ny}x{self.nz}, Levels: {self.num_levels}")
@@ -651,16 +609,12 @@ class SimpleGMG:
         
         # calculate residual and print before any cycle starts at level 0.
         self.compute_residual(0)
-        xi_squared = self.calculate_rho(self.grids[0]['r'])
-        initial_rho = np.sqrt(xi_squared)  # Actual L2 norm for display
-        print(f"Initial |rho|_2 at level 0: {xi_squared:.6e}")
+        xi_max = self.calculate_rho(self.grids[0]['r'])
+        print(f"Initial |rho|_max at level 0: {xi_max:.6e}")
         
         start_time = time.time()
-        iterations = 0
-        # residual = 1000.0
-        
-        while (xi_squared > self.rel_tolerance * self.rel_tolerance) and (iterations < max_iter):
-        # while iterations < max_iter:
+        iterations = 0        
+        while (xi_max > self.rel_tolerance) and (iterations < max_iter):
             # Perform V-cycle
             cycle_start = time.time()
             self.only_down_cycle()
@@ -673,8 +627,8 @@ class SimpleGMG:
             
             # Check convergence
             self.compute_residual(0)
-            xi_squared = self.calculate_rho(self.grids[0]['r'])
-            print(f"Iteration {iterations:2d}: |rho|_2 = {xi_squared:.6e}, tolerance^2 = {self.rel_tolerance * self.rel_tolerance:.6e}, Time = {cycle_time:.4f}s")
+            xi_max = self.calculate_rho(self.grids[0]['r'])
+            print(f"Iteration {iterations:2d}: |rho|_max = {xi_max:.6e}, tolerance = {self.rel_tolerance:.6e}, Time = {cycle_time:.4f}s")
             iterations += 1
 
 
@@ -682,13 +636,13 @@ class SimpleGMG:
         
         print("-" * 50)
         print(f"After {iterations} iterations")
-        print(f"Final |rho|_2: {xi_squared:.6e}")
-        converged = "Yes" if xi_squared < (self.rel_tolerance * self.rel_tolerance) else "No"
+        print(f"Final |rho|_inf: {xi_max:.6e}")
+        converged = "Yes" if xi_max < self.rel_tolerance else "No"
         print(f"Converged: {converged}")
         print(f"Total time: {total_time:.4f}s")
         print("=" * 50)
         
-        return xi_squared, iterations
+        return xi_max, iterations
 
     #########################################################
 
