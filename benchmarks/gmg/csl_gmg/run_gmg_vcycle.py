@@ -16,8 +16,8 @@ import numpy as np
 import copy
 
 # sys.path.append(os.path.join(os.path.dirname(__file__), '..', "python_gmg"))
-from python_gmg.gmgoscar import SimpleGMG as SimpleGMGOSCAR
-# from gmgoscar import SimpleGMG as SimpleGMGOSCAR
+# from python_gmg.gmgoscar import SimpleGMG as SimpleGMGOSCAR
+from gmgoscar import SimpleGMG as SimpleGMGOSCAR
 from cmd_parser import parse_args, print_arguments
 from util import hwl_2_oned_colmajor, oned_to_hwl_colmajor
 
@@ -326,21 +326,37 @@ def process_timing_data(height, width, levels, timing_hwl_levels, time_ref_hwl, 
             })
         return timing_per_level
 
-def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, device_solver, args):
+def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, symbol_rho, symbol_rho_history, args):
 
     simulator.launch("f_tic_d2h", nonblock=True)
     u_wse_1d = np.zeros(height*width*zDim, DTYPE)
     simulator.memcpy_d2h(u_wse_1d, symbol_u, 0, 0, width, height, zDim,
                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
-    
+    simulator.launch("f_toc_d2h", nonblock=False)
+
+    print("  6.2. Copying residual from device...")
     r_wse_1d = np.zeros(height*width*zDim, DTYPE)
     simulator.memcpy_d2h(r_wse_1d, symbol_r, 0, 0, width, height, zDim,
                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
-    simulator.launch("f_toc_d2h", nonblock=False)
+
+    # Copy rho (convergence metric) from device
+    print("  6.3. Copying final rho from device...")
+    rho_wse = np.zeros(1, np.float32)
+    simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1, 
+                        streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+
+    
+    # Copy rho history and actual iterations count from device
+    print("  6.4. Copying rho history from device...")
+    MAX_ITERATIONS = 200  # Must match MAX_ITERATIONS constant in kernel_gmg_vcycle.csl
+    rho_history_array = np.zeros(MAX_ITERATIONS, np.float32)
+    simulator.memcpy_d2h(rho_history_array, symbol_rho_history, 0, 0, 1, 1, MAX_ITERATIONS,
+                        streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+    
 
     total_bytes = u_wse_1d.nbytes + r_wse_1d.nbytes
 
-    return u_wse_1d, r_wse_1d, total_bytes
+    return u_wse_1d, r_wse_1d, rho_wse[0], rho_history_array, total_bytes
 
 def copy_timing_data(height, width, levels, simulator, symbol_timing_smooth, symbol_timing_apply_op, 
                     symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, symbol_timing_setup_init, 
@@ -422,7 +438,6 @@ def print_configuration_summary(
         ("Max iterations", args.max_ite),
         ("Tolerance (abs)", f"{device_solver.abs_tolerance:.2e}"),
         ("Tolerance (rel)", f"{device_solver.rel_tolerance:.2e}"),
-        ("Tolerance (rel)^2", f"{device_solver.rel_tolerance * device_solver.rel_tolerance:.2e}"),
         ("Pre/Post/Bottom iter", f"{args.pre_iter}/{args.post_iter}/{args.bottom_iter}"),
         ("Datatype", dtype_name),
         ("Jacobi omega", f"{device_solver.omega:.6f}"),
@@ -433,7 +448,7 @@ def print_configuration_summary(
         # ("Host iterations", host_iterations),
         # ("Host final rho", f"{host_residual:.3e}"),
         ("Device iterations", device_iterations),
-        ("Device final |rho|_2", f"{device_rho:.3e}")
+        ("Device final |rho|_inf", f"{device_rho:.3e}")
     ]
 
     key_width = 32
@@ -718,6 +733,7 @@ def main():
     symbol_counter_rho_check = simulator.get_id("counter_rho_check")
     # convergence
     symbol_rho = simulator.get_id("rho")
+    symbol_rho_history = simulator.get_id("rho_history")
     
     simulator.load()
     simulator.run()
@@ -730,9 +746,7 @@ def main():
     simulator.launch("f_enable_timer", nonblock=False)
     
     # Copy initial data
-    # print("2. Copying initial data to device...")
-    # device_solver.compute_residual(0)
-    # initial_residual = device_solver.calculate_rho(device_solver.grids[0]['r'])
+    print("2. Copying initial data to device...")
    # Timing measures inside the function
     total_bytes_h2d = copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, 
                  symbol_u, symbol_f, symbol_hx_array, symbol_hy_array, symbol_hz_array, symbol_jacobi_coeff_array, device_solver, args)
@@ -764,7 +778,7 @@ def main():
     
     print("  6.1. Copying u from device...")
     # timing measures inside the function
-    u_wse_1d, r_wse_1d, total_bytes_d2h = copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, device_solver, args)
+    u_wse_1d, r_wse_1d, rho_device, rho_history_array, total_bytes_d2h = copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, symbol_rho, symbol_rho_history, args)
     u_wse_3d = oned_to_hwl_colmajor(height, width, zDim, u_wse_1d, DTYPE)
 
     # Copy timing data from device
@@ -787,11 +801,6 @@ def main():
                          symbol_counter_smooth, symbol_counter_residual, 
                          symbol_counter_apply_op, symbol_counter_restrict, 
                          symbol_counter_interp, symbol_counter_setup_init, symbol_counter_rho_check, args)
-    # Copy rho (convergence metric) from device
-    print("  6.4. Copying final rho from device...")
-    rho_wse = np.zeros(1, np.float32)
-    simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1, streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=False)
-    rho_device = rho_wse[0]
 
 ############################################################
 # Stop simulator
@@ -835,11 +844,25 @@ def main():
     print("="*60)
     device_rh = device_solver.grids[0]['rho_up']
 
-    print(f"[GMG] rho = |b-A*x|^2 = {device_rh:.6e}")
+    # Print rho values after each iteration
+    print("\n" + "="*60)
+    print("Rho values after each iteration")
+    print("="*60)
+    if len(rho_history_array) > 0:
+        print(f"Total iterations performed: {len(rho_history_array)}")
+        print(f"{'Iteration':<12} {'|rho|_max':<20}")
+        print("-" * 60)
+        for i in range(len(rho_history_array)):
+            rho_val = rho_history_array[i]
+            print(f"{i+1:<12} {rho_val:>19.6e}")
+    else:
+        print("No iterations were performed.")
+
+    print(f"[GMG] rho = |b-A*x|_inf = {device_rh:.6e}")
     # Use rel_tolerance^2 for convergence check (matching solve_iterative pattern)
-    tolerance_squared = device_solver.rel_tolerance * device_solver.rel_tolerance
-    print(f"  Tolerance^2 = {tolerance_squared:.6e}")
-    converged = device_rh <= tolerance_squared
+    tolerance = device_solver.rel_tolerance
+    print(f"  Tolerance = {tolerance:.6e}")
+    converged = device_rh <= tolerance
     print(f"  Converged: {'Yes' if converged else 'No'}")
 
 ############################################################

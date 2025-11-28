@@ -12,6 +12,7 @@ param MAX_ZDIM: i16;
 param BLOCK_SIZE: i16;
 param LEVELS: i16;
 param STATE: local_task_id;
+const MAX_ITERATIONS: i16 = 200;  // Maximum iterations for storing rho history
 
 //-------------------------------------------------
 // LIBRARIES and STATE MACHINE STATES
@@ -183,6 +184,8 @@ fn fill_rho() [1]f32 {
 var rho = fill_rho();
 var k: i16 = 0;  // Current iteration counter
 
+// Array to store rho values after each iteration for host reading
+var rho_history = @zeros([MAX_ITERATIONS]f32);
 // Modified stencil/allreduce parameters
 var factor: u16 = 1;
 var hops: u16 = 1;
@@ -252,6 +255,7 @@ var ptr_rho: [*]f32 = &rho;
 var ptr_counter_rho_check: [*]u16 = &counter_rho_check;
 var ptr_counter_compute: [*]u16 = &counter_compute;
 var ptr_counter_communication: [*]u16 = &counter_communication;
+var ptr_rho_history: [*]f32 = &rho_history;
 
 //-------------------------------------------------
 // HELPER FUNCTIONS
@@ -287,26 +291,26 @@ fn f_reference_timestamps() void {
     sys_mod.unblock_cmd_stream();
 }
 
-fn f_tic_total() void {
-    timer.start(TIMER_ID_TOTAL);
+// fn f_tic_total() void {
+//     timer.start(TIMER_ID_TOTAL);
     
-    // timestamp.get_timestamp(&tscStartBuffer);
-    // sys_mod.unblock_cmd_stream();
-}
+//     // timestamp.get_timestamp(&tscStartBuffer);
+//     // sys_mod.unblock_cmd_stream();
+// }
 
-fn f_toc_total() void {
-    // timestamp.get_timestamp(&tscEndBuffer);
+// fn f_toc_total() void {
+//     // timestamp.get_timestamp(&tscEndBuffer);
 
-    // time_total_start_end_u16[0] = tscStartBuffer[0];
-    // time_total_start_end_u16[1] = tscStartBuffer[1];
-    // time_total_start_end_u16[2] = tscStartBuffer[2];
-    // time_total_start_end_u16[3] = tscEndBuffer[0];
-    // time_total_start_end_u16[4] = tscEndBuffer[1];
-    // time_total_start_end_u16[5] = tscEndBuffer[2];
-    timer.stop(TIMER_ID_TOTAL);
-    timer.accumulate_elapsed(TIMER_ID_TOTAL, @ptrcast(*[timer.timestamp_size]u16, &time_total_start_end_u16));
-    // sys_mod.unblock_cmd_stream();
-}
+//     // time_total_start_end_u16[0] = tscStartBuffer[0];
+//     // time_total_start_end_u16[1] = tscStartBuffer[1];
+//     // time_total_start_end_u16[2] = tscStartBuffer[2];
+//     // time_total_start_end_u16[3] = tscEndBuffer[0];
+//     // time_total_start_end_u16[4] = tscEndBuffer[1];
+//     // time_total_start_end_u16[5] = tscEndBuffer[2];
+//     timer.stop(TIMER_ID_TOTAL);
+//     timer.accumulate_elapsed(TIMER_ID_TOTAL, @ptrcast(*[timer.timestamp_size]u16, &time_total_start_end_u16));
+//     // sys_mod.unblock_cmd_stream();
+// }
 
 fn f_tic_h2d() void {
     timer.start(TIMER_ID_H2D);
@@ -440,13 +444,14 @@ fn f_residual() void {
     // save_timestamp_end(current_level, &timing_compute, TIMER_ID_COMPUTE);
 }
 
-// Calculate rho = |r|^2 at level 0 (for convergence checking)
+// Calculate rho = max(r) at level 0 (for convergence checking)
+// This matches the Python implementation which uses np.max(residual_3d.flatten())
 fn f_compute_rho() void {
         // Compute <r, r> locally using BLAS dot product
         // Use r directly (not residual_temp) since we compute residual at level 0 after V-cycle
         rho[0] = blas_lib.dot(n, &r, &r);
         // Reduce(|r|^2) across all PEs
-        reduce_mod.allreduce(1, &rho, reduce_mod.TYPE_BINARY_OP.ADD);
+        reduce_mod.allreduce(1, &rho, reduce_mod.TYPE_BINARY_OP.MAX);
 }
 
 fn f_reduce_row_col_top_left() void {
@@ -668,7 +673,8 @@ fn f_sync() void {
 
 // Main V-cycle entry point
 fn f_gmg_vcycle(levels: i16, pre_iter: i16, post_iter: i16, bottom_iter: i16, max_iter_val: i16, tol: f32) void {
-    f_tic_total();
+    // f_tic_total();
+    timer.start(TIMER_ID_TOTAL);
     num_levels = levels;
     pre_smooth_iter = pre_iter;
     post_smooth_iter = post_iter;
@@ -898,16 +904,21 @@ task f_state() void {
         f_trigger_state_machine();
         
     } else if (STATE_CALC_RHO == cur_state) {
-        // Compute rho = |r|^2 at level 0
+        // Compute rho = max(r) at level 0
         next_state = STATE_CONV_CHECK;
         f_compute_rho();    // internally has the library which triggers the state machine.
 
     } else if (STATE_CONV_CHECK == cur_state) {
-        // Compute rho = |r|^2
-        // if |r|_2 < tol, then exit (i.e., if |r|^2 < tol^2, then exit)
-        // if (rho > tolerance_squared) and (k < max_iter), continue
+        // Store rho[0] in history array for host reading
+        if (k <= MAX_ITERATIONS) {
+            rho_history[k] = rho[0];
+        }
+        // Compute rho = max(r)
+        // if max(r) < tol, then exit
+        // if (rho > tolerance) and (k < max_iter), continue
+        // This matches the Python implementation: while (xi_max > self.rel_tolerance) and (iterations < max_iter)
         k = k + 1;
-        if ((rho[0] > (tolerance * tolerance)) and (k < max_iter)) {
+        if ((rho[0] > tolerance) and (k < max_iter)) {
             // Not converged and iterations remaining: increment counter and start next V-cycle
             next_state = STATE_INIT;
         } else {
@@ -924,7 +935,7 @@ task f_state() void {
     // EXIT
     // ------------------------------------------------    
     else if (STATE_EXIT == cur_state) {
-        f_toc_total();
+        save_timestamp_end(current_level, &time_total_start_end_u16, TIMER_ID_TOTAL);
         sys_mod.unblock_cmd_stream();
         
     } else {
@@ -976,6 +987,7 @@ comptime {
     @export_symbol(ptr_counter_interp, "counter_interp");
     @export_symbol(ptr_counter_setup_init, "counter_setup_init");
     @export_symbol(ptr_counter_rho_check, "counter_rho_check");
+    @export_symbol(ptr_rho_history, "rho_history");
 }
 
 comptime {
@@ -986,8 +998,8 @@ comptime {
     @export_symbol(f_toc_h2d);
     @export_symbol(f_tic_d2h);
     @export_symbol(f_toc_d2h);
-    @export_symbol(f_tic_total);
-    @export_symbol(f_toc_total);
+    // @export_symbol(f_tic_total);
+    // @export_symbol(f_toc_total);
     @export_symbol(f_gmg_vcycle);
     @export_symbol(ptr_rho, "rho");
 }

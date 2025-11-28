@@ -177,6 +177,12 @@ var mem_x_z_minus_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> du
 var mem_x_z_plus_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i+1] });
 var mem_x_z_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i] });
 
+// DSDs for z-direction boundary conditions (Dirichlet: u = 0 at boundaries)
+var mem_y_z_boundary_bottom_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i] });
+var mem_x_z_boundary_bottom_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i] });
+var mem_y_z_boundary_top_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i] });
+var mem_x_z_boundary_top_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i] });
+
 var fab_recv_west_wdsd =  @get_dsd(fabin_dsd, .{
    .extent = BLOCK_SIZE,
    .fabric_color = c_recv_west,
@@ -349,6 +355,22 @@ fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32, current_level: i16, timing
     // mem_x_z_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{zDim} -> x[i] });
     mem_x_z_buf_dsd = @set_dsd_base_addr(mem_x_z_buf_dsd, x);
     mem_x_z_buf_dsd = @set_dsd_length(mem_x_z_buf_dsd, @bitcast(u16,zDim));
+
+    // Setup boundary DSDs for Dirichlet boundary conditions
+    // Bottom boundary: y[0] and x[0]
+    const one: u16 = 1; 
+    mem_y_z_boundary_bottom_dsd = @set_dsd_base_addr(mem_y_z_boundary_bottom_dsd, y);
+    mem_y_z_boundary_bottom_dsd = @set_dsd_length(mem_y_z_boundary_bottom_dsd, one);
+    mem_x_z_boundary_bottom_dsd = @set_dsd_base_addr(mem_x_z_boundary_bottom_dsd, x);
+    mem_x_z_boundary_bottom_dsd = @set_dsd_length(mem_x_z_boundary_bottom_dsd, one);
+    
+    // Top boundary: y[zDim-1] and x[zDim-1]
+    mem_y_z_boundary_top_dsd = @set_dsd_base_addr(mem_y_z_boundary_top_dsd, y);
+    mem_y_z_boundary_top_dsd = @increment_dsd_offset(mem_y_z_boundary_top_dsd, zDim-1, f32);
+    mem_y_z_boundary_top_dsd = @set_dsd_length(mem_y_z_boundary_top_dsd, one);
+    mem_x_z_boundary_top_dsd = @set_dsd_base_addr(mem_x_z_boundary_top_dsd, x);
+    mem_x_z_boundary_top_dsd = @increment_dsd_offset(mem_x_z_boundary_top_dsd, zDim-1, f32);
+    mem_x_z_boundary_top_dsd = @set_dsd_length(mem_x_z_boundary_top_dsd, one);
 //---
 
     // reset the starting position of z-direction
@@ -378,6 +400,23 @@ fn laplacian_xy() void {
     // OPTIMIZATION 2: Skip laplacian computation for inactive PEs
     if (!is_active_pe) {
         return; // Inactive PEs don't need to compute laplacian
+    }
+    // Handle boundary conditions
+    if (first_px) {
+        // west  = - center
+        @fnegs(mem_west_buf_dsd, mem_center_buf_dsd);
+    }
+    if (last_px) {
+        // east = - center
+        @fnegs(mem_east_buf_dsd, mem_center_buf_dsd);
+    }
+    if (first_py) {
+        // south = - center
+        @fnegs(mem_south_buf_dsd, mem_center_buf_dsd);
+    }
+    if (last_py) {
+        // north = - center
+        @fnegs(mem_north_buf_dsd, mem_center_buf_dsd);
     }    
     //@fmacs(mem_y_buf_dsd, mem_y_buf_dsd, mem_west_buf_dsd, c_west);
     @load_to_dsr(dest_dsr_send, mem_y_buf_dsd);
@@ -439,6 +478,19 @@ fn laplacian_z() void {
     @load_to_dsr(src0_dsr, mem_y_z_buf_dsd);
     @load_to_dsr(src1_dsr_send, mem_x_z_buf_dsd);
     @fmacs(dest_dsr_send, src0_dsr, src1_dsr_send, c_center);
+
+    // Dirichlet boundary conditions: u = 0 at z boundaries
+    // At k=0 (bottom): x[-1] = -x[0], so add -c_bottom * x[0] to y[0]
+    @load_to_dsr(dest_dsr_send, mem_y_z_boundary_bottom_dsd);
+    @load_to_dsr(src0_dsr, mem_y_z_boundary_bottom_dsd);
+    @load_to_dsr(src1_dsr_send, mem_x_z_boundary_bottom_dsd);
+    @fmacs(dest_dsr_send, src0_dsr, src1_dsr_send, -c_bottom);
+
+    // At k=zDim-1 (top): x[zDim] = -x[zDim-1], so add -c_top * x[zDim-1] to y[zDim-1]
+    @load_to_dsr(dest_dsr_send, mem_y_z_boundary_top_dsd);
+    @load_to_dsr(src0_dsr, mem_y_z_boundary_top_dsd);
+    @load_to_dsr(src1_dsr_send, mem_x_z_boundary_top_dsd);
+    @fmacs(dest_dsr_send, src0_dsr, src1_dsr_send, -c_top);
 }
 
 // If both SEND and RECV are done, perform

@@ -80,10 +80,10 @@ if NUMBA_AVAILABLE:
                         val_z += beta * u[i, j, k-1]
                     if k < nz-1:
                         val_z += beta * u[i, j, k+1]
-                    if k == 0:     
-                        val_z += beta * -1.0 * u[i, j, 0]
-                    if k == nz-1:     
-                        val_z += beta * -1.0 * u[i, j, nz-1]
+                    # if k == 0:     
+                    #     val_z += beta * -1.0 * u[i, j, 0]
+                    # if k == nz-1:     
+                    #     val_z += beta * -1.0 * u[i, j, nz-1]
                     val_z *= hz2_inv
                     
                     Au[i, j, k] = val_x + val_y + val_z
@@ -198,6 +198,7 @@ class SimpleGMG:
                 'hx': hx,
                 'hy': hy,
                 'hz': hz,
+                # 'u': np.full((nx, ny, nz), 10.0, dtype=DTYPE),      # Solution
                 'u': np.zeros((nx, ny, nz), dtype=DTYPE),      # Solution
                 'f': np.zeros((nx, ny, nz), dtype=DTYPE),      # Right-hand side
                 'r': np.zeros((nx, ny, nz), dtype=DTYPE),      # Residual
@@ -552,8 +553,8 @@ class SimpleGMG:
     def solve(self, max_iter: int = 20):
         """Solve using V-cycles"""
         # Initialize solution
-        for grid in self.grids:
-            grid['u'].fill(0.0)
+        # for grid in self.grids:
+        #     grid['u'].fill(0.0)
         
         print(f"Starting GMG solve with {max_iter} max iterations")
         print(f"Grid size: {self.nx}x{self.ny}x{self.nz}, Levels: {self.num_levels}")
@@ -596,8 +597,8 @@ class SimpleGMG:
     def solve_iterative(self, max_iter: int = 20):
         """Solve using iterative version"""
         # Initialize solution
-        for grid in self.grids:
-            grid['u'].fill(10.0)
+        # for grid in self.grids:
+        #     grid['u'].fill(0.0)
         print("=" * 50)
         print(f"Starting GMG solve with {max_iter} max iterations")
         print(f"Grid size: {self.nx}x{self.ny}x{self.nz}, Levels: {self.num_levels}")

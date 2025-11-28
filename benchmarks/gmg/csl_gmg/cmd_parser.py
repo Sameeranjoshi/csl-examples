@@ -56,13 +56,13 @@ def parse_args():
   parser.add_argument("-n", default=1, type=int, help="number of PE columns")
   parser.add_argument("-k", default=1, type=int, help="size of local tensor, no less than 2")
   parser.add_argument("--zDim", default=2, type=int, help="[0 zDim-1) is the domain of Laplacian")
-  parser.add_argument("--max-ite", default=100, type=int, help="maximum number of iterations of GMG (default: 100)")
+  parser.add_argument("--max-ite", default=200, type=int, help="maximum number of iterations of GMG (default: 100)")
   parser.add_argument('-l', '--levels', type=int, default=2, help='Maximum number of multigrid levels (default: 2)')
   parser.add_argument('-v', '--verbose', action='store_true', help='Print detailed level information')
   parser.add_argument('--tolerance', type=float, default=1e-4, help='Convergence tolerance (default: 1e-4)')
   parser.add_argument('--pre-iter', type=int, default=6, help='Number of pre-smoothing iterations (default: 6)')
   parser.add_argument('--post-iter', type=int, default=6, help='Number of post-smoothing iterations (default: 6)')
-  parser.add_argument('--bottom-iter', type=int, default=4, help='Number of bottom solver iterations (default: 10)')
+  parser.add_argument('--bottom-iter', type=int, default=1, help='Number of bottom solver iterations (default: 10)')
 
   # Other CSL related arguments
   parser.add_argument("--blockSize", default=2, type=int, help="the size of temporary buffers for communication")

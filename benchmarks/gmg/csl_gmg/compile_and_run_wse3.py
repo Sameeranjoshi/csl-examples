@@ -46,7 +46,17 @@ Compile_command = f"--arch=wse3 --fabric-dims=762,1172 --fabric-offsets=4,1 --pa
     --llvm-option=--inline-threshold={INLINE_THRESHOLD} --llvm-option=--unroll-threshold=256"
 
 Run_command = f"cs_python run_gmg_vcycle.py -m={size} -n={size} -k={size} --latestlink out_vcycle --channels={channels} \
---width-west-buf=0 --width-east-buf=0 --zDim={size} --run-only --levels={levels} --max-ite=200 --blockSize={BSIZE} --cmaddr %CMADDR%"
+--width-west-buf=0 --width-east-buf=0 --zDim={size} --run-only --levels={levels} --max-ite=200 --blockSize={BSIZE} --bottom-iter=1 --cmaddr %CMADDR%"
+
+
+# Run_command1 = f"cs_python run_gmg_vcycle.py -m={size} -n={size} -k={size} --latestlink out_vcycle --channels={channels} \
+# --width-west-buf=0 --width-east-buf=0 --zDim={size} --run-only --levels={levels} --max-ite=200 --blockSize={BSIZE} --bottom-iter=50 --cmaddr %CMADDR%"
+
+
+# Run_command2 = f"cs_python run_gmg_vcycle.py -m={size} -n={size} -k={size} --latestlink out_vcycle --channels={channels} \
+# --width-west-buf=0 --width-east-buf=0 --zDim={size} --run-only --levels={levels} --max-ite=200 --blockSize={BSIZE} --bottom-iter=50 --cmaddr %CMADDR%"
+
+
 
 ###############################################################################
 print(f"Compile command: {Compile_command}")
@@ -103,14 +113,20 @@ with SdkLauncher(artifact_path, simulator=False, disable_version_check=True) as 
     print("Running host code on appliance ----------------------------------------")
     run_start = time.time()
     response = launcher.run(Run_command)
+    # response1 = launcher.run(Run_command1)
+    # response2 = launcher.run(Run_command2)
     run_end = time.time()
     print(response)
+    # print(response1)
+    # print(response2)
     print("Run completed on appliance ----------------------------------------")
     print("Copying data from appliance ----------------------------------------")
     # launcher.download_artifact("../sim.log", f"./{out_path}/sim.log")
     # launcher.download_artifact("simfab_traces", f"./{out_path}")  # takes too long to download
     with open(f"./{out_path}/response.txt", "w") as f:
         f.write(response)
+        # f.write(response1)
+        # f.write(response2)
 
     # os.rename("python_gmg.tar.gz", f"./{out_path}/python_gmg.tar.gz")
     # os.rename("run_meta.json", f"./{out_path}/run_meta.json")
