@@ -16,8 +16,8 @@ import numpy as np
 import copy
 
 # sys.path.append(os.path.join(os.path.dirname(__file__), '..', "python_gmg"))
-# from python_gmg.gmgoscar import SimpleGMG as SimpleGMGOSCAR
-from gmgoscar import SimpleGMG as SimpleGMGOSCAR
+from python_gmg.gmgoscar import SimpleGMG as SimpleGMGOSCAR
+# from gmgoscar import SimpleGMG as SimpleGMGOSCAR
 from cmd_parser import parse_args, print_arguments
 from util import hwl_2_oned_colmajor, oned_to_hwl_colmajor
 
@@ -129,12 +129,17 @@ def copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
     hz_base = np.array([device_solver.grids[i]['hz'] for i in range(args.levels)], dtype=DTYPE)
     
     # Prepare Jacobi coefficient array for one PE
+    # Match host formula: diagonal = -2*(1/hx² + 1/hy² + 1/hz²)
+    # diag_inv = 1/diagonal = -1/(2*(1/hx² + 1/hy² + 1/hz²))
+    # update = omega * diag_inv * (f - Au) = omega * (-1/(2*(1/hx² + 1/hy² + 1/hz²))) * (f - Au)
+    # So jacobi_coeff = omega * (-1/(2*(1/hx² + 1/hy² + 1/hz²))) = -omega/(2*(1/hx² + 1/hy² + 1/hz²))
     jacobi_coeff_base = np.zeros(args.levels, dtype=DTYPE)
+    omega = device_solver.omega  # 0.75
     for level in range(args.levels):
         hx = device_solver.grids[level]['hx']
         hy = device_solver.grids[level]['hy']
         hz = device_solver.grids[level]['hz']
-        jacobi_coeff_base[level] = -1.0 / (3.0 * (1.0/(hx*hx) + 1.0/(hy*hy) + 1.0/(hz*hz)))
+        jacobi_coeff_base[level] = -omega / (2.0 * (1.0/(hx*hx) + 1.0/(hy*hy) + 1.0/(hz*hz)))
     
     # Repeat these arrays so shape is (height, width, levels)
     hx_array = np.tile(hx_base, (height, width, 1))
@@ -685,7 +690,7 @@ def main():
     device_solver = copy.deepcopy(host_solver)
 
     # Run reference on host
-    # host_residual, host_iterations = host_solver.solve_iterative(args.max_ite)
+    host_residual, host_iterations = host_solver.solve_iterative(args.max_ite)
 
 ############################################################
 # Device
@@ -781,26 +786,26 @@ def main():
     u_wse_1d, r_wse_1d, rho_device, rho_history_array, total_bytes_d2h = copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, symbol_rho, symbol_rho_history, args)
     u_wse_3d = oned_to_hwl_colmajor(height, width, zDim, u_wse_1d, DTYPE)
 
-    # Copy timing data from device
-    print("  6.2. Copying timing data...")
-    timing_smooth_hwl_levels, timing_residual_hwl_levels, \
-        timing_apply_op_hwl_levels, timing_restrict_hwl_levels, \
-            timing_interp_hwl_levels, timing_setup_init_hwl_levels, \
-                timing_rho_check_hwl_levels, time_total_start_end_hwl, \
-                    time_h2d_hwl, time_d2h_hwl, time_ref_hwl, timing_communication_hwl_levels, \
-                        timing_compute_hwl_levels, timing_spmv_total_hwl_levels, \
-                            timing_spmv_communication_hwl_levels, timing_spmv_compute_hwl_levels = \
-            copy_timing_data(height, width, args.levels, simulator, symbol_timing_smooth, symbol_timing_apply_op, 
-                             symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, 
-                             symbol_timing_setup_init, symbol_timing_rho_check, symbol_time_total_start_end, symbol_time_h2d, symbol_time_d2h, symbol_time_ref, 
-                             symbol_timing_communication, symbol_timing_compute, symbol_timing_spmv_total, symbol_timing_spmv_communication, 
-                             symbol_timing_spmv_compute, args)
-    print("  6.3. Copying operation counters...")
-    counter_smooth, counter_residual, counter_apply_op, counter_restrict, counter_interp, counter_setup_init, counter_rho_check = \
-        copy_counter_data(height, width, args.levels, simulator, 
-                         symbol_counter_smooth, symbol_counter_residual, 
-                         symbol_counter_apply_op, symbol_counter_restrict, 
-                         symbol_counter_interp, symbol_counter_setup_init, symbol_counter_rho_check, args)
+    # # # Copy timing data from device
+    # print("  6.2. Copying timing data...")
+    # timing_smooth_hwl_levels, timing_residual_hwl_levels, \
+    #     timing_apply_op_hwl_levels, timing_restrict_hwl_levels, \
+    #         timing_interp_hwl_levels, timing_setup_init_hwl_levels, \
+    #             timing_rho_check_hwl_levels, time_total_start_end_hwl, \
+    #                 time_h2d_hwl, time_d2h_hwl, time_ref_hwl, timing_communication_hwl_levels, \
+    #                     timing_compute_hwl_levels, timing_spmv_total_hwl_levels, \
+    #                         timing_spmv_communication_hwl_levels, timing_spmv_compute_hwl_levels = \
+    #         copy_timing_data(height, width, args.levels, simulator, symbol_timing_smooth, symbol_timing_apply_op, 
+    #                          symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, 
+    #                          symbol_timing_setup_init, symbol_timing_rho_check, symbol_time_total_start_end, symbol_time_h2d, symbol_time_d2h, symbol_time_ref, 
+    #                          symbol_timing_communication, symbol_timing_compute, symbol_timing_spmv_total, symbol_timing_spmv_communication, 
+    #                          symbol_timing_spmv_compute, args)
+    # print("  6.3. Copying operation counters...")
+    # counter_smooth, counter_residual, counter_apply_op, counter_restrict, counter_interp, counter_setup_init, counter_rho_check = \
+    #     copy_counter_data(height, width, args.levels, simulator, 
+    #                      symbol_counter_smooth, symbol_counter_residual, 
+    #                      symbol_counter_apply_op, symbol_counter_restrict, 
+    #                      symbol_counter_interp, symbol_counter_setup_init, symbol_counter_rho_check, args)
 
 ############################################################
 # Stop simulator
@@ -813,29 +818,29 @@ def main():
 ############################################################
 # Verification
 ############################################################
-    # # # Verification
-    # print("\n" + "="*60)
-    # print("Verification")
-    # print("Checking u at level 0 for host_solver and device_solver")
-    # print("="*60)
+    # # Verification
+    print("\n" + "="*60)
+    print("Verification")
+    print("Checking u at level 0 for host_solver and device_solver")
+    print("="*60)
   
-    # # # Check/verify u, f, r, Au at level 0 for host_solver and device_solver
-    # fields = ['u']
-    # for field in fields:
-    #     host_field = host_solver.grids[0][field]
-    #     device_field = device_solver.grids[0][field]
-    #     np.testing.assert_allclose(host_field.ravel(), device_field.ravel(), atol=1e-5, rtol=1e-5)
-    #     stats = compare_u(host_field, device_field)
-    #     print(stats)
-    #     # print(f"Top-10 largest |Δ{field}| indices: {top_k_indices_absdiff(host_field, device_field, k=10)}")
+    # # Check/verify u, f, r, Au at level 0 for host_solver and device_solver
+    fields = ['u']
+    for field in fields:
+        host_field = host_solver.grids[0][field]
+        device_field = device_solver.grids[0][field]
+        np.testing.assert_allclose(host_field.ravel(), device_field.ravel(), atol=1e-5, rtol=1e-5)
+        stats = compare_u(host_field, device_field)
+        print(stats)
+        # print(f"Top-10 largest |Δ{field}| indices: {top_k_indices_absdiff(host_field, device_field, k=10)}")
 
 
-    #     nrm2_u = np.linalg.norm(device_field.ravel(), 2)
-    #     print(f"|{field}|_2 = {nrm2_u}")
-    #     z = host_field.ravel() - device_field.ravel()
-    #     nrm_z = np.linalg.norm(z, np.inf)
-    #     print(f"|{field}_host - {field}_device| = {nrm_z}")
-    #     print(f"\nSUCCESSFULLY VERIFIED {field} VALUES BETWEEN HOST AND DEVICE!")
+        nrm2_u = np.linalg.norm(device_field.ravel(), 2)
+        print(f"|{field}|_2 = {nrm2_u}")
+        z = host_field.ravel() - device_field.ravel()
+        nrm_z = np.linalg.norm(z, np.inf)
+        print(f"|{field}_host - {field}_device| = {nrm_z}")
+        print(f"\nSUCCESSFULLY VERIFIED {field} VALUES BETWEEN HOST AND DEVICE!")
 ############################################################
 # Convergence
 ############################################################
@@ -869,22 +874,22 @@ def main():
 # Timing
 ############################################################
 
-    profiling(args, height, width,
-        timing_smooth_hwl_levels, timing_residual_hwl_levels,
-        timing_restrict_hwl_levels, timing_interp_hwl_levels,
-        timing_setup_init_hwl_levels, timing_rho_check_hwl_levels,
-        time_total_start_end_hwl, time_h2d_hwl, time_d2h_hwl, time_ref_hwl,
-        timing_communication_hwl_levels, timing_compute_hwl_levels, 
-        timing_spmv_total_hwl_levels, timing_spmv_communication_hwl_levels, timing_spmv_compute_hwl_levels,
-        counter_smooth, counter_residual, counter_restrict, counter_interp, counter_setup_init, counter_rho_check, counter_apply_op,
-        WORDS_PER_TIMESTAMP, WORDS_PER_START_END, total_bytes_h2d, total_bytes_d2h)
+    # profiling(args, height, width,
+    #     timing_smooth_hwl_levels, timing_residual_hwl_levels,
+    #     timing_restrict_hwl_levels, timing_interp_hwl_levels,
+    #     timing_setup_init_hwl_levels, timing_rho_check_hwl_levels,
+    #     time_total_start_end_hwl, time_h2d_hwl, time_d2h_hwl, time_ref_hwl,
+    #     timing_communication_hwl_levels, timing_compute_hwl_levels, 
+    #     timing_spmv_total_hwl_levels, timing_spmv_communication_hwl_levels, timing_spmv_compute_hwl_levels,
+    #     counter_smooth, counter_residual, counter_restrict, counter_interp, counter_setup_init, counter_rho_check, counter_apply_op,
+    #     WORDS_PER_TIMESTAMP, WORDS_PER_START_END, total_bytes_h2d, total_bytes_d2h)
     print_configuration_summary(
         args,
         device_solver,
         # host_iterations,
         # host_residual,
         device_rh,
-        counter_rho_check,
+        counter_rho_check=0,  # TODO: remove =0
     )
 
     if args.cmaddr is None:

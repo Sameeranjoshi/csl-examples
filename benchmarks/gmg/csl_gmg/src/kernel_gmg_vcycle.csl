@@ -291,26 +291,26 @@ fn f_reference_timestamps() void {
     sys_mod.unblock_cmd_stream();
 }
 
-// fn f_tic_total() void {
-//     timer.start(TIMER_ID_TOTAL);
+fn f_tic_total() void {
+    timer.start(TIMER_ID_TOTAL);
     
-//     // timestamp.get_timestamp(&tscStartBuffer);
-//     // sys_mod.unblock_cmd_stream();
-// }
+    // timestamp.get_timestamp(&tscStartBuffer);
+    // sys_mod.unblock_cmd_stream();
+}
 
-// fn f_toc_total() void {
-//     // timestamp.get_timestamp(&tscEndBuffer);
+fn f_toc_total() void {
+    // timestamp.get_timestamp(&tscEndBuffer);
 
-//     // time_total_start_end_u16[0] = tscStartBuffer[0];
-//     // time_total_start_end_u16[1] = tscStartBuffer[1];
-//     // time_total_start_end_u16[2] = tscStartBuffer[2];
-//     // time_total_start_end_u16[3] = tscEndBuffer[0];
-//     // time_total_start_end_u16[4] = tscEndBuffer[1];
-//     // time_total_start_end_u16[5] = tscEndBuffer[2];
-//     timer.stop(TIMER_ID_TOTAL);
-//     timer.accumulate_elapsed(TIMER_ID_TOTAL, @ptrcast(*[timer.timestamp_size]u16, &time_total_start_end_u16));
-//     // sys_mod.unblock_cmd_stream();
-// }
+    // time_total_start_end_u16[0] = tscStartBuffer[0];
+    // time_total_start_end_u16[1] = tscStartBuffer[1];
+    // time_total_start_end_u16[2] = tscStartBuffer[2];
+    // time_total_start_end_u16[3] = tscEndBuffer[0];
+    // time_total_start_end_u16[4] = tscEndBuffer[1];
+    // time_total_start_end_u16[5] = tscEndBuffer[2];
+    timer.stop(TIMER_ID_TOTAL);
+    timer.accumulate_elapsed(TIMER_ID_TOTAL, @ptrcast(*[timer.timestamp_size]u16, &time_total_start_end_u16));
+    // sys_mod.unblock_cmd_stream();
+}
 
 fn f_tic_h2d() void {
     timer.start(TIMER_ID_H2D);
@@ -673,8 +673,8 @@ fn f_sync() void {
 
 // Main V-cycle entry point
 fn f_gmg_vcycle(levels: i16, pre_iter: i16, post_iter: i16, bottom_iter: i16, max_iter_val: i16, tol: f32) void {
-    // f_tic_total();
-    timer.start(TIMER_ID_TOTAL);
+    f_tic_total();
+    // timer.start(TIMER_ID_TOTAL);
     num_levels = levels;
     pre_smooth_iter = pre_iter;
     post_smooth_iter = post_iter;
@@ -935,7 +935,8 @@ task f_state() void {
     // EXIT
     // ------------------------------------------------    
     else if (STATE_EXIT == cur_state) {
-        save_timestamp_end(current_level, &time_total_start_end_u16, TIMER_ID_TOTAL);
+        // save_timestamp_end(current_level, &time_total_start_end_u16, TIMER_ID_TOTAL);
+        f_toc_total();
         sys_mod.unblock_cmd_stream();
         
     } else {
@@ -998,8 +999,8 @@ comptime {
     @export_symbol(f_toc_h2d);
     @export_symbol(f_tic_d2h);
     @export_symbol(f_toc_d2h);
-    // @export_symbol(f_tic_total);
-    // @export_symbol(f_toc_total);
+    @export_symbol(f_tic_total);
+    @export_symbol(f_toc_total);
     @export_symbol(f_gmg_vcycle);
     @export_symbol(ptr_rho, "rho");
 }

@@ -58,10 +58,10 @@ if NUMBA_AVAILABLE:
                         val_x += beta * u[i-1, j, k]
                     if i < nx-1:
                         val_x += beta * u[i+1, j, k]
-                    if i == 0:     
-                        val_x += beta * -1.0 * u[0, j, k]
-                    if i == nx-1:     
-                        val_x += beta * -1.0 * u[nx-1, j, k]
+                    # if i == 0:     
+                    #     val_x += beta * -1.0 * u[0, j, k]
+                    # if i == nx-1:     
+                    #     val_x += beta * -1.0 * u[nx-1, j, k]
                     val_x *= hx2_inv
                     
                     # south/north
@@ -69,10 +69,10 @@ if NUMBA_AVAILABLE:
                         val_y += beta * u[i, j-1, k]
                     if j < ny-1:
                         val_y += beta * u[i, j+1, k]
-                    if j == 0:     
-                        val_y += beta * -1.0 * u[i, 0, k]
-                    if j == ny-1:     
-                        val_y += beta * -1.0 * u[i, ny-1, k]
+                    # if j == 0:     
+                    #     val_y += beta * -1.0 * u[i, 0, k]
+                    # if j == ny-1:     
+                    #     val_y += beta * -1.0 * u[i, ny-1, k]
                     val_y *= hy2_inv
                     
                     # bottom/top
@@ -332,9 +332,11 @@ class SimpleGMG:
             # Simple test function: f = sin(πx)sin(πy)sin(πz)
             pi = DTYPE(np.pi)
             hx = grid['hx']
+            hy = grid['hy']
+            hz = grid['hz']
             #print(f"X: {X}")
             #print(f"hx: {hx}")
-            grid['f'] = np.sin(2*pi * ((X+0.5)*hx)) * np.sin(2*pi * ((Y+0.5)*hx)) * np.sin(2*pi * ((Z+0.5)*hx))
+            grid['f'] = np.sin(2*pi * ((X+0.5)*hx)) * np.sin(2*pi * ((Y+0.5)*hy)) * np.sin(2*pi * ((Z+0.5)*hz))
             #print(f"f: {grid['f']}")
 
     def calculate_rho(self, residual_3d):
