@@ -36,7 +36,7 @@ def main():
     # Test problems (nx, ny, nz, levels, max_iterations, abs_tolerance, pre_iter, post_iter, bottom_iter)
     problems = [
         # (2, 2, 2, 1, 100, 1e-6, 6, 6, 10),   # Tiny problem (7 host, 8 device)
-        # (16, 16, 16, 4, 100, 1e-6, 6, 6, 10),   # Small problem
+        (16, 16, 16, 4, 5, 1e-5, 6, 6, 10),   # Small problem
         # (32, 32, 32, 5, 100, 1e-6, 6, 6, 10),   # Small problem
         # (64, 64, 64, 6, 100, 1e-6, 6, 6, 10),   # Medium problem - increased smoothing and bottom solver
         # (128, 128, 128, 5, 100, 1e-6, 6, 6, 10),   # Large problem - increased smoothing and bottom solver
@@ -46,7 +46,7 @@ def main():
 
         # experiments
         # (256, 256, 256, 6, 200, 1e-4, 6, 6, 1),
-        (256, 256, 256, 6, 200, 1e-4, 6, 6, 5),
+        # (256, 256, 256, 6, 200, 1e-4, 6, 6, 5),
         # (256, 256, 256, 6, 200, 1e-4, 6, 6, 11),
         # (256, 256, 256, 6, 200, 1e-4, 6, 6, 12),
         # (256, 256, 256, 6, 200, 1e-4, 6, 6, 13),

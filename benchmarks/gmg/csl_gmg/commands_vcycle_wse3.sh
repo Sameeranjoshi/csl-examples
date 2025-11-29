@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -e
+set +e
 
 # Compile and run GMG V-cycle with state machine on WSE3
 # With comprehensive performance timing
@@ -66,14 +66,55 @@ echo "============================================"
 echo "Done"
 echo "============================================"
 echo "Compiling..."
-cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=16,10 --fabric-offsets=4,1 \
---params=width:8,height:8,MAX_ZDIM:8,LEVELS:3,BLOCK_SIZE:8 -o=out_vcycle \
---memcpy --channels=8 --width-west-buf=0 --width-east-buf=0 --max-inlined-iterations=1000000
+# cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=25,18 --fabric-offsets=4,1 \
+# --params=width:16,height:16,MAX_ZDIM:16,LEVELS:4,BLOCK_SIZE:16 -o=out_vcycle \
+# --memcpy --channels=8 --width-west-buf=0 --width-east-buf=0 --max-inlined-iterations=1000000
+# echo "============================================"
+# echo "Running with 1 V-cycle, 1 pre-iter, 1 post-iter, 1 bottom-iter"
+# cs_python ./run_gmg_vcycle.py -m=16 -n=16 -k=16 --latestlink out_vcycle --channels=8 \
+# --width-west-buf=0 --width-east-buf=0 --zDim=16 --run-only --levels=4 --max-ite=1 --pre-iter=1 --post-iter=1 --bottom-iter=1
 
-cs_python ./run_gmg_vcycle.py -m=8 -n=8 -k=8 --latestlink out_vcycle --channels=8 \
---width-west-buf=0 --width-east-buf=0 --zDim=8 --run-only --levels=3 --max-ite=100 --pre-iter=6 --post-iter=6 --bottom-iter=10
+# echo "============================================"
+# echo "Running with 1 V-cycle, 6 pre-iter, 6 post-iter, ? bottom-iter"
+# cs_python ./run_gmg_vcycle.py -m=16 -n=16 -k=16 --latestlink out_vcycle --channels=8 \
+# --width-west-buf=0 --width-east-buf=0 --zDim=16 --run-only --levels=4 --max-ite=1 --pre-iter=6 --post-iter=6 --bottom-iter=1
+# cs_python ./run_gmg_vcycle.py -m=16 -n=16 -k=16 --latestlink out_vcycle --channels=8 \
+# --width-west-buf=0 --width-east-buf=0 --zDim=16 --run-only --levels=4 --max-ite=1 --pre-iter=6 --post-iter=6 --bottom-iter=5
+# cs_python ./run_gmg_vcycle.py -m=16 -n=16 -k=16 --latestlink out_vcycle --channels=8 \
+# --width-west-buf=0 --width-east-buf=0 --zDim=16 --run-only --levels=4 --max-ite=1 --pre-iter=6 --post-iter=6 --bottom-iter=6
+# cs_python ./run_gmg_vcycle.py -m=16 -n=16 -k=16 --latestlink out_vcycle --channels=8 \
+# --width-west-buf=0 --width-east-buf=0 --zDim=16 --run-only --levels=4 --max-ite=1 --pre-iter=6 --post-iter=6 --bottom-iter=10
+# cs_python ./run_gmg_vcycle.py -m=16 -n=16 -k=16 --latestlink out_vcycle --channels=8 \
+# --width-west-buf=0 --width-east-buf=0 --zDim=16 --run-only --levels=4 --max-ite=1 --pre-iter=6 --post-iter=6 --bottom-iter=20
 
-./check_memory_usage.sh out_vcycle 0 0 --summary
+# echo "============================================"
+# echo "Running with ? V-cycle, 6 pre-iter, 6 post-iter, 10 bottom-iter"
+# cs_python ./run_gmg_vcycle.py -m=16 -n=16 -k=16 --latestlink out_vcycle --channels=8 \
+# --width-west-buf=0 --width-east-buf=0 --zDim=16 --run-only --levels=4 --max-ite=5 --pre-iter=6 --post-iter=6 --bottom-iter=10
+# cs_python ./run_gmg_vcycle.py -m=16 -n=16 -k=16 --latestlink out_vcycle --channels=8 \
+# --width-west-buf=0 --width-east-buf=0 --zDim=16 --run-only --levels=4 --max-ite=6 --pre-iter=6 --post-iter=6 --bottom-iter=10
+# cs_python ./run_gmg_vcycle.py -m=16 -n=16 -k=16 --latestlink out_vcycle --channels=8 \
+# --width-west-buf=0 --width-east-buf=0 --zDim=16 --run-only --levels=4 --max-ite=10 --pre-iter=6 --post-iter=6 --bottom-iter=10
+
+# # ./check_memory_usage.sh out_vcycle 0 0 --summary
+
+# echo "============================================"
+# echo "32 32 32 PROBLEM"
+# echo "============================================"
+# cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=39,34 --fabric-offsets=4,1 \
+# --params=width:32,height:32,MAX_ZDIM:32,LEVELS:5,BLOCK_SIZE:32 -o=out_vcycle_32 \
+# --memcpy --channels=16 --width-west-buf=0 --width-east-buf=0 --max-inlined-iterations=1000000
+
+# echo "Running with ? V-cycle, 6 pre-iter, 6 post-iter, 10 bottom-iter"
+# echo "============================================"
+# cs_python ./run_gmg_vcycle.py -m=32 -n=32 -k=32 --latestlink out_vcycle_32 --channels=16 \
+# --width-west-buf=0 --width-east-buf=0 --zDim=32 --run-only --levels=5 --max-ite=1 --pre-iter=6 --post-iter=6 --bottom-iter=10
+# cs_python ./run_gmg_vcycle.py -m=32 -n=32 -k=32 --latestlink out_vcycle_32 --channels=16 \
+# --width-west-buf=0 --width-east-buf=0 --zDim=32 --run-only --levels=5 --max-ite=5 --pre-iter=6 --post-iter=6 --bottom-iter=10
+# cs_python ./run_gmg_vcycle.py -m=32 -n=32 -k=32 --latestlink out_vcycle_32 --channels=16 \
+# --width-west-buf=0 --width-east-buf=0 --zDim=32 --run-only --levels=5 --max-ite=6 --pre-iter=6 --post-iter=6 --bottom-iter=10
+cs_python ./run_gmg_vcycle.py -m=32 -n=32 -k=32 --latestlink out_vcycle_32 --channels=16 \
+--width-west-buf=0 --width-east-buf=0 --zDim=32 --run-only --levels=5 --max-ite=10 --pre-iter=6 --post-iter=6 --bottom-iter=10
 
 echo "============================================"
 echo "Done"

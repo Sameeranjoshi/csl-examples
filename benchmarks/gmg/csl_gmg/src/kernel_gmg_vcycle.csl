@@ -12,7 +12,7 @@ param MAX_ZDIM: i16;
 param BLOCK_SIZE: i16;
 param LEVELS: i16;
 param STATE: local_task_id;
-const MAX_ITERATIONS: i16 = 200;  // Maximum iterations for storing rho history
+const MAX_ITERATIONS: i16 = 100;  // Maximum iterations for storing rho history
 
 //-------------------------------------------------
 // LIBRARIES and STATE MACHINE STATES
@@ -445,12 +445,12 @@ fn f_residual() void {
 }
 
 // Calculate rho = max(r) at level 0 (for convergence checking)
-// This matches the Python implementation which uses np.max(residual_3d.flatten())
+// This matches the Python implementation which uses np.max(np.abs(residual_3d.flatten())))
 fn f_compute_rho() void {
-        // Compute <r, r> locally using BLAS dot product
-        // Use r directly (not residual_temp) since we compute residual at level 0 after V-cycle
-        rho[0] = blas_lib.dot(n, &r, &r);
-        // Reduce(|r|^2) across all PEs
+        // Compute max(r) locally for this PE (not absolute value, to match host)
+        // Find maximum of r locally
+        rho[0] = math_lib.abs(r[0]);  // Initialize with first element
+        // Reduce max(r) across all PEs
         reduce_mod.allreduce(1, &rho, reduce_mod.TYPE_BINARY_OP.MAX);
 }
 
@@ -649,6 +649,11 @@ fn f_setup_level(level_id: u16, down: i16) void {
         // At level 0, for subsequent iterations, we want to preserve the solution from the previous iteration
         if (level_id != 0) {
             @fmovs(mem_u_dsd, 0.0);
+        }
+        // CRITICAL: At level 0, for subsequent iterations (k > 0), restore original RHS from save_f_down
+        // before saving it again. This ensures f is always the original RHS at the start of each V-cycle.
+        if (level_id == 0 and k > 0) {
+            @fmovs(mem_f_dsd, mem_save_f_down_dsd);  // Restore original RHS from first iteration
         }
         @fmovs(mem_save_f_down_dsd, mem_f_dsd);  // Save current f (RHS for this level)
     } else {

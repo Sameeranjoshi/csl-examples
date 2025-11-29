@@ -177,11 +177,11 @@ var mem_x_z_minus_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> du
 var mem_x_z_plus_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i+1] });
 var mem_x_z_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i] });
 
-// DSDs for z-direction boundary conditions (Dirichlet: u = 0 at boundaries)
-var mem_y_z_boundary_bottom_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i] });
-var mem_x_z_boundary_bottom_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i] });
-var mem_y_z_boundary_top_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i] });
-var mem_x_z_boundary_top_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i] });
+// // DSDs for z-direction boundary conditions (Dirichlet: u = 0 at boundaries)
+// var mem_y_z_boundary_bottom_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i] });
+// var mem_x_z_boundary_bottom_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i] });
+// var mem_y_z_boundary_top_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i] });
+// var mem_x_z_boundary_top_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy_f32[i] });
 
 var fab_recv_west_wdsd =  @get_dsd(fabin_dsd, .{
    .extent = BLOCK_SIZE,

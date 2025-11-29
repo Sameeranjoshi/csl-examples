@@ -353,7 +353,7 @@ def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
     
     # Copy rho history and actual iterations count from device
     print("  6.4. Copying rho history from device...")
-    MAX_ITERATIONS = 200  # Must match MAX_ITERATIONS constant in kernel_gmg_vcycle.csl
+    MAX_ITERATIONS = 100  # Must match MAX_ITERATIONS constant in kernel_gmg_vcycle.csl
     rho_history_array = np.zeros(MAX_ITERATIONS, np.float32)
     simulator.memcpy_d2h(rho_history_array, symbol_rho_history, 0, 0, 1, 1, MAX_ITERATIONS,
                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
@@ -785,7 +785,7 @@ def main():
     # timing measures inside the function
     u_wse_1d, r_wse_1d, rho_device, rho_history_array, total_bytes_d2h = copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, symbol_rho, symbol_rho_history, args)
     u_wse_3d = oned_to_hwl_colmajor(height, width, zDim, u_wse_1d, DTYPE)
-
+    r_wse_3d = oned_to_hwl_colmajor(height, width, zDim, r_wse_1d, DTYPE)
     # # # Copy timing data from device
     # print("  6.2. Copying timing data...")
     # timing_smooth_hwl_levels, timing_residual_hwl_levels, \
@@ -813,7 +813,47 @@ def main():
     print("7. Stopping simulator...")
     simulator.stop()
     device_solver.grids[0]['u'] = u_wse_3d
+    device_solver.grids[0]['r'] = r_wse_3d
     device_solver.grids[0]['rho_up'] = rho_device
+
+############################################################
+# Convergence
+############################################################
+    print("\n" + "="*60)
+    print("Convergence")
+    print("="*60)
+    device_rh = device_solver.grids[0]['rho_up']
+
+    # Print rho values after each iteration
+    print("\n" + "="*60)
+    print("Rho values after each iteration")
+    print("="*60)
+    if len(rho_history_array) > 0:
+        # Find actual number of iterations (find last non-zero value)
+        actual_iterations = 0
+        for i in range(len(rho_history_array)):
+            if rho_history_array[i] != 0.0:
+                actual_iterations = i + 1
+        
+        if actual_iterations > 0:
+            print(f"Total iterations performed: {actual_iterations}")
+            print(f"{'Iteration':<12} {'|rho|_max':<20}")
+            print("-" * 60)
+            for i in range(actual_iterations):
+                rho_val = rho_history_array[i]
+                print(f"{i+1:<12} {rho_val:>19.6e}")
+        else:
+            print("No iterations were performed.")
+    else:
+        print("No iterations were performed.")
+
+    print(f"[GMG] rho = |b-A*x|_inf = {device_rh:.6e}")
+    # Use rel_tolerance^2 for convergence check (matching solve_iterative pattern)
+    tolerance = device_solver.rel_tolerance
+    print(f"  Tolerance = {tolerance:.6e}")
+    converged = device_rh <= tolerance
+    print(f"  Converged: {'Yes' if converged else 'No'}")
+
 
 ############################################################
 # Verification
@@ -841,34 +881,6 @@ def main():
         nrm_z = np.linalg.norm(z, np.inf)
         print(f"|{field}_host - {field}_device| = {nrm_z}")
         print(f"\nSUCCESSFULLY VERIFIED {field} VALUES BETWEEN HOST AND DEVICE!")
-############################################################
-# Convergence
-############################################################
-    print("\n" + "="*60)
-    print("Convergence")
-    print("="*60)
-    device_rh = device_solver.grids[0]['rho_up']
-
-    # Print rho values after each iteration
-    print("\n" + "="*60)
-    print("Rho values after each iteration")
-    print("="*60)
-    if len(rho_history_array) > 0:
-        print(f"Total iterations performed: {len(rho_history_array)}")
-        print(f"{'Iteration':<12} {'|rho|_max':<20}")
-        print("-" * 60)
-        for i in range(len(rho_history_array)):
-            rho_val = rho_history_array[i]
-            print(f"{i+1:<12} {rho_val:>19.6e}")
-    else:
-        print("No iterations were performed.")
-
-    print(f"[GMG] rho = |b-A*x|_inf = {device_rh:.6e}")
-    # Use rel_tolerance^2 for convergence check (matching solve_iterative pattern)
-    tolerance = device_solver.rel_tolerance
-    print(f"  Tolerance = {tolerance:.6e}")
-    converged = device_rh <= tolerance
-    print(f"  Converged: {'Yes' if converged else 'No'}")
 
 ############################################################
 # Timing

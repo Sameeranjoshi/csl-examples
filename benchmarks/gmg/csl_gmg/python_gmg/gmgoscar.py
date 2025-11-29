@@ -155,6 +155,8 @@ class SimpleGMG:
         # Create grid hierarchy
         self.grids = self._create_grids()
         
+        # Initialize solution x
+        self._init_x(10.0)
         # Initialize RHS
         self._init_rhs()
         
@@ -198,7 +200,6 @@ class SimpleGMG:
                 'hx': hx,
                 'hy': hy,
                 'hz': hz,
-                # 'u': np.full((nx, ny, nz), 10.0, dtype=DTYPE),      # Solution
                 'u': np.zeros((nx, ny, nz), dtype=DTYPE),      # Solution
                 'f': np.zeros((nx, ny, nz), dtype=DTYPE),      # Right-hand side
                 'r': np.zeros((nx, ny, nz), dtype=DTYPE),      # Residual
@@ -318,6 +319,13 @@ class SimpleGMG:
         print("=" * 50)
         print()
     
+    def _init_x(self, value: float = 0.0):
+        """Initialize solution x with zeros"""
+        for level, grid in enumerate(self.grids):
+           if level == 0:
+               grid['u'].fill(value)
+            # else 0.0
+    
     def _init_rhs(self):
         """Initialize right-hand side with simple test function"""
         for level, grid in enumerate(self.grids):
@@ -355,7 +363,10 @@ class SimpleGMG:
             rho = self.calculate_rho(residual_3d_first)
         """
         # rho = np.dot(residual_3d.flatten(), residual_3d.flatten())
-        rho = np.max(residual_3d.flatten())
+        rho = np.max(np.abs(residual_3d.flatten()))
+        # print(f"rho: {rho}")
+        # norm_inf = np.linalg.norm(residual_3d.flatten(), np.inf)
+        # print(f"norm_inf: {norm_inf}")
         # Flatten the 3D array to 1D vector
         # residual_1d = residual_3d.flatten()
         
