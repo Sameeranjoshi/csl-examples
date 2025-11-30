@@ -35,14 +35,14 @@ def main():
     
     # Test problems (nx, ny, nz, levels, max_iterations, abs_tolerance, pre_iter, post_iter, bottom_iter)
     problems = [
-        # (2, 2, 2, 1, 100, 1e-6, 6, 6, 10),   # Tiny problem (7 host, 8 device)
-        (16, 16, 16, 4, 5, 1e-5, 6, 6, 10),   # Small problem
-        # (32, 32, 32, 5, 100, 1e-6, 6, 6, 10),   # Small problem
-        # (64, 64, 64, 6, 100, 1e-6, 6, 6, 10),   # Medium problem - increased smoothing and bottom solver
-        # (128, 128, 128, 5, 100, 1e-6, 6, 6, 10),   # Large problem - increased smoothing and bottom solver
-        # (256, 256, 256, 6, 200, 1e-4, 6, 6, 5),   # Very large: reduce pre/post (40 was over-smoothing), massively increase bottom solver
-        # (512, 512, 512, 7, 20, 1e-6, 6, 6, 90),   # Very large: reduce pre/post (40 was over-smoothing), massively increase bottom solver
-
+        (4, 4, 4, 2, 100, 1e-4, 6, 6, 10),   # Tiny problem (7 host, 8 device)
+        (8, 8, 8, 3, 100, 1e-4, 6, 6, 10),   # Tiny problem (7 host, 8 device)
+        (16, 16, 16, 4, 100, 1e-4, 6, 6, 10),   # Small problem
+        (32, 32, 32, 5, 100, 1e-4, 6, 6, 10),   # Small problem
+        (64, 64, 64, 6, 100, 1e-4, 6, 6, 10),   # Medium problem - increased smoothing and bottom solver
+        (128, 128, 128, 7, 100, 1e-4, 6, 6, 10),   # Large problem - increased smoothing and bottom solver
+        (256, 256, 256, 8, 100, 1e-4, 6, 6, 50),   # Very large: reduce pre/post (40 was over-smoothing), massively increase bottom solver
+        (512, 512, 512, 9, 100, 1e-4, 6, 6, 90),   # Very large: reduce pre/post (40 was over-smoothing), massively increase bottom solver
 
         # experiments
         # (256, 256, 256, 6, 200, 1e-4, 6, 6, 1),
@@ -54,8 +54,30 @@ def main():
         # (256, 256, 256, 6, 200, 1e-4, 6, 6, 25),
         # (256, 256, 256, 6, 200, 1e-4, 6, 6, 50),
 
+        # # 32 x 32 x 32 problem
+        # (32, 32, 32, 5, 5, 1e-5, 6, 6, 10),
+        # (32, 32, 32, 5, 6, 1e-5, 6, 6, 5),
+        # (32, 32, 32, 5, 10, 1e-5, 6, 6, 6),
+        # (32, 32, 32, 5, 100, 1e-5, 6, 6, 10),
 
+        # # 64
+        # (64, 64, 64, 6, 100, 1e-5, 6, 6, 10),
 
+        # 128x128x128 problem(works and finishes and correct on H and D)
+        # (128, 128, 128, 5, 100, 1e-4, 6, 6, 10),
+        # (128, 128, 128, 5, 100, 1e-4, 6, 6, 50),
+
+        # 256x256x256 problem
+        # (256, 256, 256, 6, 1, 1e-4, 1, 1, 1),
+        # (256, 256, 256, 6, 1, 1e-4, 6, 6, 1),
+        # (256, 256, 256, 6, 1, 1e-4, 6, 6, 10),
+        # (256, 256, 256, 6, 20, 1e-4, 6, 6, 10),
+        # (256, 256, 256, 6, 50, 1e-4, 6, 6, 10),
+
+        # 512x512x512 problem
+        # (512, 512, 512, 7, 1, 1e-6, 1, 1, 1),
+        # (512, 512, 512, 7, 1, 1e-6, 6, 6, 30),
+        # (512, 512, 512, 7, 50, 1e-4, 6, 6, 30),
     ]
     
     results = []

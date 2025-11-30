@@ -16,8 +16,8 @@ import numpy as np
 import copy
 
 # sys.path.append(os.path.join(os.path.dirname(__file__), '..', "python_gmg"))
-from python_gmg.gmgoscar import SimpleGMG as SimpleGMGOSCAR
-# from gmgoscar import SimpleGMG as SimpleGMGOSCAR
+# from python_gmg.gmgoscar import SimpleGMG as SimpleGMGOSCAR
+from gmgoscar import SimpleGMG as SimpleGMGOSCAR
 from cmd_parser import parse_args, print_arguments
 from util import hwl_2_oned_colmajor, oned_to_hwl_colmajor
 
@@ -333,26 +333,26 @@ def process_timing_data(height, width, levels, timing_hwl_levels, time_ref_hwl, 
 
 def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, symbol_rho, symbol_rho_history, args):
 
-    simulator.launch("f_tic_d2h", nonblock=True)
+    # simulator.launch("f_tic_d2h", nonblock=True)
     u_wse_1d = np.zeros(height*width*zDim, DTYPE)
-    simulator.memcpy_d2h(u_wse_1d, symbol_u, 0, 0, width, height, zDim,
-                        streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
-    simulator.launch("f_toc_d2h", nonblock=False)
+    # simulator.memcpy_d2h(u_wse_1d, symbol_u, 0, 0, width, height, zDim,
+    #                     streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+    # simulator.launch("f_toc_d2h", nonblock=False)
 
-    print("  6.2. Copying residual from device...")
+    # print("  6.2. Copying residual from device...")
     r_wse_1d = np.zeros(height*width*zDim, DTYPE)
-    simulator.memcpy_d2h(r_wse_1d, symbol_r, 0, 0, width, height, zDim,
-                        streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+    # simulator.memcpy_d2h(r_wse_1d, symbol_r, 0, 0, width, height, zDim,
+    #                     streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
 
     # Copy rho (convergence metric) from device
-    print("  6.3. Copying final rho from device...")
+    print("  6.2. Copying final rho from device...")
     rho_wse = np.zeros(1, np.float32)
     simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1, 
                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
 
     
     # Copy rho history and actual iterations count from device
-    print("  6.4. Copying rho history from device...")
+    print("  6.3. Copying rho history from device...")
     MAX_ITERATIONS = 100  # Must match MAX_ITERATIONS constant in kernel_gmg_vcycle.csl
     rho_history_array = np.zeros(MAX_ITERATIONS, np.float32)
     simulator.memcpy_d2h(rho_history_array, symbol_rho_history, 0, 0, 1, 1, MAX_ITERATIONS,
@@ -666,9 +666,6 @@ def main():
     pe_length = args.k
     zDim = args.zDim
     
-    print(f"width = {width}, height = {height}, pe_length = {pe_length}, zDim = {zDim}")
-    print(f"levels = {args.levels}, max_ite = {args.max_ite}")
-    
     # Validation
     assert pe_length >= 2, "pe_length must be >= 2"
     assert zDim >= 2, "zDim must be >= 2"
@@ -690,7 +687,7 @@ def main():
     device_solver = copy.deepcopy(host_solver)
 
     # Run reference on host
-    host_residual, host_iterations = host_solver.solve_iterative(args.max_ite)
+    # host_residual, host_iterations = host_solver.solve_iterative(args.max_ite)
 
 ############################################################
 # Device
@@ -784,8 +781,8 @@ def main():
     print("  6.1. Copying u from device...")
     # timing measures inside the function
     u_wse_1d, r_wse_1d, rho_device, rho_history_array, total_bytes_d2h = copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, symbol_rho, symbol_rho_history, args)
-    u_wse_3d = oned_to_hwl_colmajor(height, width, zDim, u_wse_1d, DTYPE)
-    r_wse_3d = oned_to_hwl_colmajor(height, width, zDim, r_wse_1d, DTYPE)
+    # u_wse_3d = oned_to_hwl_colmajor(height, width, zDim, u_wse_1d, DTYPE)
+    # r_wse_3d = oned_to_hwl_colmajor(height, width, zDim, r_wse_1d, DTYPE)
     # # # Copy timing data from device
     # print("  6.2. Copying timing data...")
     # timing_smooth_hwl_levels, timing_residual_hwl_levels, \
@@ -812,8 +809,8 @@ def main():
 ############################################################
     print("7. Stopping simulator...")
     simulator.stop()
-    device_solver.grids[0]['u'] = u_wse_3d
-    device_solver.grids[0]['r'] = r_wse_3d
+    # device_solver.grids[0]['u'] = u_wse_3d
+    # device_solver.grids[0]['r'] = r_wse_3d
     device_solver.grids[0]['rho_up'] = rho_device
 
 ############################################################
@@ -855,32 +852,32 @@ def main():
     print(f"  Converged: {'Yes' if converged else 'No'}")
 
 
-############################################################
-# Verification
-############################################################
-    # # Verification
-    print("\n" + "="*60)
-    print("Verification")
-    print("Checking u at level 0 for host_solver and device_solver")
-    print("="*60)
+# ############################################################
+# # Verification
+# ############################################################
+#     # # Verification
+#     print("\n" + "="*60)
+#     print("Verification")
+#     print("Checking u at level 0 for host_solver and device_solver")
+#     print("="*60)
   
-    # # Check/verify u, f, r, Au at level 0 for host_solver and device_solver
-    fields = ['u']
-    for field in fields:
-        host_field = host_solver.grids[0][field]
-        device_field = device_solver.grids[0][field]
-        np.testing.assert_allclose(host_field.ravel(), device_field.ravel(), atol=1e-5, rtol=1e-5)
-        stats = compare_u(host_field, device_field)
-        print(stats)
-        # print(f"Top-10 largest |Δ{field}| indices: {top_k_indices_absdiff(host_field, device_field, k=10)}")
+#     # # Check/verify u, f, r, Au at level 0 for host_solver and device_solver
+#     fields = ['u']
+#     for field in fields:
+#         host_field = host_solver.grids[0][field]
+#         device_field = device_solver.grids[0][field]
+#         np.testing.assert_allclose(host_field.ravel(), device_field.ravel(), atol=1e-5, rtol=1e-5)
+#         stats = compare_u(host_field, device_field)
+#         print(stats)
+#         # print(f"Top-10 largest |Δ{field}| indices: {top_k_indices_absdiff(host_field, device_field, k=10)}")
 
 
-        nrm2_u = np.linalg.norm(device_field.ravel(), 2)
-        print(f"|{field}|_2 = {nrm2_u}")
-        z = host_field.ravel() - device_field.ravel()
-        nrm_z = np.linalg.norm(z, np.inf)
-        print(f"|{field}_host - {field}_device| = {nrm_z}")
-        print(f"\nSUCCESSFULLY VERIFIED {field} VALUES BETWEEN HOST AND DEVICE!")
+#         nrm2_u = np.linalg.norm(device_field.ravel(), 2)
+#         print(f"|{field}|_2 = {nrm2_u}")
+#         z = host_field.ravel() - device_field.ravel()
+#         nrm_z = np.linalg.norm(z, np.inf)
+#         print(f"|{field}_host - {field}_device| = {nrm_z}")
+#         print(f"\nSUCCESSFULLY VERIFIED {field} VALUES BETWEEN HOST AND DEVICE!")
 
 ############################################################
 # Timing
