@@ -280,6 +280,7 @@ fn is_top_left_of_restriction_window(px: u16, py: u16, window_width: u16, window
 // Enable timing
 fn f_enable_timer() void {
     stencil_mod.enable_timer();
+    timer.enable();
     sys_mod.unblock_cmd_stream();
 }
 
@@ -915,7 +916,7 @@ task f_state() void {
 
     } else if (STATE_CONV_CHECK == cur_state) {
         // Store rho[0] in history array for host reading
-        if (k <= MAX_ITERATIONS) {
+        if (k < MAX_ITERATIONS) {
             rho_history[k] = rho[0];
         }
         // Compute rho = max(r)

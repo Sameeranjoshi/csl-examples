@@ -336,7 +336,7 @@ def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
     # simulator.launch("f_tic_d2h", nonblock=True)
     u_wse_1d = np.zeros(height*width*zDim, DTYPE)
     # simulator.memcpy_d2h(u_wse_1d, symbol_u, 0, 0, width, height, zDim,
-    #                     streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+                        # streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
     # simulator.launch("f_toc_d2h", nonblock=False)
 
     # print("  6.2. Copying residual from device...")
@@ -345,7 +345,7 @@ def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
     #                     streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
 
     # Copy rho (convergence metric) from device
-    print("  6.2. Copying final rho from device...")
+    # print("  6.2. Copying final rho from device...")
     rho_wse = np.zeros(1, np.float32)
     simulator.memcpy_d2h(rho_wse, symbol_rho, 0, 0, 1, 1, 1, 
                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
@@ -354,9 +354,13 @@ def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
     # Copy rho history and actual iterations count from device
     print("  6.3. Copying rho history from device...")
     MAX_ITERATIONS = 100  # Must match MAX_ITERATIONS constant in kernel_gmg_vcycle.csl
-    rho_history_array = np.zeros(MAX_ITERATIONS, np.float32)
-    simulator.memcpy_d2h(rho_history_array, symbol_rho_history, 0, 0, 1, 1, MAX_ITERATIONS,
+    # rho_history is a per-PE array, so copy as 3D (height, width, MAX_ITERATIONS) then extract one PE's data
+    rho_history_1d = np.zeros(height * width * MAX_ITERATIONS, np.float32)
+    simulator.memcpy_d2h(rho_history_1d, symbol_rho_history, 0, 0, width, height, MAX_ITERATIONS,
                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+    # Convert to hwl format and extract PE(0,0)'s data (all PEs have the same rho_history)
+    rho_history_hwl = oned_to_hwl_colmajor(height, width, MAX_ITERATIONS, rho_history_1d, np.float32)
+    rho_history_array = rho_history_hwl[0, 0, :]
     
 
     total_bytes = u_wse_1d.nbytes + r_wse_1d.nbytes
@@ -409,17 +413,17 @@ def copy_counters(height, width, levels, simulator, symbol_counter):
     
     return counter_per_level
 
-def copy_counter_data(height, width, levels, simulator, symbol_counter_smooth_down, symbol_counter_smooth_up, 
+def copy_counter_data(height, width, levels, simulator, symbol_counter_smooth, symbol_counter_residual, 
                      symbol_counter_apply_op, symbol_counter_restrict, symbol_counter_interp, symbol_counter_setup_init, symbol_counter_rho_check, args):
     """Copy all operation counters from device"""
-    counter_smooth_down = copy_counters(height, width, args.levels, simulator, symbol_counter_smooth_down)
-    counter_smooth_up = copy_counters(height, width, args.levels, simulator, symbol_counter_smooth_up)
+    counter_smooth = copy_counters(height, width, args.levels, simulator, symbol_counter_smooth)
+    counter_residual = copy_counters(height, width, args.levels, simulator, symbol_counter_residual)
     counter_apply_op = copy_counters(height, width, args.levels, simulator, symbol_counter_apply_op)
     counter_restrict = copy_counters(height, width, args.levels, simulator, symbol_counter_restrict)
     counter_interp = copy_counters(height, width, args.levels, simulator, symbol_counter_interp)
     counter_setup_init = copy_counters(height, width, args.levels, simulator, symbol_counter_setup_init)
     counter_rho_check = copy_counters(height, width, args.levels, simulator, symbol_counter_rho_check)
-    return counter_smooth_down, counter_smooth_up, counter_apply_op, counter_restrict, counter_interp, counter_setup_init, counter_rho_check
+    return counter_smooth, counter_residual, counter_apply_op, counter_restrict, counter_interp, counter_setup_init, counter_rho_check
 
 def print_configuration_summary(
     args,
@@ -779,30 +783,31 @@ def main():
     print("6. Copying results from device...")
     
     print("  6.1. Copying u from device...")
-    # timing measures inside the function
+    # # timing measures inside the function
     u_wse_1d, r_wse_1d, rho_device, rho_history_array, total_bytes_d2h = copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, symbol_rho, symbol_rho_history, args)
     # u_wse_3d = oned_to_hwl_colmajor(height, width, zDim, u_wse_1d, DTYPE)
     # r_wse_3d = oned_to_hwl_colmajor(height, width, zDim, r_wse_1d, DTYPE)
-    # # # Copy timing data from device
-    # print("  6.2. Copying timing data...")
-    # timing_smooth_hwl_levels, timing_residual_hwl_levels, \
-    #     timing_apply_op_hwl_levels, timing_restrict_hwl_levels, \
-    #         timing_interp_hwl_levels, timing_setup_init_hwl_levels, \
-    #             timing_rho_check_hwl_levels, time_total_start_end_hwl, \
-    #                 time_h2d_hwl, time_d2h_hwl, time_ref_hwl, timing_communication_hwl_levels, \
-    #                     timing_compute_hwl_levels, timing_spmv_total_hwl_levels, \
-    #                         timing_spmv_communication_hwl_levels, timing_spmv_compute_hwl_levels = \
-    #         copy_timing_data(height, width, args.levels, simulator, symbol_timing_smooth, symbol_timing_apply_op, 
-    #                          symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, 
-    #                          symbol_timing_setup_init, symbol_timing_rho_check, symbol_time_total_start_end, symbol_time_h2d, symbol_time_d2h, symbol_time_ref, 
-    #                          symbol_timing_communication, symbol_timing_compute, symbol_timing_spmv_total, symbol_timing_spmv_communication, 
-    #                          symbol_timing_spmv_compute, args)
-    # print("  6.3. Copying operation counters...")
-    # counter_smooth, counter_residual, counter_apply_op, counter_restrict, counter_interp, counter_setup_init, counter_rho_check = \
-    #     copy_counter_data(height, width, args.levels, simulator, 
-    #                      symbol_counter_smooth, symbol_counter_residual, 
-    #                      symbol_counter_apply_op, symbol_counter_restrict, 
-    #                      symbol_counter_interp, symbol_counter_setup_init, symbol_counter_rho_check, args)
+
+    # # Copy timing data from device
+    print("  6.2. Copying timing data...")
+    timing_smooth_hwl_levels, timing_residual_hwl_levels, \
+        timing_apply_op_hwl_levels, timing_restrict_hwl_levels, \
+            timing_interp_hwl_levels, timing_setup_init_hwl_levels, \
+                timing_rho_check_hwl_levels, time_total_start_end_hwl, \
+                    time_h2d_hwl, time_d2h_hwl, time_ref_hwl, timing_communication_hwl_levels, \
+                        timing_compute_hwl_levels, timing_spmv_total_hwl_levels, \
+                            timing_spmv_communication_hwl_levels, timing_spmv_compute_hwl_levels = \
+            copy_timing_data(height, width, args.levels, simulator, symbol_timing_smooth, symbol_timing_apply_op, 
+                             symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, 
+                             symbol_timing_setup_init, symbol_timing_rho_check, symbol_time_total_start_end, symbol_time_h2d, symbol_time_d2h, symbol_time_ref, 
+                             symbol_timing_communication, symbol_timing_compute, symbol_timing_spmv_total, symbol_timing_spmv_communication, 
+                             symbol_timing_spmv_compute, args)
+    print("  6.3. Copying operation counters...")
+    counter_smooth, counter_residual, counter_apply_op, counter_restrict, counter_interp, counter_setup_init, counter_rho_check = \
+        copy_counter_data(height, width, args.levels, simulator, 
+                         symbol_counter_smooth, symbol_counter_residual, 
+                         symbol_counter_apply_op, symbol_counter_restrict, 
+                         symbol_counter_interp, symbol_counter_setup_init, symbol_counter_rho_check, args)
 
 ############################################################
 # Stop simulator
@@ -883,22 +888,22 @@ def main():
 # Timing
 ############################################################
 
-    # profiling(args, height, width,
-    #     timing_smooth_hwl_levels, timing_residual_hwl_levels,
-    #     timing_restrict_hwl_levels, timing_interp_hwl_levels,
-    #     timing_setup_init_hwl_levels, timing_rho_check_hwl_levels,
-    #     time_total_start_end_hwl, time_h2d_hwl, time_d2h_hwl, time_ref_hwl,
-    #     timing_communication_hwl_levels, timing_compute_hwl_levels, 
-    #     timing_spmv_total_hwl_levels, timing_spmv_communication_hwl_levels, timing_spmv_compute_hwl_levels,
-    #     counter_smooth, counter_residual, counter_restrict, counter_interp, counter_setup_init, counter_rho_check, counter_apply_op,
-    #     WORDS_PER_TIMESTAMP, WORDS_PER_START_END, total_bytes_h2d, total_bytes_d2h)
+    profiling(args, height, width,
+        timing_smooth_hwl_levels, timing_residual_hwl_levels,
+        timing_restrict_hwl_levels, timing_interp_hwl_levels,
+        timing_setup_init_hwl_levels, timing_rho_check_hwl_levels,
+        time_total_start_end_hwl, time_h2d_hwl, time_d2h_hwl, time_ref_hwl,
+        timing_communication_hwl_levels, timing_compute_hwl_levels, 
+        timing_spmv_total_hwl_levels, timing_spmv_communication_hwl_levels, timing_spmv_compute_hwl_levels,
+        counter_smooth, counter_residual, counter_restrict, counter_interp, counter_setup_init, counter_rho_check, counter_apply_op,
+        WORDS_PER_TIMESTAMP, WORDS_PER_START_END, total_bytes_h2d, total_bytes_d2h)
     print_configuration_summary(
         args,
         device_solver,
         # host_iterations,
         # host_residual,
         device_rh,
-        counter_rho_check=0,  # TODO: remove =0
+        counter_rho_check,
     )
 
     if args.cmaddr is None:
