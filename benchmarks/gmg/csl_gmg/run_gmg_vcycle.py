@@ -152,15 +152,6 @@ def copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
     f_hwl = device_solver.grids[0]['f']
     u_1d = hwl_2_oned_colmajor(height, width, zDim, u_hwl, DTYPE)
     f_1d = hwl_2_oned_colmajor(height, width, zDim, f_hwl, DTYPE)
-    
-    simulator.launch("f_tic_h2d", nonblock=True)
-    # Copy u and f arrays
-    simulator.memcpy_h2d(symbol_u, u_1d, 0, 0, width, height, zDim,
-                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
-    simulator.memcpy_h2d(symbol_f, f_1d, 0, 0, width, height, zDim,
-                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
-    simulator.launch("f_toc_h2d", nonblock=False)
-
     # Debug: Print what we're sending
     print(f"Grid spacing and Jacobi coefficients:")
     for level in range(args.levels):
@@ -171,8 +162,13 @@ def copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
     hy_flat = hwl_2_oned_colmajor(height, width, args.levels, hy_array, DTYPE)
     hz_flat = hwl_2_oned_colmajor(height, width, args.levels, hz_array, DTYPE)
     jacobi_flat = hwl_2_oned_colmajor(height, width, args.levels, jacobi_coeff_array, DTYPE)
-    # The target symbol expected shape is (height, width, levels)
+
     simulator.launch("f_tic_h2d", nonblock=True)
+    # Copy u and f arrays
+    simulator.memcpy_h2d(symbol_u, u_1d, 0, 0, width, height, zDim,
+                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+    simulator.memcpy_h2d(symbol_f, f_1d, 0, 0, width, height, zDim,
+                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
     simulator.memcpy_h2d(symbol_hx_array, hx_flat, 0, 0, width, height, args.levels,
                          streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
     simulator.memcpy_h2d(symbol_hy_array, hy_flat, 0, 0, width, height, args.levels,
@@ -352,7 +348,7 @@ def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
 
     
     # Copy rho history and actual iterations count from device
-    print("  6.3. Copying rho history from device...")
+    print("  6.2. Copying rho history from device...")
     MAX_ITERATIONS = 100  # Must match MAX_ITERATIONS constant in kernel_gmg_vcycle.csl
     # rho_history is a per-PE array, so copy as 3D (height, width, MAX_ITERATIONS) then extract one PE's data
     rho_history_1d = np.zeros(height * width * MAX_ITERATIONS, np.float32)
@@ -496,7 +492,7 @@ def profiling(
     ones = np.ones(args.levels, dtype=int)
     timing_total_start_end_data = process_timing_data(height, width, 1, time_total_start_end_hwl, time_ref_hwl, "total", counter_one, False, WORDS_PER_TIMESTAMP)
     timing_h2d_data = process_timing_data(height, width, 1, time_h2d_hwl, time_ref_hwl, "h2d", counter_one, False, WORDS_PER_TIMESTAMP)
-    timing_d2h_data = process_timing_data(height, width, 1, time_d2h_hwl, time_ref_hwl, "d2h", counter_one, False, WORDS_PER_TIMESTAMP)
+    # timing_d2h_data = process_timing_data(height, width, 1, time_d2h_hwl, time_ref_hwl, "d2h", counter_one, False, WORDS_PER_TIMESTAMP)
     timing_communication_data = process_timing_data(height, width, args.levels, timing_communication_hwl_levels, time_ref_hwl, "communication", ones, False, WORDS_PER_TIMESTAMP)
     timing_compute_data = process_timing_data(height, width, args.levels, timing_compute_hwl_levels, time_ref_hwl, "compute", ones, False, WORDS_PER_TIMESTAMP)
 
@@ -649,10 +645,11 @@ def profiling(
     print(f"Total H2D time: {timing_h2d_data[0]['time_send']:10.3f} us ({timing_h2d_data[0]['cycles_send']:10.0f} cycles)")
     print(f"Total H2D bandwidth: {(total_bytes_h2d / timing_h2d_data[0]['time_send']):.3f} MB/s")   # 1 Bytes = 1/10^6 MB and 1 us = 1/10^6 s. both cancel out
     print(f"Total D2H data: {total_bytes_d2h} bytes")
-    print(f"Total D2H time: {timing_d2h_data[0]['time_send']:10.3f} us ({timing_d2h_data[0]['cycles_send']:10.0f} cycles)")
-    print(f"Total D2H bandwidth: {(total_bytes_d2h / timing_d2h_data[0]['time_send']):.3f} MB/s")   # 1 Bytes = 1/10^6 MB and 1 us = 1/10^6 s. both cancel out
+    # print(f"Total D2H time: {timing_d2h_data[0]['time_send']:10.3f} us ({timing_d2h_data[0]['cycles_send']:10.0f} cycles)")
+    # print(f"Total D2H bandwidth: {(total_bytes_d2h / timing_d2h_data[0]['time_send']):.3f} MB/s")   # 1 Bytes = 1/10^6 MB and 1 us = 1/10^6 s. both cancel out
     print(f"Total V-cycle time (sum of operations): {total_time_us:10.3f} us ({total_time_cycles:10.0f} cycles)")
     print(f"Total V-cycle time ((No kernel launch)V-cycle time): {timing_total_start_end_data[0]['time_send']:10.3f} us ({timing_total_start_end_data[0]['cycles_send']:10.0f} cycles)")
+    print(f"Choose the maximum from above")
     print("=" * 100)
 
 def main():
@@ -782,14 +779,14 @@ def main():
     # Copy results back
     print("6. Copying results from device...")
     
-    print("  6.1. Copying u from device...")
+    # print("  6.1. Copying u from device...")
     # # timing measures inside the function
     u_wse_1d, r_wse_1d, rho_device, rho_history_array, total_bytes_d2h = copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_r, symbol_rho, symbol_rho_history, args)
     # u_wse_3d = oned_to_hwl_colmajor(height, width, zDim, u_wse_1d, DTYPE)
     # r_wse_3d = oned_to_hwl_colmajor(height, width, zDim, r_wse_1d, DTYPE)
 
     # # Copy timing data from device
-    print("  6.2. Copying timing data...")
+    print("  6.1. Copying timing data...")
     timing_smooth_hwl_levels, timing_residual_hwl_levels, \
         timing_apply_op_hwl_levels, timing_restrict_hwl_levels, \
             timing_interp_hwl_levels, timing_setup_init_hwl_levels, \
@@ -802,7 +799,7 @@ def main():
                              symbol_timing_setup_init, symbol_timing_rho_check, symbol_time_total_start_end, symbol_time_h2d, symbol_time_d2h, symbol_time_ref, 
                              symbol_timing_communication, symbol_timing_compute, symbol_timing_spmv_total, symbol_timing_spmv_communication, 
                              symbol_timing_spmv_compute, args)
-    print("  6.3. Copying operation counters...")
+    print("  6.2. Copying operation counters...")
     counter_smooth, counter_residual, counter_apply_op, counter_restrict, counter_interp, counter_setup_init, counter_rho_check = \
         copy_counter_data(height, width, args.levels, simulator, 
                          symbol_counter_smooth, symbol_counter_residual, 
@@ -821,9 +818,6 @@ def main():
 ############################################################
 # Convergence
 ############################################################
-    print("\n" + "="*60)
-    print("Convergence")
-    print("="*60)
     device_rh = device_solver.grids[0]['rho_up']
 
     # Print rho values after each iteration

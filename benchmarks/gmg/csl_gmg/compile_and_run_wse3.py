@@ -241,38 +241,31 @@ def main():
         (128, 7, 100, 1e-4, 6, 6, 10),   # Large problem
         (256, 8, 100, 1e-4, 6, 6, 50),   # Very large
         (512, 9, 100, 1e-4, 6, 6, 90),   # Very large
+
+
+        # OSCAR matching problems
     ]
-    channels = 4
     verbose = False    
     results = []
     
-    for size, levels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter in problems:
-        try:
-            if args.only_host:
-                rho_max, iterations, total_time, reltol = process_on_host(size, levels, verbose, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter)
-                results.append((size, size, size, rho_max, abs_tolerance, iterations, total_time, reltol))
-            elif args.only_device:
-                process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter)
-            elif args.host_and_device:
-                rho_max, iterations, total_time, reltol = process_on_host(size, levels, verbose, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter)
-                results.append((size, size, size, rho_max, abs_tolerance, iterations, total_time, reltol))
-                process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter)
-            else:
-                raise ValueError("Invalid option. Please use --only-host, --only-device, or --host-and-device")
-        except Exception as e:
-            print(f"Failed for size={size}, levels={levels}: {e}")
-            results.append((size, size, size, float('inf'), float('inf'), 0, 0, float('inf')))
-
-        
+    # Process host runs sequentially (if needed)
     if args.only_host or args.host_and_device:
-        # Summary
+        for size, levels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter in problems:
+            try:
+                rho_max, iterations, total_time, reltol = process_on_host(size, levels, verbose, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter)
+                results.append((size, size, size, rho_max, abs_tolerance, iterations, total_time, reltol))
+            except Exception as e:
+                print(f"Failed for size={size}, levels={levels}: {e}")
+                results.append((size, size, size, float('inf'), float('inf'), 0, 0, float('inf')))
+        
+                # Summary
         print("\n" + "=" * 70)
         print("Summary of all runs on HOST")
         print("=" * 70)
         header = (
             f"{'Grid Size':<15} | "
             f"{'|rho|_inf':>11} | "
-            f"{'(Rel Tolerance)^2':>17} | "
+            f"{'(Rel Tolerance)':>17} | "
             f"{'Absolute Tol.':>14} | "
             f"{'Iters':>7} | "
             f"{'Time (s)':>9} | "
@@ -293,6 +286,18 @@ def main():
                 f"{total_time:>9.4f} | "
                 f"{converged:>9}"
             )
+    
+    # Process device runs
+    if args.only_device or args.host_and_device:
+        for size, levels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter in problems:
+            if size > 8:
+                channels = 8
+            else:
+                channels = 4
+            try:
+                process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter)
+            except Exception as e:
+                print(f"Failed for size={size}, levels={levels}: {e}")
 
 
 if __name__ == "__main__":

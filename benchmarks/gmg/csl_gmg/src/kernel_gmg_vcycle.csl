@@ -309,7 +309,7 @@ fn f_toc_total() void {
     // time_total_start_end_u16[4] = tscEndBuffer[1];
     // time_total_start_end_u16[5] = tscEndBuffer[2];
     timer.stop(TIMER_ID_TOTAL);
-    timer.accumulate_elapsed(TIMER_ID_TOTAL, @ptrcast(*[timer.timestamp_size]u16, &time_total_start_end_u16));
+    timer.elapsed(TIMER_ID_TOTAL, @ptrcast(*[timer.timestamp_size]u16, &time_total_start_end_u16));
     // sys_mod.unblock_cmd_stream();
 }
 
@@ -321,7 +321,7 @@ fn f_tic_h2d() void {
 fn f_toc_h2d() void {
     timer.stop(TIMER_ID_H2D);
     // timer.elapsed(TIMER_ID_H2D, @ptrcast(*[timer.timestamp_size]u16, &time_h2d_u16));
-    timer.accumulate_elapsed(TIMER_ID_H2D, @ptrcast(*[timer.timestamp_size]u16, &time_h2d_u16));
+    timer.elapsed(TIMER_ID_H2D, @ptrcast(*[timer.timestamp_size]u16, &time_h2d_u16));
     sys_mod.unblock_cmd_stream();
 }
 
@@ -333,7 +333,7 @@ fn f_tic_d2h() void {
 fn f_toc_d2h() void {
     timer.stop(TIMER_ID_D2H);
     // timer.elapsed(TIMER_ID_D2H, @ptrcast(*[timer.timestamp_size]u16, &time_d2h_u16));
-    timer.accumulate_elapsed(TIMER_ID_D2H, @ptrcast(*[timer.timestamp_size]u16, &time_d2h_u16));
+    timer.elapsed(TIMER_ID_D2H, @ptrcast(*[timer.timestamp_size]u16, &time_d2h_u16));
     sys_mod.unblock_cmd_stream();
 }
 
@@ -930,6 +930,8 @@ task f_state() void {
         } else {
             // Converged or max iterations reached: exit
             next_state = STATE_EXIT;
+            f_toc_total();
+
         }
         save_timestamp_end(current_level, &timing_rho_check, TIMER_ID_RHO_CHECK);
         counter_rho_check[current_level] += 1;
@@ -942,7 +944,6 @@ task f_state() void {
     // ------------------------------------------------    
     else if (STATE_EXIT == cur_state) {
         // save_timestamp_end(current_level, &time_total_start_end_u16, TIMER_ID_TOTAL);
-        f_toc_total();
         sys_mod.unblock_cmd_stream();
         
     } else {
