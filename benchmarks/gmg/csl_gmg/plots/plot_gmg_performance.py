@@ -803,10 +803,9 @@ def print_summary_table(data: List[Dict]):
 def main():
     """
     Main function: Read file, parse data, print summary, generate plots.
-    Example: python plot_gmg_performance.py ../time_experiments/time_capture_H_D.txt
     """
     if len(sys.argv) != 2:
-        print(f"Usage: python {sys.argv[0]} <gmg_output_file.txt>")
+        print(f"Usage: {sys.argv[0]} <gmg_output_file.txt>")
         sys.exit(1)
     
     input_file = sys.argv[1]
