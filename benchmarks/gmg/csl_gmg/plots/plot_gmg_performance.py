@@ -2,6 +2,10 @@
 """
 Plot performance data from GMG timing experiments.
 Extracts Communication Time, Compute Time, and V-cycle times from output files.
+
+for d in out_dir_S*; do tar -xvf "$d"/*.tar.gz -C "$d"; done
+for d in time_experiments/out_dir_S*x_L*_M*/cs_*/out_vcycle*/; do ./check_memory_usage.sh "$d" 0 0 --summary; done
+
 """
 
 import re

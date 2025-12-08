@@ -181,6 +181,11 @@ var total_active_pes_x_in_window: i16 = 2;  // Number of active PEs in x-directi
 var total_active_pes_y_in_window: i16 = 2;  // Number of active PEs in y-direction of window
 var current_level_id: u16 = 0;
 
+var counter_fmax:u16 = 0;
+var counter_fadd:u16 = 0;
+var local_count_fmax_ptr: *u16;
+var local_count_fadd_ptr: *u16;
+
 // Configure runtime reduction parameters (call from kernel)
 // Sets width/height and per-PE edge flags; reduction then targets bottom-right PE
 fn isActivePE(px: i16, py: i16, factor: u16) bool {
@@ -314,10 +319,14 @@ const oq_route = @get_output_queue(queues[0]);
 // case 4: broadcast
 //   state_seq = {STATE_BCAST, STATE_DONE}
 //
-fn allreduce( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP ) void {
+fn allreduce( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP, count_fmax_ptr: *u16, count_fadd_ptr: *u16 ) void {
 
    x = in_tensor;
    functor = op;
+   local_count_fmax_ptr = count_fmax_ptr;
+   local_count_fadd_ptr = count_fadd_ptr;
+   counter_fmax = 0;
+   counter_fadd = 0;
 
    @assert(n > 0);
 
@@ -337,9 +346,13 @@ fn allreduce( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP ) void {
 
 // Row+Column reduction with reversed directions, final result resides in top-left PE
 // Reduction flow: right-to-left (columns), then bottom-to-top (rows)
-fn reduce_row_col_top_left( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP ) void {
+fn reduce_row_col_top_left( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP, count_fmax_ptr: *u16, count_fadd_ptr: *u16 ) void {
    x = in_tensor;
    functor = op;
+   local_count_fmax_ptr = count_fmax_ptr;
+   local_count_fadd_ptr = count_fadd_ptr;
+   counter_fmax = 0;
+   counter_fadd = 0;
 
    @assert(n > 0);
    wvlts_per_pe = @bitcast(u16, n);
@@ -355,9 +368,13 @@ fn reduce_row_col_top_left( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP ) void
 }
 
 // Broadcast from top-left PE to all PEs in the window
-fn broadcast_from_top_left( n: i16, in_tensor: [*]f32 ) void {
+fn broadcast_from_top_left( n: i16, in_tensor: [*]f32, count_fmax_ptr: *u16, count_fadd_ptr: *u16 ) void {
    x = in_tensor;
 //    functor = op;
+   local_count_fmax_ptr = count_fmax_ptr;
+   local_count_fadd_ptr = count_fadd_ptr;
+   counter_fmax = 0;
+   counter_fadd = 0;
 
    @assert(n > 0);
    wvlts_per_pe = @bitcast(u16, n);
@@ -642,6 +659,9 @@ task f_state_entry() void {
         // @activate(C_STATE_ENTRY);
 
     }else if (STATE_DONE == cur_state){
+        // now add the local counters to the global counters
+        local_count_fmax_ptr.* += counter_fmax;
+        local_count_fadd_ptr.* += counter_fadd;
         // state machine is done, return control back to the caller
         timestamp.get_timestamp(&tscRefBuffer);
 
@@ -821,8 +841,10 @@ task f_send_data() void {
             @load_to_dsr(dest_dsr, mem_x_buf_dsd);
             if (TYPE_BINARY_OP.ADD == functor){
                 @fadds(dest_dsr, src0_dsr, src1_dsr, .{.async=true} );
+                counter_fadd += @bitcast(u16, wvlts_per_pe);
             }else{
                 @fmaxs(dest_dsr, src0_dsr, src1_dsr, .{.async=true} );
+                counter_fmax += @bitcast(u16, wvlts_per_pe);
             }
             count_recv_or_send += 1;
         }else{

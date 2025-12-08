@@ -242,6 +242,12 @@ var current_level_local: i16 = 0;
 var timing_spmv_total_local: [*]u16;
 var timing_spmv_communication_local: [*]u16;
 var timing_spmv_compute_local: [*]u16;
+var counter_fmac:u16 = 0;
+var counter_fneg:u16 = 0;
+var counter_fmov:u16 = 0;
+var local_count_fneg_ptr: *u16;
+var local_count_fmac_ptr: *u16;
+var local_count_fmov_ptr: *u16;
 // var timing_spmv_total: [timer_mod.timestamp_size]u16 = @zeros([timer_mod.timestamp_size]u16);
 // var timing_spmv_communication: [timer_mod.timestamp_size]u16 = @zeros([timer_mod.timestamp_size]u16);
 // var timing_spmv_compute: [timer_mod.timestamp_size]u16 = @zeros([timer_mod.timestamp_size]u16);
@@ -289,13 +295,19 @@ fn disable_timer() void {
 //  if n = 1, we cannot set DSD length with zDim-1 = 0.
 //  so we skip z-direction, just update center in laplacian_z
 //  (n = 1 is a 2D problem)
-fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32, current_level: i16, timing_spmv_total: [*]u16, timing_spmv_communication: [*]u16, timing_spmv_compute: [*]u16) void {
+fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32, current_level: i16, timing_spmv_total: [*]u16, timing_spmv_communication: [*]u16, timing_spmv_compute: [*]u16, count_fneg_ptr: *u16, count_fmac_ptr: *u16, count_fmov_ptr: *u16) void {
     // do some initial setup here first, save arguments to local variables
     current_level_local = current_level;
     timing_spmv_total_local = timing_spmv_total;
     timing_spmv_communication_local = timing_spmv_communication;  // we save the pointers locally to use later, tasks don't have arguments
     timing_spmv_compute_local = timing_spmv_compute;
-
+    
+    local_count_fneg_ptr = count_fneg_ptr;
+    local_count_fmac_ptr = count_fmac_ptr;
+    local_count_fmov_ptr = count_fmov_ptr;
+    counter_fmac = 0;
+    counter_fneg = 0;
+    counter_fmov = 0;
     @assert(2 <= n);
     save_timestamp_start(TIMER_SPMV_TOTAL);
     zDim = n;
@@ -384,6 +396,7 @@ fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32, current_level: i16, timing
     // @fmovs(mem_y_z_buf_dsd, zero);
     @load_to_dsr(dest_dsr_send, mem_y_z_buf_dsd);
     @fmovs(dest_dsr_send, @as(f32,0));
+    counter_fmov += @bitcast(u16, zDim);
 
     // start first block of spmv
     // COMM is called multiple times to finish the spmv
@@ -409,19 +422,23 @@ fn laplacian_xy() void {
     if (first_active_px) {
         // west  = - center
         @fnegs(mem_west_buf_dsd, mem_center_buf_dsd);
+        counter_fneg += @bitcast(u16, cur_length);
     }
     if (last_active_px) {
         // east = - center
         @fnegs(mem_east_buf_dsd, mem_center_buf_dsd);
+        counter_fneg += @bitcast(u16, cur_length);
     }
     if (first_active_py) {
         // north = - center
         @fnegs(mem_north_buf_dsd, mem_center_buf_dsd);
+        counter_fneg += @bitcast(u16, cur_length);
     }
     if (last_active_py) {
         // south = - center
         @fnegs(mem_south_buf_dsd, mem_center_buf_dsd);
-    }    
+        counter_fneg += @bitcast(u16, cur_length);
+    }
     // @fmacs(mem_y_buf_dsd, mem_y_buf_dsd, mem_west_buf_dsd, c_west);
     @load_to_dsr(dest_dsr_send, mem_y_buf_dsd);
     @load_to_dsr(src0_dsr, mem_y_buf_dsd);
@@ -445,6 +462,9 @@ fn laplacian_xy() void {
     @load_to_dsr(src0_dsr, mem_y_buf_dsd);
     @load_to_dsr(src1_dsr_send, mem_north_buf_dsd);
     @fmacs(dest_dsr_send, src0_dsr, src1_dsr_send, c_north);
+
+    // Each PE does 4 times for each direction.
+    counter_fmac += @bitcast(u16, cur_length)*4;
 }
 
 
@@ -495,6 +515,9 @@ fn laplacian_z() void {
     @load_to_dsr(src0_dsr, mem_y_z_boundary_top_dsd);
     @load_to_dsr(src1_dsr_send, mem_x_z_boundary_top_dsd);
     @fmacs(dest_dsr_send, src0_dsr, src1_dsr_send, -c_top);
+
+    // 3 times for each element, left, center, right.
+    counter_fmac += @bitcast(u16, zDim)*3;
 }
 
 // If both SEND and RECV are done, perform
@@ -787,6 +810,11 @@ task f_comm() void {
         //         }
         //     );
         // }
+
+        // now add the local counters to the global counters
+        local_count_fneg_ptr.* += counter_fneg;
+        local_count_fmac_ptr.* += counter_fmac;
+        local_count_fmov_ptr.* += counter_fmov;
         
         //sys_mod.unblock_cmd_stream();
         f_callback();

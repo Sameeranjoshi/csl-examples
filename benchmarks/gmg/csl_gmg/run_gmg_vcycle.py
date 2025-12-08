@@ -409,6 +409,58 @@ def copy_counters(height, width, levels, simulator, symbol_counter):
     
     return counter_per_level
 
+
+def copy_counters_roofline(height, width, levels, simulator, symbol_counter):
+    """Copy operation counter data from device
+    
+    Returns:
+        counter_per_level: 1D array of shape (levels,) - sum across all PEs (HxW) for each level
+    """
+    counter_1d = np.zeros(height * width * levels, np.uint32)
+    simulator.memcpy_d2h(counter_1d, symbol_counter, 0, 0, width, height, levels,
+                        streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, 
+                        order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    
+    # Convert to hwl format: (height, width, levels)
+    counter_hwl = oned_to_hwl_colmajor(height, width, levels, counter_1d, np.uint16)
+    # Print 2D grid for each level
+    # h, w, levs = counter_hwl.shape
+    # for level in range(levs):
+    #     print(f"Level {level}:")
+    #     grid_2d = counter_hwl[:, :, level]
+    #     print(grid_2d)
+    #     print()
+    
+    # Sum across HxW for each level to get per-level totals
+    # Result: 1D array of shape (levels,) where each element is sum across all PEs for that level
+    counter_per_level = np.sum(counter_hwl, axis=(0, 1))  # Sum along height and width dimensions
+    
+    return counter_per_level
+
+def copy_counter_data_roofline(height, width, levels, simulator, symbol_count_fsub, symbol_count_fmac, symbol_count_fmul, symbol_count_fadd, symbol_count_fneg, symbol_count_fmov, symbol_count_fmax, args):
+    """Copy roofline counters from device
+    
+    Returns:
+        Dictionary with per-level operation counts (summed across all PEs for each level)
+        Each value is a 1D array of shape (levels,)
+    """
+    count_fsub_per_level = copy_counters_roofline(height, width, args.levels, simulator, symbol_count_fsub)
+    count_fmac_per_level = copy_counters_roofline(height, width, args.levels, simulator, symbol_count_fmac)
+    count_fmul_per_level = copy_counters_roofline(height, width, args.levels, simulator, symbol_count_fmul)
+    count_fadd_per_level = copy_counters_roofline(height, width, args.levels, simulator, symbol_count_fadd)
+    count_fneg_per_level = copy_counters_roofline(height, width, args.levels, simulator, symbol_count_fneg)
+    count_fmov_per_level = copy_counters_roofline(height, width, args.levels, simulator, symbol_count_fmov)
+    count_fmax_per_level = copy_counters_roofline(height, width, args.levels, simulator, symbol_count_fmax)
+    return {
+        'fsub': count_fsub_per_level,
+        'fmac': count_fmac_per_level,
+        'fmul': count_fmul_per_level,
+        'fadd': count_fadd_per_level,
+        'fneg': count_fneg_per_level,
+        'fmov': count_fmov_per_level,
+        'fmax': count_fmax_per_level
+    }
+
 def copy_counter_data(height, width, levels, simulator, symbol_counter_smooth, symbol_counter_residual, 
                      symbol_counter_apply_op, symbol_counter_restrict, symbol_counter_interp, symbol_counter_setup_init, symbol_counter_rho_check, args):
     """Copy all operation counters from device"""
@@ -470,6 +522,9 @@ def profiling(
     timing_spmv_total_hwl_levels, timing_spmv_communication_hwl_levels,
     timing_spmv_compute_hwl_levels,
     counter_smooth, counter_residual, counter_restrict, counter_interp, counter_setup_init, counter_rho_check, counter_apply_op,
+    count_fsub_fused_total, count_fmac_fused_total, count_fmul_fused_total, count_fadd_fused_total, count_fneg_fused_total, count_fmov_fused_total,
+    count_fmax_fused_total,
+    roofline_counters_per_level,
     WORDS_PER_TIMESTAMP, WORDS_PER_START_END, total_bytes_h2d, total_bytes_d2h
     ):
     import numpy as np
@@ -652,6 +707,171 @@ def profiling(
     print(f"Choose the maximum from above")
     print("=" * 100)
 
+    print("=" * 100)
+    flop_per_operation = {
+        'fsub': {
+            'count': count_fsub_fused_total,
+            'flop': 1,
+            'loads': 2,
+            'stores': 1
+        },
+        'fmac': {
+            'count': count_fmac_fused_total,
+            'flop': 2,
+            'loads': 3,
+            'stores': 1
+        },
+        'fmul': {
+            'count': count_fmul_fused_total,
+            'flop': 1,
+            'loads': 2,
+            'stores': 1
+        },
+        'fadd': {
+            'count': count_fadd_fused_total,
+            'flop': 1,
+            'loads': 2,
+            'stores': 1
+        },
+        'fneg': {
+            'count': count_fneg_fused_total,
+            'flop': 1,
+            'loads': 1,
+            'stores': 1
+        },
+        'fmov': {
+            'count': count_fmov_fused_total,    # This might need more mem->mem, mem->reg, ... such counters for now TODO: add them
+            'flop': 0,
+            'loads': 0,
+            'stores': 1
+        },
+        'fmax': {
+            'count': count_fmax_fused_total,
+            'flop': 1,
+            'loads': 1, # TODO: Does this perform > 1 loads?
+            'stores': 1
+        }
+    }
+    print("flop_per_operation:")
+    # for op, vals in flop_per_operation.items():
+    #     print(f"  {op}:")
+    #     for k, v in vals.items():
+    #         print(f"    {k}: {v}")
+    print("count_fsub_fused_total: ", flop_per_operation['fsub']['count'] * flop_per_operation['fsub']['flop'], "FLOPS")
+    print("count_fmac_fused_total: ", flop_per_operation['fmac']['count'] * flop_per_operation['fmac']['flop'], "FLOPS")
+    print("count_fmul_fused_total: ", flop_per_operation['fmul']['count'] * flop_per_operation['fmul']['flop'], "FLOPS")
+    print("count_fadd_fused_total: ", flop_per_operation['fadd']['count'] * flop_per_operation['fadd']['flop'], "FLOPS")
+    print("count_fneg_fused_total: ", flop_per_operation['fneg']['count'] * flop_per_operation['fneg']['flop'], "FLOPS")
+    print("count_fmov_fused_total: ", flop_per_operation['fmov']['count'] * flop_per_operation['fmov']['flop'], "FLOPS")
+    print("count_fmax_fused_total: ", flop_per_operation['fmax']['count'] * flop_per_operation['fmax']['flop'], "FLOPS")
+    sum_flops = 0
+    for operation, data in flop_per_operation.items():
+        sum_flops += data['count'] * data['flop']
+    print("Total FLOPS: ", sum_flops, "FLOPS")
+    
+    # ============================================================
+    # Calculate Arithmetic Intensity (AI) per level
+    # ============================================================
+    print("\n" + "=" * 100)
+    print("Arithmetic Intensity (AI) per Level")
+    print("=" * 100)
+    
+    # FLOPS per operation type (matching the table in the figure)
+    flop_per_op = {
+        'fsub': 1,
+        'fmac': 2,  # FMA (Fused Multiply-Add)
+        'fmul': 1,
+        'fadd': 1,
+        'fneg': 1,
+        'fmov': 0,
+        'fmax': 1
+    }
+    
+    # Memory traffic per operation (loads, stores) - based on typical patterns
+    memory_traffic = {
+        'fsub': {'loads': 2, 'stores': 1},
+        'fmac': {'loads': 3, 'stores': 1},  # FMA: 3 loads (2 operands + accumulator), 1 store
+        'fmul': {'loads': 2, 'stores': 1},
+        'fadd': {'loads': 2, 'stores': 1},
+        'fneg': {'loads': 1, 'stores': 1},
+        'fmov': {'loads': 0, 'stores': 1},  # Move operations: 1 store (load may be from fabric)
+        'fmax': {'loads': 1, 'stores': 1}
+    }
+    
+    # # Fabric traffic per operation
+    # fabric_traffic = {
+    #     'fsub': 0,
+    #     'fmac': 0,
+    #     'fmul': 0,
+    #     'fadd': 0,
+    #     'fneg': 0,
+    #     'fmov': 1  # FMOV may involve fabric traffic
+    # }
+    
+    # Use the same total V-cycle time for all levels (single value, not per-level)
+    total_vcycle_time = max(total_time_us, timing_total_start_end_data[0]['time_send'])
+    
+    # Calculate FLOPS per level and create detailed breakdown
+    total_flops_per_level = np.zeros(args.levels)
+    
+    # Print detailed table per level
+    for level in range(args.levels):
+        print(f"\nLevel {level} Breakdown:")
+        print("=" * 120)
+        print(f"{'Operation':<12} {'Counts':<15} {'FLOP':<8} {'Total FLOPS':<15} {'Memory Traffic':<20} {'AI (FLOPS/us)':<15}")
+        print(f"{'':<12} {'':<15} {'(per op)':<8} {'(counts*FLOP)':<15} {'(loads/stores)':<20} {'(loads)':<15} {'(FLOPS/time)':<15}")
+        print("-" * 120)
+        
+        level_total_flops = 0.0
+        level_total_counts = 0
+        
+        # Print each operation type
+        for op_name in ['fsub', 'fmac', 'fmul', 'fadd', 'fneg', 'fmov', 'fmax']:
+            counts = roofline_counters_per_level[op_name][level]
+            flop = flop_per_op[op_name]
+            total_flops = counts * flop
+            mem_loads = memory_traffic[op_name]['loads']
+            mem_stores = memory_traffic[op_name]['stores']
+            
+            # Calculate AI contribution for this operation at this level
+            if total_vcycle_time > 0:
+                ai_contribution = total_flops / total_vcycle_time
+            else:
+                ai_contribution = 0.0
+            
+            level_total_flops += total_flops
+            level_total_counts += counts
+
+            
+            print(f"{op_name.upper():<12} {counts:<15.0f} {flop:<8} {total_flops:<15.0f} {mem_loads:<8} {mem_stores:<8} {ai_contribution:<15.3f}")
+        
+        total_flops_per_level[level] = level_total_flops
+        
+        # Print level summary
+        print("-" * 120)
+        if total_vcycle_time > 0:
+            level_ai = level_total_flops / total_vcycle_time
+        else:
+            level_ai = 0.0
+        print(f"{'TOTAL':<12} {level_total_counts:<15.0f} {'':<8} {level_total_flops:<15.0f} {'':<20} {'':<15} {level_ai:<15.3f}")
+        print(f"Total Time: {total_vcycle_time:.3f} us")
+        print("=" * 120)
+    
+    # Print summary across all levels
+    print("\n" + "=" * 100)
+    print("Summary: Arithmetic Intensity (AI) per Level")
+    print("=" * 100)
+    print(f"{'Level':<10} {'Total FLOPS':<20} {'Total Time (us)':<20} {'AI (FLOPS/us)':<20}")
+    print("-" * 100)
+    for level in range(args.levels):
+        if total_vcycle_time > 0:
+            ai_per_level = total_flops_per_level[level] / total_vcycle_time
+        else:
+            ai_per_level = 0.0
+        print(f"{level:<10} {total_flops_per_level[level]:<20.0f} {total_vcycle_time:<20.3f} {ai_per_level:<20.3f}")
+    print("=" * 100)
+    
+
 def main():
     """Main function"""
     np.random.seed(2)
@@ -734,6 +954,13 @@ def main():
     symbol_counter_interp = simulator.get_id("counter_interp")
     symbol_counter_setup_init = simulator.get_id("counter_setup_init")
     symbol_counter_rho_check = simulator.get_id("counter_rho_check")
+    symbol_count_fsub = simulator.get_id("count_fsub")
+    symbol_count_fmac = simulator.get_id("count_fmac")
+    symbol_count_fmul = simulator.get_id("count_fmul")
+    symbol_count_fadd = simulator.get_id("count_fadd")
+    symbol_count_fneg = simulator.get_id("count_fneg")
+    symbol_count_fmov = simulator.get_id("count_fmov")
+    symbol_count_fmax = simulator.get_id("count_fmax")
     # convergence
     symbol_rho = simulator.get_id("rho")
     symbol_rho_history = simulator.get_id("rho_history")
@@ -756,11 +983,11 @@ def main():
 ############################################################
 # Kernel launch
 ############################################################
-    print("3. Synchronizing PEs for timing...")
-    simulator.launch("f_sync", nonblock=False)
+    # print("3. Synchronizing PEs for timing...")
+    # simulator.launch("f_sync", nonblock=False)
     
-    print("4. Copying reference clock...")
-    simulator.launch("f_reference_timestamps", nonblock=False)
+    # print("4. Copying reference clock...")
+    # simulator.launch("f_reference_timestamps", nonblock=False)
 
     # Run GMG V-cycle with convergence checking on device
     print(f"5. Running GMG V-cycle(max_iter={args.max_ite}, levels={args.levels}) on device...")
@@ -806,6 +1033,29 @@ def main():
                          symbol_counter_apply_op, symbol_counter_restrict, 
                          symbol_counter_interp, symbol_counter_setup_init, symbol_counter_rho_check, args)
 
+    print(" 6.3. Copy roofline metrics...")
+    roofline_counters_per_level = copy_counter_data_roofline(height, width, args.levels, simulator, symbol_count_fsub, \
+        symbol_count_fmac, symbol_count_fmul, symbol_count_fadd, symbol_count_fneg, symbol_count_fmov, \
+        symbol_count_fmax, args)
+    
+    # Extract per-level counts (1D arrays of shape (levels,))
+    count_fsub_per_level = roofline_counters_per_level['fsub']
+    count_fmac_per_level = roofline_counters_per_level['fmac']
+    count_fmul_per_level = roofline_counters_per_level['fmul']
+    count_fadd_per_level = roofline_counters_per_level['fadd']
+    count_fneg_per_level = roofline_counters_per_level['fneg']
+    count_fmov_per_level = roofline_counters_per_level['fmov']
+    count_fmax_per_level = roofline_counters_per_level['fmax']
+
+    
+    # Calculate total fused values (sum across all levels) for backward compatibility
+    count_fsub_fused_total = np.sum(count_fsub_per_level)
+    count_fmac_fused_total = np.sum(count_fmac_per_level)
+    count_fmul_fused_total = np.sum(count_fmul_per_level)
+    count_fadd_fused_total = np.sum(count_fadd_per_level)
+    count_fneg_fused_total = np.sum(count_fneg_per_level)
+    count_fmov_fused_total = np.sum(count_fmov_per_level)
+    count_fmax_fused_total = np.sum(count_fmax_per_level)
 ############################################################
 # Stop simulator
 ############################################################
@@ -889,7 +1139,9 @@ def main():
         time_total_start_end_hwl, time_h2d_hwl, time_d2h_hwl, time_ref_hwl,
         timing_communication_hwl_levels, timing_compute_hwl_levels, 
         timing_spmv_total_hwl_levels, timing_spmv_communication_hwl_levels, timing_spmv_compute_hwl_levels,
-        counter_smooth, counter_residual, counter_restrict, counter_interp, counter_setup_init, counter_rho_check, counter_apply_op,
+        counter_smooth, counter_residual, counter_restrict, counter_interp, counter_setup_init, counter_rho_check, counter_apply_op, 
+        count_fsub_fused_total, count_fmac_fused_total, count_fmul_fused_total, count_fadd_fused_total, count_fneg_fused_total, count_fmov_fused_total, count_fmax_fused_total,
+        roofline_counters_per_level,
         WORDS_PER_TIMESTAMP, WORDS_PER_START_END, total_bytes_h2d, total_bytes_d2h)
     print_configuration_summary(
         args,
