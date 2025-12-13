@@ -162,7 +162,7 @@ def process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, 
     os.makedirs(out_path, exist_ok=True)
     layout_file = "./src/layout_gmg_vcycle.csl"
     BSIZE  = size // 2 if size > 256 else size
-    INLINE_THRESHOLD = 256    # inline always good for speed, # code segment
+    INLINE_THRESHOLD = size // 2 if size > 256 else 0    # inline always good for speed, # code segment
     artifact_name = f"out_vcycle{size}"
 
     # prepare commands
@@ -233,17 +233,14 @@ def main():
     # Format: (size, levels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter)
     # NOTE: MANUALLY DELETE FOLDER IF THERE IS SOME CHANGES IN THE SOURCE CODE AS IT WILL SKIP COMPILATION DUE TO CACHING.
     problems = [
-        (4, 2, 100, 1e-4, 6, 6, 10),   # Tiny problem
-        (8, 3, 100, 1e-4, 6, 6, 10),   # Tiny problem
-        (16, 4, 100, 1e-4, 6, 6, 10),   # Small problem
-        (32, 5, 100, 1e-4, 6, 6, 10),   # Small problem
-        (64, 6, 100, 1e-4, 6, 6, 10),   # Medium problem
-        (128, 7, 100, 1e-4, 6, 6, 10),   # Large problem
-        (256, 8, 100, 1e-4, 6, 6, 50),   # Very large
+        # (4, 2, 100, 1e-4, 6, 6, 10),   # Tiny problem
+        # (8, 3, 100, 1e-4, 6, 6, 10),   # Tiny problem
+        # (16, 4, 100, 1e-4, 6, 6, 10),   # Small problem
+        # (32, 5, 100, 1e-4, 6, 6, 10),   # Small problem
+        # (64, 6, 100, 1e-4, 6, 6, 10),   # Medium problem
+        # (128, 7, 100, 1e-4, 6, 6, 10),   # Large problem
+        # (256, 8, 100, 1e-4, 6, 6, 50),   # Very large
         (512, 9, 100, 1e-4, 6, 6, 90),   # Very large
-
-
-        # OSCAR matching problems
     ]
     verbose = False    
     results = []

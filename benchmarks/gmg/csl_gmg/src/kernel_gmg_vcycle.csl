@@ -143,13 +143,13 @@ var timing_spmv_compute = @zeros([LEVELS * timestamp.tsc_size_words]u16);      /
 // Builtin operation counters for roofline analysis
 // Count each builtin operation type multiplied by vector length at each level
 // These accumulate across all iterations and operations at each level
-var count_fsub = @zeros([LEVELS]u16);    // Count of @fsubs operations * vector length
-var count_fmac = @zeros([LEVELS]u16);    // Count of @fmacs operations * vector length
-var count_fmul = @zeros([LEVELS]u16);    // Count of @fmuls operations * vector length
-var count_fadd = @zeros([LEVELS]u16);    // Count of @fadds operations * vector length
-var count_fneg = @zeros([LEVELS]u16);    // Count of @fnegs operations * vector length
-var count_fmov = @zeros([LEVELS]u16);    // Count of @fmovs operations * vector length
-var count_fmax = @zeros([LEVELS]u16);    // Count of @fmaxs operations * vector length
+var count_fsub = @zeros([LEVELS]u32);    // Count of @fsubs operations * vector length
+var count_fmac = @zeros([LEVELS]u32);    // Count of @fmacs operations * vector length
+var count_fmul = @zeros([LEVELS]u32);    // Count of @fmuls operations * vector length
+var count_fadd = @zeros([LEVELS]u32);    // Count of @fadds operations * vector length
+var count_fneg = @zeros([LEVELS]u32);    // Count of @fnegs operations * vector length
+var count_fmov = @zeros([LEVELS]u32);    // Count of @fmovs operations * vector length
+var count_fmax = @zeros([LEVELS]u32);    // Count of @fmaxs operations * vector length
 
 // Operation counters - track number of operations at each level
 var counter_smooth = @zeros([LEVELS]u16);    // Number of up smoothing iterations per level
@@ -268,13 +268,13 @@ var ptr_counter_compute: [*]u16 = &counter_compute;
 var ptr_counter_communication: [*]u16 = &counter_communication;
 var ptr_rho_history: [*]f32 = &rho_history;
 // Builtin operation counter pointers
-var ptr_count_fsub: [*]u16 = &count_fsub;
-var ptr_count_fmac: [*]u16 = &count_fmac;
-var ptr_count_fmul: [*]u16 = &count_fmul;
-var ptr_count_fadd: [*]u16 = &count_fadd;
-var ptr_count_fneg: [*]u16 = &count_fneg;
-var ptr_count_fmov: [*]u16 = &count_fmov;
-var ptr_count_fmax: [*]u16 = &count_fmax;
+var ptr_count_fsub: [*]u32 = &count_fsub;
+var ptr_count_fmac: [*]u32 = &count_fmac;
+var ptr_count_fmul: [*]u32 = &count_fmul;
+var ptr_count_fadd: [*]u32 = &count_fadd;
+var ptr_count_fneg: [*]u32 = &count_fneg;
+var ptr_count_fmov: [*]u32 = &count_fmov;
+var ptr_count_fmax: [*]u32 = &count_fmax;
 
 //-------------------------------------------------
 // HELPER FUNCTIONS
@@ -435,7 +435,7 @@ fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
 fn f_apply_operator() void {
     counter_apply_op[current_level] += 1;
     @fmovs(mem_Au_dsd, 0.0);
-    count_fmov[current_level] += @as(u16, n);
+    count_fmov[current_level] += @as(u32, n);
     stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute, &count_fneg[current_level], &count_fmac[current_level], &count_fmov[current_level]);
 }
 
@@ -446,16 +446,16 @@ fn f_jacobi_smooth() void {
     const jacobi_coeff: f32 = jacobi_coeff_array[current_level];
     if (is_active_pe) {
         @fsubs(mem_residual_temp_dsd, mem_f_dsd, mem_Au_dsd);
-        count_fsub[current_level] += @as(u16, n);
+        count_fsub[current_level] += @as(u32, n);
         
         @fmacs(mem_u_dsd, mem_u_dsd, mem_residual_temp_dsd, jacobi_coeff);
-        count_fmac[current_level] += @as(u16, n);
+        count_fmac[current_level] += @as(u32, n);
     } else {
         @fmovs(mem_u_dsd, 0.0);
-        count_fmov[current_level] += @as(u16, n);
+        count_fmov[current_level] += @as(u32, n);
     }
     @fmovs(mem_save_u_smooth_dsd, mem_u_dsd);
-    count_fmov[current_level] += @as(u16, n);
+    count_fmov[current_level] += @as(u32, n);
     // save_timestamp_end(current_level, &timing_compute, TIMER_ID_COMPUTE);
 }
 
@@ -464,10 +464,10 @@ fn f_residual() void {
     // save_timestamp_start(TIMER_ID_COMPUTE);
     if (is_active_pe) {
         @fsubs(mem_r_dsd, mem_f_dsd, mem_Au_dsd);
-        count_fsub[current_level] += @as(u16, n);
+        count_fsub[current_level] += @as(u32, n);
     } else {
         @fmovs(mem_r_dsd, 0.0);
-        count_fmov[current_level] += @as(u16, n);
+        count_fmov[current_level] += @as(u32, n);
     }
     // save_timestamp_end(current_level, &timing_compute, TIMER_ID_COMPUTE);
 }
@@ -519,21 +519,21 @@ fn f_restriction_division() void {
         // Sum pairs in z: f[coarse_idx] = (r[2*coarse_idx] + r[2*coarse_idx+1]) / 8
         // First, copy even indices (0, 2, 4, 6, ...) to f
         @fmovs(mem_f_coarse_dsd, mem_r_even_dsd);
-        count_fmov[current_level] += @as(u16, coarse_n);
+        count_fmov[current_level] += @as(u32, coarse_n);
         // Then add odd indices (1, 3, 5, 7, ...) to get pairs summed
         @fadds(mem_f_coarse_dsd, mem_f_coarse_dsd, mem_r_odd_dsd);
-        count_fadd[current_level] += @as(u16, coarse_n);
+        count_fadd[current_level] += @as(u32, coarse_n);
         
         // Divide by 8 total: 4 (for x,y averaging from 2x2 window) * 2 (for z pair averaging)
         // This completes full 2x2x2 coarsening: average 8 fine points to 1 coarse point
         const inv_total: f32 = 1.0 / 8.0;  // 1/(4*2) for full 2x2x2 coarsening
         @fmuls(mem_f_coarse_dsd, mem_f_coarse_dsd, inv_total);
-        count_fmul[current_level] += @as(u16, coarse_n);
+        count_fmul[current_level] += @as(u32, coarse_n);
         @fmovs(mem_f_dsd, mem_f_coarse_dsd);    // not same size, will this work?
-        count_fmov[current_level] += @as(u16, coarse_n);
+        count_fmov[current_level] += @as(u32, coarse_n);
     } else {
         @fmovs(mem_f_dsd, 0.0);
-        count_fmov[current_level] += @as(u16, n);
+        count_fmov[current_level] += @as(u32, n);
     }
 
     // save_timestamp_end(current_level, &timing_compute, TIMER_ID_COMPUTE);
@@ -553,7 +553,7 @@ fn f_interpolation_expand_z() void {
     var mem_residual_temp_coarse_dsd = @set_dsd_base_addr(mem_residual_temp_dsd, &residual_temp);
     mem_residual_temp_coarse_dsd = @set_dsd_length(mem_residual_temp_coarse_dsd, @bitcast(u16, coarse_n));
     @fmovs(mem_residual_temp_coarse_dsd, mem_u_coarse_dsd);  // Save coarse values
-    count_fmov[current_level] += @as(u16, coarse_n);
+    count_fmov[current_level] += @as(u32, coarse_n);
     
     // Create strided DSDs to write to even and odd positions
     // DSD for even indices: 0, 2, 4, 6, ... (stride 2, starting at offset 0)
@@ -569,10 +569,10 @@ fn f_interpolation_expand_z() void {
     
     // Copy coarse values to even positions (0, 2, 4, 6, ...)
     @fmovs(mem_u_even_dsd, mem_residual_temp_coarse_dsd);
-    count_fmov[current_level] += @as(u16, coarse_n);
+    count_fmov[current_level] += @as(u32, coarse_n);
     // Copy coarse values to odd positions (1, 3, 5, 7, ...)
     @fmovs(mem_u_odd_dsd, mem_residual_temp_coarse_dsd);
-    count_fmov[current_level] += @as(u16, coarse_n);
+    count_fmov[current_level] += @as(u32, coarse_n);
     
     // Now u has fine z dimension n with duplicated values
     // Update mem_u_dsd to reflect fine z dimension (n)
@@ -587,10 +587,10 @@ fn f_interpolation_add() void {
     // save_timestamp_start(TIMER_ID_COMPUTE);  // A compute step as it's done locally.
     if (is_active_pe) {
         @fadds(mem_u_dsd, mem_u_dsd, mem_save_u_smooth_dsd);
-        count_fadd[current_level] += @as(u16, n);
+        count_fadd[current_level] += @as(u32, n);
     } else {
         @fmovs(mem_u_dsd, 0.0);
-        count_fmov[current_level] += @as(u16, n);
+        count_fmov[current_level] += @as(u32, n);
     }
     // save_timestamp_end(current_level, &timing_compute, TIMER_ID_COMPUTE);
 }
@@ -689,24 +689,24 @@ fn f_setup_level(level_id: u16, down: i16) void {
         // At level 0, for subsequent iterations, we want to preserve the solution from the previous iteration
         if (level_id != 0) {
             @fmovs(mem_u_dsd, 0.0);
-            count_fmov[current_level] += @as(u16, n);
+            count_fmov[current_level] += @as(u32, n);
         }
         // CRITICAL: At level 0, for subsequent iterations (k > 0), restore original RHS from save_f_down
         // before saving it again. This ensures f is always the original RHS at the start of each V-cycle.
         if (level_id == 0 and k > 0) {
             @fmovs(mem_f_dsd, mem_save_f_down_dsd);  // Restore original RHS from first iteration
-            count_fmov[current_level] += @as(u16, n);
+            count_fmov[current_level] += @as(u32, n);
         }
         @fmovs(mem_save_f_down_dsd, mem_f_dsd);  // Save current f (RHS for this level)
-        count_fmov[current_level] += @as(u16, n);
+        count_fmov[current_level] += @as(u32, n);
     } else {
         // Up cycle: restore the f values saved during down cycle
         @fmovs(mem_f_dsd, mem_save_f_down_dsd);
-        count_fmov[current_level] += @as(u16, n);
+        count_fmov[current_level] += @as(u32, n);
     }
     
     @fmovs(mem_r_dsd, 0.0);
-    count_fmov[current_level] += @as(u16, n);
+    count_fmov[current_level] += @as(u32, n);
 
     // save_timestamp_end(current_level, &timing_compute, TIMER_ID_COMPUTE);
     save_timestamp_end(current_level, &timing_setup_init, TIMER_ID_SETUP_INIT);

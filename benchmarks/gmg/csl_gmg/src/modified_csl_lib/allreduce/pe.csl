@@ -181,10 +181,10 @@ var total_active_pes_x_in_window: i16 = 2;  // Number of active PEs in x-directi
 var total_active_pes_y_in_window: i16 = 2;  // Number of active PEs in y-direction of window
 var current_level_id: u16 = 0;
 
-var counter_fmax:u16 = 0;
-var counter_fadd:u16 = 0;
-var local_count_fmax_ptr: *u16;
-var local_count_fadd_ptr: *u16;
+var counter_fmax:u32 = 0;
+var counter_fadd:u32 = 0;
+var local_count_fmax_ptr: *u32;
+var local_count_fadd_ptr: *u32;
 
 // Configure runtime reduction parameters (call from kernel)
 // Sets width/height and per-PE edge flags; reduction then targets bottom-right PE
@@ -319,7 +319,7 @@ const oq_route = @get_output_queue(queues[0]);
 // case 4: broadcast
 //   state_seq = {STATE_BCAST, STATE_DONE}
 //
-fn allreduce( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP, count_fmax_ptr: *u16, count_fadd_ptr: *u16 ) void {
+fn allreduce( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP, count_fmax_ptr: *u32, count_fadd_ptr: *u32 ) void {
 
    x = in_tensor;
    functor = op;
@@ -346,7 +346,7 @@ fn allreduce( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP, count_fmax_ptr: *u1
 
 // Row+Column reduction with reversed directions, final result resides in top-left PE
 // Reduction flow: right-to-left (columns), then bottom-to-top (rows)
-fn reduce_row_col_top_left( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP, count_fmax_ptr: *u16, count_fadd_ptr: *u16 ) void {
+fn reduce_row_col_top_left( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP, count_fmax_ptr: *u32, count_fadd_ptr: *u32 ) void {
    x = in_tensor;
    functor = op;
    local_count_fmax_ptr = count_fmax_ptr;
@@ -368,7 +368,7 @@ fn reduce_row_col_top_left( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP, count
 }
 
 // Broadcast from top-left PE to all PEs in the window
-fn broadcast_from_top_left( n: i16, in_tensor: [*]f32, count_fmax_ptr: *u16, count_fadd_ptr: *u16 ) void {
+fn broadcast_from_top_left( n: i16, in_tensor: [*]f32, count_fmax_ptr: *u32, count_fadd_ptr: *u32 ) void {
    x = in_tensor;
 //    functor = op;
    local_count_fmax_ptr = count_fmax_ptr;
@@ -841,10 +841,10 @@ task f_send_data() void {
             @load_to_dsr(dest_dsr, mem_x_buf_dsd);
             if (TYPE_BINARY_OP.ADD == functor){
                 @fadds(dest_dsr, src0_dsr, src1_dsr, .{.async=true} );
-                counter_fadd += @bitcast(u16, wvlts_per_pe);
+                counter_fadd += @as(u32, wvlts_per_pe);
             }else{
                 @fmaxs(dest_dsr, src0_dsr, src1_dsr, .{.async=true} );
-                counter_fmax += @bitcast(u16, wvlts_per_pe);
+                counter_fmax += @as(u32, wvlts_per_pe);
             }
             count_recv_or_send += 1;
         }else{

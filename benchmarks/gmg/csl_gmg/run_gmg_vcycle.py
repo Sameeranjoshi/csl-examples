@@ -418,18 +418,19 @@ def copy_counters_roofline(height, width, levels, simulator, symbol_counter):
     """
     counter_1d = np.zeros(height * width * levels, np.uint32)
     simulator.memcpy_d2h(counter_1d, symbol_counter, 0, 0, width, height, levels,
-                        streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, 
+                        streaming=False, data_type=MemcpyDataType.MEMCPY_32BIT, 
                         order=MemcpyOrder.COL_MAJOR, nonblock=False)
     
     # Convert to hwl format: (height, width, levels)
     counter_hwl = oned_to_hwl_colmajor(height, width, levels, counter_1d, np.uint16)
     # Print 2D grid for each level
-    # h, w, levs = counter_hwl.shape
-    # for level in range(levs):
-    #     print(f"Level {level}:")
-    #     grid_2d = counter_hwl[:, :, level]
-    #     print(grid_2d)
-    #     print()
+    h, w, levs = counter_hwl.shape
+    for level in range(levs):
+        if level == 0:
+            print(f"Level {level}:")
+            grid_2d = counter_hwl[:, :, level]
+            print(grid_2d)
+            print()
     
     # Sum across HxW for each level to get per-level totals
     # Result: 1D array of shape (levels,) where each element is sum across all PEs for that level
