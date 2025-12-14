@@ -26,10 +26,12 @@ param BLOCK_SIZE: i16; // size of temporary buffers for communication
 param STARTUP: local_task_id;
 
 const timestamp = @import_module("<time>");
-var current_level: i16 = 0;
+var current_level: i16 = 3;
 var timing_spmv_total = @zeros([1 * timestamp.tsc_size_words]u16);      // spmv total accumulated elapsed timing
 var timing_spmv_communication = @zeros([1 * timestamp.tsc_size_words]u16);      // spmv communication accumulated elapsed timing
 var timing_spmv_compute = @zeros([1 * timestamp.tsc_size_words]u16);      // spmv compute accumulated elapsed timing
+var only_spmv_total_time = @zeros([1 * timestamp.tsc_size_words]u16);      // spmv total accumulated elapsed timing
+var timing_init_hops_total = @zeros([1 * timestamp.tsc_size_words]u16);      // init_hops total accumulated elapsed timing
 
 var ptr_timing_spmv_total: [*]u16 = &timing_spmv_total;
 var ptr_timing_spmv_communication: [*]u16 = &timing_spmv_communication;
@@ -38,6 +40,16 @@ var ptr_timing_spmv_compute: [*]u16 = &timing_spmv_compute;
 // - input/output queue 0 and 1
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
 const math_lib = @import_module( "<math>");
+const timer_mod1 = @import_module("timer_modified.csl", .{ .timerCount = 9 });
+// 0: init_hops
+// 1: spmv
+// 2: stencil.spmv_total
+// 3: stencil.spmv_communication
+// 4: stencil.init_hops
+// 5: stencil.laplacian_xy
+// 6: stencil.laplacian_z
+// 7: stencil.only_send
+// 8: stencil.only_recv
 
 // allreduce uses input queue/output queue 2
 const reduce_mod = @import_module( "./modified_csl_lib/allreduce/pe.csl", @concat_structs(reduceParams, .{
@@ -51,14 +63,15 @@ const reduce_mod = @import_module( "./modified_csl_lib/allreduce/pe.csl", @conca
 
 // output queue cannot overlap input queues
 const stencil_mod = @import_module( "./modified_csl_lib/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
-     .f_callback = sys_mod.unblock_cmd_stream,
+     .f_callback = f_some_random_task,
      .input_queues = [4]u16{4, 5, 6, 7},
      .output_queues = if (@is_arch("wse3")) [4]u16{4, 5, 6, 7} else [1]u16{3},
      .output_ut_id = 3,
      .BLOCK_SIZE = BLOCK_SIZE,
      .dest_dsr_ids = [2]u16{2,3},
      .src0_dsr_ids = [1]u16{2},
-     .src1_dsr_ids = [2]u16{2,3}
+     .src1_dsr_ids = [2]u16{2,3},
+     .timer_mod = timer_mod1
      }));
 
 // tsc_size_words = 3
@@ -66,7 +79,6 @@ const stencil_mod = @import_module( "./modified_csl_lib/stencil_3d_7pts/pe.csl",
 var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
 // ending time of H2D/D2H
 var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
-
 
 ////////////////////////////////////////////////////////////////////////////////
 // Main memory (48KB)
@@ -87,9 +99,12 @@ var dot = @zeros([1]f32);
 //    c_center * x[i][j][k]
 var stencil_coeff = @zeros([7]f32);
 
+
+
+const simprint = @import_module("<simprint>", .{ .enable = true });
+const layout_mod = @import_module("<layout>");
 // time_buf_u16[0:5] = {tscStartBuffer, tscEndBuffer}
 var time_buf_u16 = @zeros([timestamp.tsc_size_words*2]u16);
-
 // reference clock inside allreduce module
 var time_ref_u16 = @zeros([timestamp.tsc_size_words]u16);
 
@@ -127,9 +142,10 @@ fn f_init_spmv_and_reduce(level_id: u16) void {
 
 fn f_tic() void {
     timestamp.get_timestamp(&tscStartBuffer);
-    stencil_mod.enable_timer();
-
-    f_init_spmv_and_reduce(@as(u16, current_level));
+    timer_mod1.start(0);
+    f_init_spmv_and_reduce(@as(u16, current_level));  // 700
+    timer_mod1.stop(0);
+    timer_mod1.elapsed(0, &timing_init_hops_total); // 1000
 
     // the user must unblock cmd color for every PE
     sys_mod.unblock_cmd_stream();
@@ -137,6 +153,13 @@ fn f_tic() void {
 
 fn f_toc() void {
     timestamp.get_timestamp(&tscEndBuffer);
+
+    const pe_id_x: i16 = @as(i16, layout_mod.get_x_coord());
+    const pe_id_y: i16 = @as(i16, layout_mod.get_y_coord());
+    if (pe_id_x == 0 and pe_id_y == 0) {
+        simprint.fmt_with_coords("\n f_init_spmv_and_reduce() = [{d},{d},{d}]", .{timing_init_hops_total[0], timing_init_hops_total[1], timing_init_hops_total[2]});
+        simprint.fmt_with_coords("\n f_spmv() = [{d},{d},{d}]", .{only_spmv_total_time[0], only_spmv_total_time[1], only_spmv_total_time[2]});
+    }
 
     // the user must unblock cmd color for every PE
     sys_mod.unblock_cmd_stream();
@@ -160,9 +183,15 @@ fn f_memcpy_timestamps() void {
 // {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
 fn f_spmv(n:i16) void {
     // stencil_mod.spmv(n, &stencil_coeff, &x, &y);
+    timer_mod1.start(1);
     stencil_mod.spmv(n, &stencil_coeff, &x, &y, current_level, &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute);
 }
 
+fn f_some_random_task() void {
+    timer_mod1.stop(1);
+    timer_mod1.elapsed(1, &only_spmv_total_time);
+    sys_mod.unblock_cmd_stream();
+}
 fn f_sync( n: i16 ) void {
    reduce_mod.allreduce(n, &dot, reduce_mod.TYPE_BINARY_OP.ADD);
 }
@@ -179,6 +208,7 @@ fn f_reference_timestamps() void {
 
 task f_startup() void {
     timestamp.enable_tsc();
+    timer_mod1.enable();
 }
 
 
@@ -204,4 +234,5 @@ comptime{
     @export_symbol(f_spmv);
     @export_symbol(f_sync);
     @export_symbol(f_reference_timestamps);
+
 }

@@ -95,6 +95,10 @@ def parse_args():
       "--blockSize",
       default=2, type=int,
       help="the size of temporary buffers for communication")
+  parser.add_argument(
+      "--level-id",
+      default=0, type=int,
+      help="layer id parameter for hop-based laplacian (hops = factor = 2^level_id)")
 
   args = parser.parse_args()
 

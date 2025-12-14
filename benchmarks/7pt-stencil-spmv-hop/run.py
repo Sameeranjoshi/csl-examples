@@ -90,6 +90,7 @@ from util import (
     hwl_2_oned_colmajor,
     oned_to_hwl_colmajor,
     laplacian,
+    laplacian_hop_based,
 )
 
 
@@ -216,7 +217,9 @@ def main():
 
   y_ref = np.zeros((height, width, pe_length), dtype=np.float32)
 
-  laplacian(stencil_coeff, zDim, x, y_ref)
+  # Perform hop-based laplacian in x and y dimensions based on level_id parameter
+  level_id = args.level_id
+  laplacian_hop_based(stencil_coeff, zDim, x, y_ref, level_id)
 
   # fabric-offsets = 1,1
   fabric_offset_x = 1
@@ -425,6 +428,10 @@ def main():
   print(f"bandwidth = {bandwidth} MB/S ")
 
   z = y_ref.ravel() - y_wse.ravel()
+  # print single layer layer  0 in 2D style
+  print(f"single layer layer {level_id} in 2D style")
+  print(y_ref[0])
+  print(y_wse[0])
   nrm_z = np.linalg.norm(z, np.inf)
   print(f"|y_ref - y_wes| = {nrm_z}")
   np.testing.assert_allclose(y_ref.ravel(), y_wse.ravel(), 1.e-5)

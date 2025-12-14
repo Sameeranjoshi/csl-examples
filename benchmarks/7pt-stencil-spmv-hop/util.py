@@ -164,6 +164,110 @@ def laplacian(stencil_coeff, zDim, x, y):
                      c_center*center_buf
 
 
+# Hop-based laplacian: y = Laplacian(x) for z=0,1,..,zDim-1
+# This version uses hop-based communication in x and y dimensions based on level_id
+# hops = factor = 2^level_id
+# Only active PEs (where i % factor == 0 and j % factor == 0) compute the stencil
+#
+# Input:
+#   stencil_coeff: size is (h,w,7)
+#   zDim: number of z-dimension elements to process
+#   x: size is (h,w,l)
+#   y: size is (h,w,l) - output
+#   level_id: layer id parameter (hops = factor = 2^level_id)
+def laplacian_hop_based(stencil_coeff, zDim, x, y, level_id=0):
+  (height, width, pe_length) = x.shape
+  assert zDim <= pe_length
+  # y and x must have the same dimensions
+  (m, n, k) = y.shape
+  assert m == height
+  assert n == width
+  assert pe_length == k
+  # stencil_coeff must be (h,w,7)
+  (m, n, k) = stencil_coeff.shape
+  assert m == height
+  assert n == width
+  assert 7 == k
+
+  # Calculate hops and factor based on level_id
+  factor = 2 ** level_id
+  hops = factor
+
+#          North
+#           j
+#        +------+
+# West i |      | East
+#        +------+
+#          south
+  for i in range(height):
+    for j in range(width):
+      # Check if this PE is active (matches WSE logic)
+      is_active_pe = (i % factor == 0) and (j % factor == 0)
+      
+      # Initialize y to 0 for all PEs (matching CSL kernel behavior)
+      print(f"index i: {i}, j: {j} is_active_pe: {is_active_pe}")
+      for k in range(zDim):
+        y[(i,j,k)] = 0
+      
+      # Only compute stencil for active PEs (skip entirely for inactive PEs)
+      if not is_active_pe:
+        continue  # Skip computation for inactive PEs, y already set to 0
+      
+      # For active PEs, compute the stencil
+      for k in range(zDim):
+        c_west = stencil_coeff[(i,j,0)]
+        c_east = stencil_coeff[(i,j,1)]
+        c_south = stencil_coeff[(i,j,2)]
+        c_north = stencil_coeff[(i,j,3)]
+        c_bottom = stencil_coeff[(i,j,4)]
+        c_top = stencil_coeff[(i,j,5)]
+        c_center = stencil_coeff[(i,j,6)]
+
+        # Use hop-based neighbors in x and y dimensions instead of immediate neighbors
+        west_buf = 0
+        if j >= hops:  # Check if west neighbor is within bounds
+          west_neighbor_j = j - hops
+          # Check if west neighbor is also active
+          if (i % factor == 0) and (west_neighbor_j % factor == 0):
+            west_buf = x[(i, west_neighbor_j, k)]
+            
+        east_buf = 0
+        if j < width - hops:  # Check if east neighbor is within bounds
+          east_neighbor_j = j + hops
+          # Check if east neighbor is also active
+          if (i % factor == 0) and (east_neighbor_j % factor == 0):
+            east_buf = x[(i, east_neighbor_j, k)]
+            
+        north_buf = 0
+        if i >= hops:  # Check if north neighbor is within bounds
+          north_neighbor_i = i - hops
+          # Check if north neighbor is also active
+          if (north_neighbor_i % factor == 0) and (j % factor == 0):
+            north_buf = x[(north_neighbor_i, j, k)]
+            
+        south_buf = 0
+        if i < height - hops:  # Check if south neighbor is within bounds
+          south_neighbor_i = i + hops
+          # Check if south neighbor is also active
+          if (south_neighbor_i % factor == 0) and (j % factor == 0):
+            south_buf = x[(south_neighbor_i, j, k)]
+            
+        # Z-direction neighbors remain immediate (no hop-based logic for Z)
+        bottom_buf = 0
+        if 0 < k:
+          bottom_buf = x[(i,j,k-1)]
+        top_buf = 0
+        if k < zDim-1:
+          top_buf = x[(i,j,k+1)]
+        center_buf = x[(i,j,k)]
+        
+        # Compute stencil for active PEs
+        y[(i,j,k)] = c_west*west_buf + c_east*east_buf + \
+                     c_south*south_buf + c_north*north_buf + \
+                     c_bottom*bottom_buf + c_top*top_buf + \
+                     c_center*center_buf
+
+
 # Given a 7-point stencil, generate sparse matrix A.
 # A is represented by CSR.
 # The order of grids is column-major
