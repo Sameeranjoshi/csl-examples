@@ -26,7 +26,7 @@ param BLOCK_SIZE: i16; // size of temporary buffers for communication
 param STARTUP: local_task_id;
 
 const timestamp = @import_module("<time>");
-var current_level: i16 = 3;
+var current_level: i16 = 1;
 var timing_spmv_total = @zeros([1 * timestamp.tsc_size_words]u16);      // spmv total accumulated elapsed timing
 var timing_spmv_communication = @zeros([1 * timestamp.tsc_size_words]u16);      // spmv communication accumulated elapsed timing
 var timing_spmv_compute = @zeros([1 * timestamp.tsc_size_words]u16);      // spmv compute accumulated elapsed timing
