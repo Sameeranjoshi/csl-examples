@@ -161,7 +161,7 @@ class SimpleGMG:
         self._init_rhs()
         
         # Simple parameters
-        self.omega = 0.75  # Jacobi relaxation parameter
+        self.omega = 2.0/3.0  # Jacobi relaxation parameter
 
         self.nrm_b = np.linalg.norm(self.grids[0]['f'].ravel(), 2)
         self.abs_tolerance = abs_tolerance
