@@ -428,10 +428,10 @@ def main():
   print(f"bandwidth = {bandwidth} MB/S ")
 
   z = y_ref.ravel() - y_wse.ravel()
-  # print single layer layer  0 in 2D style
-  print(f"single layer layer {level_id} in 2D style")
-  print(y_ref[0])
-  print(y_wse[0])
+  # prettyprintoptions
+  np.set_printoptions(precision=2, suppress=True, linewidth=200)
+  print(y_ref[:, :, 0])
+  print(y_wse[:, :, 0])
   nrm_z = np.linalg.norm(z, np.inf)
   print(f"|y_ref - y_wes| = {nrm_z}")
   np.testing.assert_allclose(y_ref.ravel(), y_wse.ravel(), 1.e-5)

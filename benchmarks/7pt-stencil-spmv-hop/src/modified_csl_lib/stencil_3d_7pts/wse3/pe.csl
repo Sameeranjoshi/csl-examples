@@ -412,15 +412,12 @@ fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32, current_level: i16, timing
 //
 // TODO: to reduce latency, combine laplacian_xy into RECV
 fn laplacian_xy() void {
-    if (!is_active_pe) {
-        return;
-    }
     save_timestamp_start(TIMER_LAPLACIAN_XY);
     // OPTIMIZATION 2: Skip laplacian computation for inactive PEs
-    // if (!is_active_pe) {
-    //     save_timestamp_end(current_level_local, &timer_laplacian_xy_local, TIMER_LAPLACIAN_XY); // Why 2, because if early return then we never measured time.
-    //     return; // Inactive PEs don't need to compute laplacian
-    // }
+    if (!is_active_pe) {
+        save_timestamp_end(current_level_local, &timer_laplacian_xy_local, TIMER_LAPLACIAN_XY); // Why 2, because if early return then we never measured time.
+        return; // Inactive PEs don't need to compute laplacian
+    }
     // // Handle boundary conditions
     // if (first_active_px) {
     //     // west  = - center
@@ -475,15 +472,12 @@ fn laplacian_xy() void {
 // - need more logics to handle the boundary condition
 //
 fn laplacian_z() void {
-    if (!is_active_pe) {
-        return;
-    }
     save_timestamp_start(TIMER_LAPLACIAN_Z);
     // OPTIMIZATION 2: Skip laplacian computation for inactive PEs
-    // if (!is_active_pe) {
-    //     save_timestamp_end(current_level_local, &timer_laplacian_z_local, TIMER_LAPLACIAN_Z); // Why 2, because if early return then we never measured time.
-    //     return; // Inactive PEs don't need to compute laplacian
-    // }
+    if (!is_active_pe) {
+        save_timestamp_end(current_level_local, &timer_laplacian_z_local, TIMER_LAPLACIAN_Z); // Why 2, because if early return then we never measured time.
+        return; // Inactive PEs don't need to compute laplacian
+    }
         
     // y[k] += x[k-1] * c_bottom for k = 1,2,...,zDim-1
     //@fmacs(mem_y_z_minus_buf_dsd, mem_y_z_minus_buf_dsd, mem_x_z_minus_buf_dsd, c_bottom);
@@ -527,26 +521,8 @@ fn laplacian_z() void {
 // - update the DSD of pointer x and y
 // - activate COMM
 fn compute_and_next_send_recv() void {
-    
     if (2 <= count_send_recv){
-        simprint.fmt_with_coords("compute_and_next_send_recv: count_send_recv = {d}", .{@as(u32, count_send_recv)});
-        const index_x: i16 = @as(i16, layout_mod.get_x_coord());
-        const index_y: i16 = @as(i16, layout_mod.get_y_coord());
-        // print east, west, south, north buffer using buffer and loop
-        if (index_y == 0){ 
-            for (east_buf) |val, i| {
-                simprint.fmt_with_coords("east_buf[{d}] = {f}", .{ i, val });
-            }
-            for (west_buf) |val, i| {
-                simprint.fmt_with_coords("west_buf[{d}] = {f}", .{ i, val });
-            }
-            for (south_buf) |val, i| {
-                simprint.fmt_with_coords("south_buf[{d}] = {f}", .{ i, val });
-            }
-            for (north_buf) |val, i| {
-                simprint.fmt_with_coords("north_buf[{d}] = {f}", .{ i, val });
-            }
-        }
+        save_timestamp_end(current_level_local, timing_spmv_communication_local, TIMER_SPMV_COMMUNICATION);
         // RECV/SEND of this block are done
         laplacian_xy();
         // advance start_x, mem_center_buf_dsd and mem_y_buf_dsd for next block
@@ -576,8 +552,9 @@ task f_send() void {
     const px: i16 = @as(i16, layout_mod.get_x_coord());
     const py: i16 = @as(i16, layout_mod.get_y_coord());
     if (SEND_STATE_EAST == send_state){ // send to east
+        save_timestamp_start(TIMER_ONLY_SEND);
         // The last PE of x-dir has no east neighbor, so it does not send data to the east
-        if (px >= last_active_px){
+        if (!is_pe_inside_grid or px == @as(i16, last_active_px)){
             @activate(SEND); // nothing to send
         }else{
             //@mov32(fab_trans_east_wdsd, mem_center_buf_dsd, .{.async=true, .activate = f_send });
@@ -592,7 +569,7 @@ task f_send() void {
         send_state = SEND_STATE_WEST;// goto next state   
     }else if (SEND_STATE_WEST == send_state){ // send to west
         // The first PE of x-dir has no west neighbor, so it does not send data to the west
-        if (px <= first_active_px){
+        if (!is_pe_inside_grid or px == @as(i16, first_active_px)){
             @activate(SEND); // nothing to send
         }else{
             //@mov32(fab_trans_west_wdsd, mem_center_buf_dsd, .{.async=true, .activate = f_send });
@@ -607,7 +584,7 @@ task f_send() void {
         send_state = SEND_STATE_NORTH;
     }else if (SEND_STATE_NORTH == send_state){ // send to north
         // The first PE of y-dir has no north neighbor, so it does not send data to the north
-        if (py <= first_active_py){
+        if (!is_pe_inside_grid or py == @as(i16, first_active_py)){
             @activate(SEND); // nothing to send
         }else{
             //@mov32(fab_trans_north_wdsd, mem_center_buf_dsd, .{.async=true, .activate = f_send });
@@ -622,7 +599,7 @@ task f_send() void {
         send_state = SEND_STATE_SOUTH;
     }else if (SEND_STATE_SOUTH == send_state) { // send to south
         // The last PE of y-dir has no south neighbor, so it does not send data to the south
-        if (py >= last_active_py){
+        if (!is_pe_inside_grid or py == @as(i16, last_active_py)){
             @activate(SEND); // nothing to send
         }else{
             //@mov32(fab_trans_south_wdsd, mem_center_buf_dsd, .{.async=true, .activate = f_send });
@@ -636,6 +613,7 @@ task f_send() void {
         }
         send_state = SEND_STATE_DONE;
     }else{
+        save_timestamp_end(current_level_local, &timer_only_send_local, TIMER_ONLY_SEND);
         count_send_recv += 1;
         // if both SEND and RECV are done, perform
         // - compute laplacian on x-y
@@ -652,8 +630,9 @@ task f_recv() void {
     const px: i16 = @as(i16, layout_mod.get_x_coord());
     const py: i16 = @as(i16, layout_mod.get_y_coord());
     if (RECV_STATE_WEST == recv_state){ // receive from west
+        save_timestamp_start(TIMER_ONLY_RECV);
         // The first PE of x-dir has no west neighbor so it does not receive data from the west
-        if (first_px or px > last_active_px){   // Doesn't include last active px as it can handle receive.
+        if (px == @as(i16, first_active_px) or !is_pe_inside_grid){   // Doesn't include last active px as it can handle receive.
             @activate(RECV); // nothing to receive
         }else{
             //@mov32(mem_west_buf_dsd, fab_recv_west_wdsd, .{.async=true, .activate = f_recv });
@@ -670,7 +649,7 @@ task f_recv() void {
         recv_state = RECV_STATE_EAST; // goto next state
     }else if (RECV_STATE_EAST == recv_state){ // receive from east
         // The last PE of x-dir has no east neighbor, so it does not recv data from the east
-        if (px >= last_active_px){
+        if (!is_pe_inside_grid or px == @as(i16, last_active_px)){
             @activate(RECV); // nothing to receive
         }else{
             //@mov32(mem_east_buf_dsd, fab_recv_east_wdsd, .{.async=true, .activate = f_recv });
@@ -687,7 +666,7 @@ task f_recv() void {
         recv_state = RECV_STATE_SOUTH;
     }else if (RECV_STATE_SOUTH == recv_state){ // receive from south
         // The last PE of y-dir has no south neighbor, so it does not recv data from the south
-        if (py >= last_active_py){
+        if (py == @as(i16, last_active_py) or !is_pe_inside_grid){
             @activate(RECV); // nothing to receive
         }else{
             //@mov32(mem_south_buf_dsd, fab_recv_south_wdsd, .{.async=true, .activate = f_recv });
@@ -704,7 +683,7 @@ task f_recv() void {
         recv_state = RECV_STATE_NORTH;
     }else if (RECV_STATE_NORTH == recv_state){ // receive from north
         // The first PE of y-dir has no north neighbor so it does not receive data from the north
-        if (first_py or py > last_active_py){   // Doesn't include last active py as it can handle receive.
+        if (py == @as(i16, first_active_py) or !is_pe_inside_grid){   // Doesn't include last active py as it can handle receive.
             @activate(RECV); // nothing to receive
         }else{
             //@mov32(mem_north_buf_dsd, fab_recv_north_wdsd, .{.async=true, .activate = f_recv });
@@ -720,6 +699,7 @@ task f_recv() void {
         }
         recv_state = RECV_STATE_DONE;
     }else{
+        save_timestamp_end(current_level_local, &timer_only_recv_local, TIMER_ONLY_RECV);
         count_send_recv += 1;
         // if both SEND and RECV are done, perform
         // - compute laplacian on x-y
@@ -1046,8 +1026,8 @@ fn setHopBasedParams(hops_value: u16, factor_value: u16, width: i16, height: i16
 
     is_pe_inside_grid = isInsideBox(px, py, first_active_px, first_active_py, last_active_px, last_active_py);
     // print index of PE, active inactive status and inactive horizontal/vertical status
-    simprint.fmt_with_coords("is_active_pe = {d}, inactive_horizontal = {d}, inactive_vertical = {d}, is_pe_inside_grid = {d}", 
-        .{ @as(u32, is_active_pe), @as(u32, inactive_horizontal), @as(u32, inactive_vertical), @as(u32, is_pe_inside_grid) });
+    // simprint.fmt_with_coords("is_active_pe = {d}, inactive_horizontal = {d}, inactive_vertical = {d}, is_pe_inside_grid = {d}", 
+    //     .{ @as(u32, is_active_pe), @as(u32, inactive_horizontal), @as(u32, inactive_vertical), @as(u32, is_pe_inside_grid) });
 
 }
 

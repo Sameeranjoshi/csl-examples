@@ -204,8 +204,8 @@ def laplacian_hop_based(stencil_coeff, zDim, x, y, level_id=0):
       # Check if this PE is active (matches WSE logic)
       is_active_pe = (i % factor == 0) and (j % factor == 0)
       
-      # Initialize y to 0 for all PEs (matching CSL kernel behavior)
-      print(f"index i: {i}, j: {j} is_active_pe: {is_active_pe}")
+      # # Initialize y to 0 for all PEs (matching CSL kernel behavior)
+      # print(f"index i: {i}, j: {j} is_active_pe: {is_active_pe}")
       for k in range(zDim):
         y[(i,j,k)] = 0
       
