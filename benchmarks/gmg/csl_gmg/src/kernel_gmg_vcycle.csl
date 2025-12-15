@@ -12,7 +12,7 @@ param MAX_ZDIM: i16;
 param BLOCK_SIZE: i16;
 param LEVELS: i16;
 param STATE: local_task_id;
-const MAX_ITERATIONS: i16 = 100;  // Maximum iterations for storing rho history
+const MAX_ITERATIONS: i16 = 100;  // Maximum iterations for storing rho history, this takes some space be mindful with allocations.
 
 //-------------------------------------------------
 // LIBRARIES and STATE MACHINE STATES
@@ -20,9 +20,9 @@ const MAX_ITERATIONS: i16 = 100;  // Maximum iterations for storing rho history
 const math_lib = @import_module("<math>");
 const blas_lib = @import_module("blas.csl"); // modified reduced some code.
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
-const timestamp = @import_module("<time>");
-const timer = @import_module("timer_modified.csl", .{ .timerCount = 12 });
-const reduce_mod = @import_module("./modified_csl_lib/allreduce/pe.csl", @concat_structs(reduceParams, .{
+// const timestamp = @import_module("<time>");
+const timer = @import_module("timer_modified.csl", .{ .timerCount = 11 });
+const reduce_mod = @import_module("./modified_csl_lib_hops/allreduce/pe.csl", @concat_structs(reduceParams, .{
      .f_callback = f_trigger_state_machine,
      .queues = [1]u16{2},
      .dest_dsr_ids = [1]u16{1},
@@ -30,7 +30,7 @@ const reduce_mod = @import_module("./modified_csl_lib/allreduce/pe.csl", @concat
      .src1_dsr_ids = [1]u16{1},
      .MAX_PENCIL_DIM = MAX_ZDIM  // OPTIMIZATION: Pass MAX_ZDIM to size zero_buf dynamically, saves ~1KB for 256 problem
      }));
-const stencil_mod = @import_module("./modified_csl_lib/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
+const stencil_mod = @import_module("./modified_csl_lib_hops/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
      .f_callback = f_trigger_state_machine,
      .input_queues = [4]u16{4, 5, 6, 7},
      .output_queues = if (@is_arch("wse3")) [4]u16{4, 5, 6, 7} else [1]u16{3},
@@ -39,6 +39,7 @@ const stencil_mod = @import_module("./modified_csl_lib/stencil_3d_7pts/pe.csl", 
      .dest_dsr_ids = [2]u16{2,3},
      .src0_dsr_ids = [1]u16{2},
      .src1_dsr_ids = [2]u16{2,3},
+     .timer=timer,
      }));
 const layout_mod = @import_module("<layout>");
 const simprint = @import_module("<simprint>", .{.enable = true});
@@ -83,9 +84,8 @@ const TIMER_ID_SETUP_INIT: i16 = 5;
 const TIMER_ID_RHO_CHECK: i16 = 6;
 const TIMER_ID_H2D: i16 = 7;
 const TIMER_ID_D2H: i16 = 8;
-const TIMER_ID_COMPUTE: i16 = 9;
-const TIMER_ID_COMMUNICATION: i16 = 10;
-const TIMER_ID_COMP_COMM_TOTAL: i16 = 11;
+const TIMER_SPMV_TOTAL: i16=9;
+const TIMER_SPMV_COMMUNICATION: i16=10; // Make sure the modules have the same number to avoid UB.
 
 //-------------------------------------------------
 // DATA on 48KB(variables, pointers, DSDs)
@@ -127,18 +127,18 @@ var jacobi_coeff_array = @zeros([LEVELS]f32);
 // Timing buffers - store accumulated elapsed timestamps for each operation at each level
 // Operations: smooth (down + up separate), apply_op, restriction, interpolation
 // For each operation we store elapsed timestamp words only (u16[tsc_size_words])
-var timing_smooth = @zeros([LEVELS * timestamp.tsc_size_words]u16); // pre-/post-smoothing accumulated elapsed timing
-var timing_apply_op = @zeros([LEVELS * timestamp.tsc_size_words]u16);    // operator application accumulated elapsed timing
-var timing_residual = @zeros([LEVELS * timestamp.tsc_size_words]u16);    // residual accumulated elapsed timing
-var timing_compute = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // compute accumulated elapsed timing
-var timing_communication = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // communication accumulated elapsed timing
-var timing_restrict = @zeros([LEVELS * timestamp.tsc_size_words]u16);    // restriction accumulated elapsed timing
-var timing_interp = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // interpolation accumulated elapsed timing
-var timing_setup_init = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // setup initialization accumulated elapsed timing
-var timing_rho_check = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // rho check accumulated elapsed timing
-var timing_spmv_total = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // spmv total accumulated elapsed timing
-var timing_spmv_communication = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // spmv communication accumulated elapsed timing
-var timing_spmv_compute = @zeros([LEVELS * timestamp.tsc_size_words]u16);      // spmv compute accumulated elapsed timing
+var timing_smooth = @zeros([LEVELS * timer.tsc_size_words]u16); // pre-/post-smoothing accumulated elapsed timing
+var timing_apply_op = @zeros([LEVELS * timer.tsc_size_words]u16);    // operator application accumulated elapsed timing
+var timing_residual = @zeros([LEVELS * timer.tsc_size_words]u16);    // residual accumulated elapsed timing
+var timing_compute = @zeros([LEVELS * timer.tsc_size_words]u16);      // compute accumulated elapsed timing
+var timing_communication = @zeros([LEVELS * timer.tsc_size_words]u16);      // communication accumulated elapsed timing
+var timing_restrict = @zeros([LEVELS * timer.tsc_size_words]u16);    // restriction accumulated elapsed timing
+var timing_interp = @zeros([LEVELS * timer.tsc_size_words]u16);      // interpolation accumulated elapsed timing
+var timing_setup_init = @zeros([LEVELS * timer.tsc_size_words]u16);      // setup initialization accumulated elapsed timing
+var timing_rho_check = @zeros([LEVELS * timer.tsc_size_words]u16);      // rho check accumulated elapsed timing
+var timing_spmv_total = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv total accumulated elapsed timing
+var timing_spmv_communication = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv communication accumulated elapsed timing
+var timing_spmv_compute = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv compute accumulated elapsed timing
 
 // Operation counters - track number of operations at each level
 var counter_smooth = @zeros([LEVELS]u16);    // Number of up smoothing iterations per level
@@ -153,12 +153,12 @@ var counter_communication = @zeros([LEVELS]u16);   // Number of communication op
 
 // Reference clock from allreduce module (for TSC synchronization)
 // start, end
-var time_total_start_end_u16 = @zeros([timestamp.tsc_size_words]u16);   // this is also elapsed time for entire V-cycle, 1 level
-var time_ref_u16 = @zeros([timestamp.tsc_size_words]u16);
-var time_h2d_u16 = @zeros([timestamp.tsc_size_words]u16);
-var time_d2h_u16 = @zeros([timestamp.tsc_size_words]u16);
-var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
-var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
+var time_total_start_end_u16 = @zeros([timer.tsc_size_words]u16);   // this is also elapsed time for entire V-cycle, 1 level
+var time_ref_u16 = @zeros([timer.tsc_size_words]u16);
+var time_h2d_u16 = @zeros([timer.tsc_size_words]u16);
+var time_d2h_u16 = @zeros([timer.tsc_size_words]u16);
+var tscStartBuffer = @zeros([timer.tsc_size_words]u16);
+var tscEndBuffer = @zeros([timer.tsc_size_words]u16);
 var dot = @zeros([1]f32); // dummy variable for f_sync
 
 // GMG parameters
@@ -279,7 +279,6 @@ fn is_top_left_of_restriction_window(px: u16, py: u16, window_width: u16, window
 
 // Enable timing
 fn f_enable_timer() void {
-    stencil_mod.enable_timer();
     timer.enable();
     sys_mod.unblock_cmd_stream();
 }
@@ -309,7 +308,7 @@ fn f_toc_total() void {
     // time_total_start_end_u16[4] = tscEndBuffer[1];
     // time_total_start_end_u16[5] = tscEndBuffer[2];
     timer.stop(TIMER_ID_TOTAL);
-    timer.elapsed(TIMER_ID_TOTAL, @ptrcast(*[timer.timestamp_size]u16, &time_total_start_end_u16));
+    timer.elapsed(TIMER_ID_TOTAL, @ptrcast(*[timer.tsc_size_words]u16, &time_total_start_end_u16));
     // sys_mod.unblock_cmd_stream();
 }
 
@@ -321,7 +320,7 @@ fn f_tic_h2d() void {
 fn f_toc_h2d() void {
     timer.stop(TIMER_ID_H2D);
     // timer.elapsed(TIMER_ID_H2D, @ptrcast(*[timer.timestamp_size]u16, &time_h2d_u16));
-    timer.elapsed(TIMER_ID_H2D, @ptrcast(*[timer.timestamp_size]u16, &time_h2d_u16));
+    timer.elapsed(TIMER_ID_H2D, @ptrcast(*[timer.tsc_size_words]u16, &time_h2d_u16));
     sys_mod.unblock_cmd_stream();
 }
 
@@ -333,7 +332,7 @@ fn f_tic_d2h() void {
 fn f_toc_d2h() void {
     timer.stop(TIMER_ID_D2H);
     // timer.elapsed(TIMER_ID_D2H, @ptrcast(*[timer.timestamp_size]u16, &time_d2h_u16));
-    timer.elapsed(TIMER_ID_D2H, @ptrcast(*[timer.timestamp_size]u16, &time_d2h_u16));
+    timer.elapsed(TIMER_ID_D2H, @ptrcast(*[timer.tsc_size_words]u16, &time_d2h_u16));
     sys_mod.unblock_cmd_stream();
 }
 
@@ -405,8 +404,8 @@ fn save_timestamp_start(timer_id: i16) void {
 
 fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
     timer.stop(timer_id);
-    const offset: i16 = level * timestamp.tsc_size_words;
-    timer.accumulate_elapsed(timer_id, @ptrcast(*[timer.timestamp_size]u16, &timing_array[offset]));
+    const offset: i16 = level * timer.tsc_size_words;
+    timer.accumulate_elapsed(timer_id, @ptrcast(*[timer.tsc_size_words]u16, &timing_array[offset]));
 }
 //-------------------------------------------------
 // GMG KERNELS

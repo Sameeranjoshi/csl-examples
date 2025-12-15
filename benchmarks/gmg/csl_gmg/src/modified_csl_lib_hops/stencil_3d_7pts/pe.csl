@@ -59,9 +59,9 @@ const api_wse3 = @is_arch("wse3");
 // The user must specify --import-path=<path to csl-libs>
 fn get_stencil_module() comptime_string {
   if (api_wse3) {
-    return "./modified_csl_lib/stencil_3d_7pts/wse3/pe.csl";
+    return "./modified_csl_lib_hops/stencil_3d_7pts/wse3/pe.csl";
   }else{
-    return "./modified_csl_lib/stencil_3d_7pts/wse2/pe.csl";
+    return "./modified_csl_lib_hops/stencil_3d_7pts/wse2/pe.csl";
   }
 }
 
@@ -97,7 +97,7 @@ const stencilParams = .{
   .src0_dsr_ids = src0_dsr_ids,
   .src1_dsr_ids = src1_dsr_ids,
 
-  .timer = timer
+  .timer = timer,
 };
 
 const stencil_mod = @import_module(get_stencil_module(), stencilParams);
