@@ -26,7 +26,7 @@ param BLOCK_SIZE: i16; // size of temporary buffers for communication
 param STARTUP: local_task_id;
 
 const timestamp = @import_module("<time>");
-var current_level: i16 = 1;
+var current_level: i16 = 100;
 var timing_spmv_total = @zeros([1 * timestamp.tsc_size_words]u16);      // spmv total accumulated elapsed timing
 var timing_spmv_communication = @zeros([1 * timestamp.tsc_size_words]u16);      // spmv communication accumulated elapsed timing
 var timing_spmv_compute = @zeros([1 * timestamp.tsc_size_words]u16);      // spmv compute accumulated elapsed timing
@@ -101,7 +101,7 @@ var stencil_coeff = @zeros([7]f32);
 
 
 
-const simprint = @import_module("<simprint>", .{ .enable = true });
+const simprint = @import_module("<simprint>", .{ .enable = false });
 const layout_mod = @import_module("<layout>");
 // time_buf_u16[0:5] = {tscStartBuffer, tscEndBuffer}
 var time_buf_u16 = @zeros([timestamp.tsc_size_words*2]u16);
@@ -192,7 +192,8 @@ fn f_some_random_task() void {
     timer_mod1.elapsed(1, &only_spmv_total_time);
     sys_mod.unblock_cmd_stream();
 }
-fn f_sync( n: i16 ) void {
+fn f_sync( n: i16, c_level:i16 ) void {
+    current_level = c_level;
    reduce_mod.allreduce(n, &dot, reduce_mod.TYPE_BINARY_OP.ADD);
 }
 

@@ -20,9 +20,11 @@ const MAX_ITERATIONS: i16 = 100;  // Maximum iterations for storing rho history,
 const math_lib = @import_module("<math>");
 const blas_lib = @import_module("blas.csl"); // modified reduced some code.
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
+const timer = @import_module("timer_modified.csl", .{ .timerCount = 9 });
 // const timestamp = @import_module("<time>");
-const timer = @import_module("timer_modified.csl", .{ .timerCount = 11 });
-const reduce_mod = @import_module("./modified_csl_lib_hops/allreduce/pe.csl", @concat_structs(reduceParams, .{
+// const timer = @import_module("timer_modified.csl", .{ .timerCount = 11 });
+// const reduce_mod = @import_module("./modified_csl_lib_hops/allreduce/pe.csl", @concat_structs(reduceParams, .{
+const reduce_mod = @import_module("./modified_csl_lib/allreduce/pe.csl", @concat_structs(reduceParams, .{
      .f_callback = f_trigger_state_machine,
      .queues = [1]u16{2},
      .dest_dsr_ids = [1]u16{1},
@@ -30,7 +32,8 @@ const reduce_mod = @import_module("./modified_csl_lib_hops/allreduce/pe.csl", @c
      .src1_dsr_ids = [1]u16{1},
      .MAX_PENCIL_DIM = MAX_ZDIM  // OPTIMIZATION: Pass MAX_ZDIM to size zero_buf dynamically, saves ~1KB for 256 problem
      }));
-const stencil_mod = @import_module("./modified_csl_lib_hops/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
+// const stencil_mod = @import_module("./modified_csl_lib_hops/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
+const stencil_mod = @import_module("./modified_csl_lib/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
      .f_callback = f_trigger_state_machine,
      .input_queues = [4]u16{4, 5, 6, 7},
      .output_queues = if (@is_arch("wse3")) [4]u16{4, 5, 6, 7} else [1]u16{3},
@@ -38,8 +41,8 @@ const stencil_mod = @import_module("./modified_csl_lib_hops/stencil_3d_7pts/pe.c
      .BLOCK_SIZE = BLOCK_SIZE,
      .dest_dsr_ids = [2]u16{2,3},
      .src0_dsr_ids = [1]u16{2},
-     .src1_dsr_ids = [2]u16{2,3},
-     .timer=timer,
+     .src1_dsr_ids = [2]u16{2,3}
+    //  .timer=timer,
      }));
 const layout_mod = @import_module("<layout>");
 const simprint = @import_module("<simprint>", .{.enable = true});
@@ -84,10 +87,8 @@ const TIMER_ID_SETUP_INIT: i16 = 5;
 const TIMER_ID_RHO_CHECK: i16 = 6;
 const TIMER_ID_H2D: i16 = 7;
 const TIMER_ID_D2H: i16 = 8;
-const TIMER_SPMV_TOTAL: i16=9;
-const TIMER_SPMV_COMMUNICATION: i16=10; // Make sure the modules have the same number to avoid UB.
-
-//-------------------------------------------------
+// const TIMER_SPMV_TOTAL: i16=9;
+// const TIMER_SPMV_COMMUNICATION: i16=10; // Make sure the modules have the same number to avoid UB.
 // DATA on 48KB(variables, pointers, DSDs)
 //-------------------------------------------------
 
@@ -279,7 +280,8 @@ fn is_top_left_of_restriction_window(px: u16, py: u16, window_width: u16, window
 
 // Enable timing
 fn f_enable_timer() void {
-    timer.enable();
+    // stencil_mod.enable_timer();
+    // timer.enable();
     sys_mod.unblock_cmd_stream();
 }
 

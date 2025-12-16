@@ -219,7 +219,7 @@ def main():
 
   # Perform hop-based laplacian in x and y dimensions based on level_id parameter
   level_id = args.level_id
-  laplacian_hop_based(stencil_coeff, zDim, x, y_ref, level_id)
+  # laplacian_hop_based(stencil_coeff, zDim, x, y_ref, level_id)
 
   # fabric-offsets = 1,1
   fabric_offset_x = 1
@@ -320,7 +320,7 @@ def main():
           streaming=False, data_type=memcpy_dtype, order=MemcpyOrder.COL_MAJOR, nonblock=True)
 
   print("step 1: sync all PEs")
-  runner.launch("f_sync", np.int16(1), nonblock=False)
+  runner.launch("f_sync", np.int16(1), np.int16(level_id), nonblock=False)
 
   print("step 2: tic() records time_start")
   runner.launch("f_tic", nonblock=True)

@@ -37,7 +37,7 @@ param dest_dsr_ids:[2]u16;
 param src0_dsr_ids:[1]u16;
 param src1_dsr_ids:[2]u16;
 
-param timer: imported_module;
+// param timer: imported_module;
 // Hop-based communication parameters (runtime variables)
 var hops: u16 = 1;
 var factor: u16 = 1;
@@ -237,25 +237,25 @@ var fab_trans_south_wdsd = @get_dsd(fabout_dsd, .{
 
 const layout_mod = @import_module("<layout>");
 const simprint = @import_module("<simprint>", .{ .enable = true });
-// const timer_mod = @import_module("timer_modified.csl", .{ .timerCount = 2 });
+const timer_mod_stencil = @import_module("timer_modified.csl", .{ .timerCount = 2 });
 var current_level_local: i16 = 0;
 var timing_spmv_total_local: [*]u16;
 var timing_spmv_communication_local: [*]u16;
 var timing_spmv_compute_local: [*]u16;
 
 
-var TIMER_SPMV_TOTAL: i16=9;
-var TIMER_SPMV_COMMUNICATION: i16=10;
+var TIMER_SPMV_TOTAL: i16=0;
+var TIMER_SPMV_COMMUNICATION: i16=1;
 // later we will calculate the compute time by subtracting the communication time from the total time
 
 fn save_timestamp_start(timer_id: i16) void {
-    timer.start(timer_id);
+    timer_mod_stencil.start(timer_id);
 }
 
 fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
-    timer.stop(timer_id);
-    const offset: i16 = level * timer.tsc_size_words;
-    timer.accumulate_elapsed(timer_id, @ptrcast(*[timer.tsc_size_words]u16, &timing_array[offset]));
+    timer_mod_stencil.stop(timer_id);
+    const offset: i16 = level * timer_mod_stencil.tsc_size_words;
+    timer_mod_stencil.accumulate_elapsed(timer_id, @ptrcast(*[timer_mod_stencil.tsc_size_words]u16, &timing_array[offset]));
 }
 
 // The portal function of 7-point stencil module
@@ -284,6 +284,7 @@ fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32, current_level: i16, timing
     timing_spmv_total_local = timing_spmv_total;
     timing_spmv_communication_local = timing_spmv_communication;  // we save the pointers locally to use later, tasks don't have arguments
     timing_spmv_compute_local = timing_spmv_compute;
+    // timer_mod_stencil.enable();
 
     @assert(2 <= n);
     save_timestamp_start(TIMER_SPMV_TOTAL);
@@ -751,12 +752,12 @@ task f_comm() void {
         
         save_timestamp_end(current_level_local, timing_spmv_total_local, TIMER_SPMV_TOTAL);   // compute + communication
 
-        const offset: i16 = current_level_local * timer.tsc_size_words;
-        timer.subtract_timestamps(@ptrcast(*[timer.tsc_size_words]u16, &timing_spmv_total_local[offset]), 
-                            @ptrcast(*[timer.tsc_size_words]u16, &timing_spmv_communication_local[offset]), 
-                            @ptrcast(*[timer.tsc_size_words]u16, &timing_spmv_compute_local[offset]));  // result = a - b , therefore compute = total - communication
+        const offset: i16 = current_level_local * timer_mod_stencil.tsc_size_words;
+        timer_mod_stencil.subtract_timestamps(@ptrcast(*[timer_mod_stencil.tsc_size_words]u16, &timing_spmv_total_local[offset]), 
+                            @ptrcast(*[timer_mod_stencil.tsc_size_words]u16, &timing_spmv_communication_local[offset]), 
+                            @ptrcast(*[timer_mod_stencil.tsc_size_words]u16, &timing_spmv_compute_local[offset]));  // result = a - b , therefore compute = total - communication
         // if (pe_id_x == 0 and pe_id_y == 0) {
-        //     const offset: i16 = current_level_local * timer_mod.timestamp_size;
+        //     const offset: i16 = current_level_local * timer_mod_stencil.timestamp_size;
         //     simprint.fmt_with_coords(
         //         "TIMING_SPMV_FINISH: level={d}, communication_time=[{d},{d},{d}]",
         //         .{
@@ -778,6 +779,7 @@ task f_comm() void {
         // }
         
         //sys_mod.unblock_cmd_stream();
+        // timer_mod_stencil.disable();
         f_callback();
     }
 }

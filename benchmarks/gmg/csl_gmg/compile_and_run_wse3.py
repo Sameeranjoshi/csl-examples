@@ -166,10 +166,10 @@ def process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, 
         8: 8,
         16: 16,
         32: 32,
-        64: 16,
-        128: 32, # Let's keep a sweet spot of totalsize/4, so 1/4 th size is block size.
-        256: 64,
-        512: 128,
+        64: 64,
+        128: 128, # Let's keep a sweet spot of totalsize/4, so 1/4 th size is block size.
+        256: 256,
+        512: 256,
     }
     BSIZE  = bsizemap[size]
 
@@ -244,11 +244,11 @@ def main():
     # Format: (size, levels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter)
     # NOTE: MANUALLY DELETE FOLDER IF THERE IS SOME CHANGES IN THE SOURCE CODE AS IT WILL SKIP COMPILATION DUE TO CACHING.
     problems = [
-        # (4, 2, 100, 1e-5, 6, 6, 100),   # Tiny problem
+        #  (4, 2, 100, 1e-5, 6, 6, 100),   # Tiny problem
         #  (8, 3, 100, 1e-5, 6, 6, 100),   # Tiny problem
-         (16, 4, 100, 1e-5, 6, 6, 100),   # Small problem
+        #  (16, 4, 100, 1e-5, 6, 6, 100),   # Small problem
         #  (32, 5, 100, 1e-5, 6, 6, 100),   # Small problem
-        #  (64, 6, 100, 1e-5, 6, 6, 100),   # Medium problem
+         (64, 6, 100, 1e-5, 6, 6, 10),   # Medium problem
         #  (128, 7, 100, 1e-5, 6, 6, 100),   # Large problem
         #  (256, 8, 100, 1e-5, 6, 6, 100),   # Very large
         #  (512, 9, 100, 1e-5, 6, 6, 100),   # Very large

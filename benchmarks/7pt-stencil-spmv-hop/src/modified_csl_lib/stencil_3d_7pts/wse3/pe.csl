@@ -243,7 +243,7 @@ var fab_trans_south_wdsd = @get_dsd(fabout_dsd, .{
 });
 
 const layout_mod = @import_module("<layout>");
-const simprint = @import_module("<simprint>", .{ .enable = true });
+const simprint = @import_module("<simprint>", .{ .enable = false });
 // const timer_mod = @import_module("timer_modified.csl", .{ .timerCount = 8 });
 var current_level_local: i16 = 0;
 var timing_spmv_total_local: [*]u16;
@@ -554,7 +554,8 @@ task f_send() void {
     if (SEND_STATE_EAST == send_state){ // send to east
         save_timestamp_start(TIMER_ONLY_SEND);
         // The last PE of x-dir has no east neighbor, so it does not send data to the east
-        if (!is_pe_inside_grid or px == @as(i16, last_active_px)){
+        // if (!is_pe_inside_grid or px == @as(i16, last_active_px)){
+        if (last_px){
             @activate(SEND); // nothing to send
         }else{
             //@mov32(fab_trans_east_wdsd, mem_center_buf_dsd, .{.async=true, .activate = f_send });
@@ -569,7 +570,8 @@ task f_send() void {
         send_state = SEND_STATE_WEST;// goto next state   
     }else if (SEND_STATE_WEST == send_state){ // send to west
         // The first PE of x-dir has no west neighbor, so it does not send data to the west
-        if (!is_pe_inside_grid or px == @as(i16, first_active_px)){
+        // if (!is_pe_inside_grid or px == @as(i16, first_active_px)){
+        if (first_px){
             @activate(SEND); // nothing to send
         }else{
             //@mov32(fab_trans_west_wdsd, mem_center_buf_dsd, .{.async=true, .activate = f_send });
@@ -584,7 +586,8 @@ task f_send() void {
         send_state = SEND_STATE_NORTH;
     }else if (SEND_STATE_NORTH == send_state){ // send to north
         // The first PE of y-dir has no north neighbor, so it does not send data to the north
-        if (!is_pe_inside_grid or py == @as(i16, first_active_py)){
+        // if (!is_pe_inside_grid or py == @as(i16, first_active_py)){
+        if (first_py){
             @activate(SEND); // nothing to send
         }else{
             //@mov32(fab_trans_north_wdsd, mem_center_buf_dsd, .{.async=true, .activate = f_send });
@@ -599,7 +602,7 @@ task f_send() void {
         send_state = SEND_STATE_SOUTH;
     }else if (SEND_STATE_SOUTH == send_state) { // send to south
         // The last PE of y-dir has no south neighbor, so it does not send data to the south
-        if (!is_pe_inside_grid or py == @as(i16, last_active_py)){
+        if (last_py){
             @activate(SEND); // nothing to send
         }else{
             //@mov32(fab_trans_south_wdsd, mem_center_buf_dsd, .{.async=true, .activate = f_send });
@@ -632,7 +635,8 @@ task f_recv() void {
     if (RECV_STATE_WEST == recv_state){ // receive from west
         save_timestamp_start(TIMER_ONLY_RECV);
         // The first PE of x-dir has no west neighbor so it does not receive data from the west
-        if (px == @as(i16, first_active_px) or !is_pe_inside_grid){   // Doesn't include last active px as it can handle receive.
+        // if (px == @as(i16, first_active_px) or !is_pe_inside_grid){   // Doesn't include last active px as it can handle receive.
+        if (first_px){
             @activate(RECV); // nothing to receive
         }else{
             //@mov32(mem_west_buf_dsd, fab_recv_west_wdsd, .{.async=true, .activate = f_recv });
@@ -649,7 +653,8 @@ task f_recv() void {
         recv_state = RECV_STATE_EAST; // goto next state
     }else if (RECV_STATE_EAST == recv_state){ // receive from east
         // The last PE of x-dir has no east neighbor, so it does not recv data from the east
-        if (!is_pe_inside_grid or px == @as(i16, last_active_px)){
+        // if (!is_pe_inside_grid or px == @as(i16, last_active_px)){
+        if (last_px){
             @activate(RECV); // nothing to receive
         }else{
             //@mov32(mem_east_buf_dsd, fab_recv_east_wdsd, .{.async=true, .activate = f_recv });
@@ -666,7 +671,8 @@ task f_recv() void {
         recv_state = RECV_STATE_SOUTH;
     }else if (RECV_STATE_SOUTH == recv_state){ // receive from south
         // The last PE of y-dir has no south neighbor, so it does not recv data from the south
-        if (py == @as(i16, last_active_py) or !is_pe_inside_grid){
+        // if (py == @as(i16, last_active_py) or !is_pe_inside_grid){
+        if (last_py){
             @activate(RECV); // nothing to receive
         }else{
             //@mov32(mem_south_buf_dsd, fab_recv_south_wdsd, .{.async=true, .activate = f_recv });
@@ -683,7 +689,8 @@ task f_recv() void {
         recv_state = RECV_STATE_NORTH;
     }else if (RECV_STATE_NORTH == recv_state){ // receive from north
         // The first PE of y-dir has no north neighbor so it does not receive data from the north
-        if (py == @as(i16, first_active_py) or !is_pe_inside_grid){   // Doesn't include last active py as it can handle receive.
+        // if (py == @as(i16, first_active_py) or !is_pe_inside_grid){   // Doesn't include last active py as it can handle receive.
+        if (first_py){
             @activate(RECV); // nothing to receive
         }else{
             //@mov32(mem_north_buf_dsd, fab_recv_north_wdsd, .{.async=true, .activate = f_recv });
@@ -822,36 +829,36 @@ task f_comm() void {
                             @ptrcast(*[timer_mod.tsc_size_words]u16, &timing_spmv_compute_local[offset]));  // result = a - b , therefore compute = total - communication
         const pe_id_x: i16 = @as(i16, layout_mod.get_x_coord());
         const pe_id_y: i16 = @as(i16, layout_mod.get_y_coord());
-        if (pe_id_x == 0 and pe_id_y == 0) {
-            const offset: i16 = current_level_local * timer_mod.tsc_size_words;
-            simprint.fmt_with_coords(
-                "\n stencil_mod.spmv_total_time=[{d},{d},{d}], \n stencil_mod.spmv_communication_time=[{d},{d},{d}],\t\n stencil_mod.only_send_time=[{d},{d},{d}], \t\n stencil_mod.only_recv_time=[{d},{d},{d}], \n stencil_mod.spmv_compute_time=[{d},{d},{d}],  \t\n stencil_mod.laplacian_xy_time=[{d},{d},{d}],   \t\n stencil_mod.laplacian_z_time=[{d},{d},{d}]",
-                .{
+        // if (pe_id_x == 0 and pe_id_y == 0) {
+        //     const offset: i16 = current_level_local * timer_mod.tsc_size_words;
+        //     simprint.fmt_with_coords(
+        //         "\n stencil_mod.spmv_total_time=[{d},{d},{d}], \n stencil_mod.spmv_communication_time=[{d},{d},{d}],\t\n stencil_mod.only_send_time=[{d},{d},{d}], \t\n stencil_mod.only_recv_time=[{d},{d},{d}], \n stencil_mod.spmv_compute_time=[{d},{d},{d}],  \t\n stencil_mod.laplacian_xy_time=[{d},{d},{d}],   \t\n stencil_mod.laplacian_z_time=[{d},{d},{d}]",
+        //         .{
 
-                    timing_spmv_total_local[offset + 0],
-                    timing_spmv_total_local[offset + 1],
-                    timing_spmv_total_local[offset + 2],
-                    timing_spmv_communication_local[offset + 0],
-                    timing_spmv_communication_local[offset + 1],
-                    timing_spmv_communication_local[offset + 2],
-                        timer_only_send_local[offset +0],
-                        timer_only_send_local[offset +1],
-                        timer_only_send_local[offset +2],
-                        timer_only_recv_local[offset +0],
-                        timer_only_recv_local[offset +1],
-                        timer_only_recv_local[offset +2],
-                    timing_spmv_compute_local[offset + 0],
-                    timing_spmv_compute_local[offset + 1],
-                    timing_spmv_compute_local[offset + 2],
-                        timer_laplacian_xy_local[offset +0],
-                        timer_laplacian_xy_local[offset +1],
-                        timer_laplacian_xy_local[offset +2],
-                        timer_laplacian_z_local[offset +0],
-                        timer_laplacian_z_local[offset +1],
-                        timer_laplacian_z_local[offset +2],
-                }
-            );
-        }
+        //             timing_spmv_total_local[offset + 0],
+        //             timing_spmv_total_local[offset + 1],
+        //             timing_spmv_total_local[offset + 2],
+        //             timing_spmv_communication_local[offset + 0],
+        //             timing_spmv_communication_local[offset + 1],
+        //             timing_spmv_communication_local[offset + 2],
+        //                 timer_only_send_local[offset +0],
+        //                 timer_only_send_local[offset +1],
+        //                 timer_only_send_local[offset +2],
+        //                 timer_only_recv_local[offset +0],
+        //                 timer_only_recv_local[offset +1],
+        //                 timer_only_recv_local[offset +2],
+        //             timing_spmv_compute_local[offset + 0],
+        //             timing_spmv_compute_local[offset + 1],
+        //             timing_spmv_compute_local[offset + 2],
+        //                 timer_laplacian_xy_local[offset +0],
+        //                 timer_laplacian_xy_local[offset +1],
+        //                 timer_laplacian_xy_local[offset +2],
+        //                 timer_laplacian_z_local[offset +0],
+        //                 timer_laplacian_z_local[offset +1],
+        //                 timer_laplacian_z_local[offset +2],
+        //         }
+        //     );
+        // }
         
         //sys_mod.unblock_cmd_stream();
         f_callback();

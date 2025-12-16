@@ -367,19 +367,19 @@ fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32, current_level: i16, timing
 
     // Setup boundary DSDs for Dirichlet boundary conditions
     // Bottom boundary: y[0] and x[0]
-    // const one: u16 = 1; 
-    // mem_y_z_boundary_bottom_dsd = @set_dsd_base_addr(mem_y_z_boundary_bottom_dsd, y);
-    // mem_y_z_boundary_bottom_dsd = @set_dsd_length(mem_y_z_boundary_bottom_dsd, one);
-    // mem_x_z_boundary_bottom_dsd = @set_dsd_base_addr(mem_x_z_boundary_bottom_dsd, x);
-    // mem_x_z_boundary_bottom_dsd = @set_dsd_length(mem_x_z_boundary_bottom_dsd, one);
+    const one: u16 = 1; 
+    mem_y_z_boundary_bottom_dsd = @set_dsd_base_addr(mem_y_z_boundary_bottom_dsd, y);
+    mem_y_z_boundary_bottom_dsd = @set_dsd_length(mem_y_z_boundary_bottom_dsd, one);
+    mem_x_z_boundary_bottom_dsd = @set_dsd_base_addr(mem_x_z_boundary_bottom_dsd, x);
+    mem_x_z_boundary_bottom_dsd = @set_dsd_length(mem_x_z_boundary_bottom_dsd, one);
     
     // // Top boundary: y[zDim-1] and x[zDim-1]
-    // mem_y_z_boundary_top_dsd = @set_dsd_base_addr(mem_y_z_boundary_top_dsd, y);
-    // mem_y_z_boundary_top_dsd = @increment_dsd_offset(mem_y_z_boundary_top_dsd, zDim-1, f32);
-    // mem_y_z_boundary_top_dsd = @set_dsd_length(mem_y_z_boundary_top_dsd, one);
-    // mem_x_z_boundary_top_dsd = @set_dsd_base_addr(mem_x_z_boundary_top_dsd, x);
-    // mem_x_z_boundary_top_dsd = @increment_dsd_offset(mem_x_z_boundary_top_dsd, zDim-1, f32);
-    // mem_x_z_boundary_top_dsd = @set_dsd_length(mem_x_z_boundary_top_dsd, one);
+    mem_y_z_boundary_top_dsd = @set_dsd_base_addr(mem_y_z_boundary_top_dsd, y);
+    mem_y_z_boundary_top_dsd = @increment_dsd_offset(mem_y_z_boundary_top_dsd, zDim-1, f32);
+    mem_y_z_boundary_top_dsd = @set_dsd_length(mem_y_z_boundary_top_dsd, one);
+    mem_x_z_boundary_top_dsd = @set_dsd_base_addr(mem_x_z_boundary_top_dsd, x);
+    mem_x_z_boundary_top_dsd = @increment_dsd_offset(mem_x_z_boundary_top_dsd, zDim-1, f32);
+    mem_x_z_boundary_top_dsd = @set_dsd_length(mem_x_z_boundary_top_dsd, one);
 //---
 
     // reset the starting position of z-direction
