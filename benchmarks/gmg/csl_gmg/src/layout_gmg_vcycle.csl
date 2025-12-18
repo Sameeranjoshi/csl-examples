@@ -44,6 +44,7 @@ const EN_REDUCE_2: local_task_id = @get_local_task_id(18);
 const EN_REDUCE_3: local_task_id = @get_local_task_id(19);
 const EN_REDUCE_4: local_task_id = @get_local_task_id(20);
 
+// const stencil = @import_module( "./modified_csl_lib_hops/stencil_3d_7pts/layout.csl", .{
 const stencil = @import_module( "./modified_csl_lib/stencil_3d_7pts/layout.csl", .{
     .colors = [8]color{C0, C1, C2, C3, C4, C5, C6, C7},
     .entrypoints = [3]local_task_id{EN_STENCIL_1, EN_STENCIL_2, EN_STENCIL_3},
@@ -51,6 +52,7 @@ const stencil = @import_module( "./modified_csl_lib/stencil_3d_7pts/layout.csl",
     .height = height
     });
 
+// const reduce = @import_module( "./modified_csl_lib_hops/allreduce/layout.csl", .{
 const reduce = @import_module( "./modified_csl_lib/allreduce/layout.csl", .{
     .colors = [1]color{C8},
     .entrypoints = [4]local_task_id{EN_REDUCE_1, EN_REDUCE_2, EN_REDUCE_3, EN_REDUCE_4},
@@ -98,15 +100,9 @@ layout{
     // timing
     @export_name("timing_smooth", [*]u16, true);
     @export_name("timing_residual", [*]u16, true);
-    @export_name("timing_apply_op", [*]u16, true);
     @export_name("timing_restrict", [*]u16, true);
     @export_name("timing_interp", [*]u16, true);
-    @export_name("time_ref", [*]u16, true);
-    @export_name("timing_setup_init", [*]u16, true);
-    @export_name("timing_rho_check", [*]u16, true);
     @export_name("time_total_start_end", [*]u16, true);
-    @export_name("time_h2d", [*]u16, true);
-    @export_name("time_d2h", [*]u16, true);
     @export_name("timing_spmv_total", [*]u16, true);
     @export_name("timing_spmv_communication", [*]u16, true);
     @export_name("timing_spmv_compute", [*]u16, true);
@@ -120,18 +116,24 @@ layout{
     @export_name("counter_rho_check", [*]u16, true);
     // kernels
     @export_name("f_enable_timer", fn()void);
-    @export_name("f_sync", fn()void);
-    @export_name("f_reference_timestamps", fn()void);
     @export_name("f_tic_total", fn()void);
     @export_name("f_toc_total", fn()void);
-    @export_name("f_tic_h2d", fn()void);
-    @export_name("f_toc_h2d", fn()void);
-    @export_name("f_tic_d2h", fn()void);
-    @export_name("f_toc_d2h", fn()void);
-    @export_name("timing_communication", [*]u16, true);
-    @export_name("timing_compute", [*]u16, true);
     @export_name("f_gmg_vcycle", fn(i16,i16,i16,i16,i16,f32)void);
-    @export_name("rho", [*]f32, true);
     @export_name("rho_history", [*]f32, true);
+    // @export_name("f_sync", fn()void);
+    // @export_name("f_reference_timestamps", fn()void);
+    // @export_name("timing_apply_op", [*]u16, true);
+    // @export_name("time_ref", [*]u16, true);
+    // @export_name("timing_setup_init", [*]u16, true);
+    // @export_name("timing_rho_check", [*]u16, true);    
+    // @export_name("time_h2d", [*]u16, true);
+    // @export_name("time_d2h", [*]u16, true);
+    // @export_name("f_tic_h2d", fn()void);
+    // @export_name("f_toc_h2d", fn()void);
+    // @export_name("f_tic_d2h", fn()void);
+    // @export_name("f_toc_d2h", fn()void);
+    // @export_name("timing_communication", [*]u16, true);
+    // @export_name("timing_compute", [*]u16, true);
+    // @export_name("rho", [*]f32, true);
 }
 

@@ -21,18 +21,12 @@ param first_px: bool;
 param last_px: bool;
 param first_py: bool;
 param last_py: bool;
-
-var inactive_horizontal: bool = false;
-var inactive_vertical: bool = false;
-var is_pe_inside_grid: bool = false;
 // To continue next command, f_callback = sys_mod.unblock_cmd_stream
 param f_callback : fn ()void;
-
 param input_queues:[4]u16;
 param output_queues:[4]u16;
 // microthread ID used in output queue (fabout)
 param output_ut_id;
-
 param BLOCK_SIZE: i16; // size of temporary buffers for communication
 
 // explicit DSR allocation
@@ -40,22 +34,6 @@ param dest_dsr_ids:[2]u16;
 param src0_dsr_ids:[1]u16;
 param src1_dsr_ids:[2]u16;
 
-param timer: imported_module; // timerified.csl
-param ACTV_SEND_RECV: local_task_id = @get_local_task_id(13); // entrypoint f_actv_send_recv
-
-// Hop-based communication parameters (runtime variables)
-var hops: u16 = 1;
-var factor: u16 = 1;
-var is_active_pe: bool = true;
-var can_communicate_west: bool = true;
-var can_communicate_east: bool = true;
-var can_communicate_south: bool = true;
-var can_communicate_north: bool = true;
-
-var first_active_px: i16 = 0;
-var last_active_px: i16 =  0;
-var first_active_py: i16 = 0;
-var last_active_py: i16 = 0;
 // The call-graph of the stencil kernel is
 //
 //  COMM ----> SEND ----> Laplacian
@@ -89,6 +67,7 @@ const oq_send_south = @get_output_queue(output_queues[3]);
 // Otherwise, the compilation fails with the following error
 // ../csl-libs/stencil_3d_7pts_wse3/pe.csl:415:106: error: DSD op setting must be comptime
 const out_ut: ut_id = @get_ut_id(output_ut_id);
+const in_ut: ut_id = @get_ut_id(1);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Main memory (48KB)
@@ -241,17 +220,28 @@ var fab_trans_south_wdsd = @get_dsd(fabout_dsd, .{
     .output_queue = oq_send_south
 });
 
-const layout_mod = @import_module("<layout>");
+
+// Hop-based communication parameters (runtime variables)
+param ACTV_SEND_RECV: local_task_id = @get_local_task_id(13); // entrypoint f_actv_send_recv
+var hops: u16 = 1;
+var factor: u16 = 1;
+var is_active_pe: bool = true;
+var first_active_px: i16 = 0;
+var last_active_px: i16 =  0;
+var first_active_py: i16 = 0;
+var last_active_py: i16 = 0;
+var inactive_horizontal: bool = false;
+var inactive_vertical: bool = false;
+var is_pe_inside_grid: bool = false;
 // const simprint = @import_module("<simprint>", .{ .enable = true });
-// const timer = @import_module("timerified.csl", .{ .timerCount = 8 });
+const layout_mod = @import_module("<layout>");
+const timer_stencil = @import_module("timer_modified.csl", .{ .timerCount = 2 });
 var current_level_local: i16 = 0;
 var timing_spmv_total_local: [*]u16;
 var timing_spmv_communication_local: [*]u16;
 var timing_spmv_compute_local: [*]u16;
-
-
-var TIMER_SPMV_TOTAL: i16=9;
-var TIMER_SPMV_COMMUNICATION: i16=10;
+var TIMER_SPMV_TOTAL: i16=0;
+var TIMER_SPMV_COMMUNICATION: i16=1;
 // var TIMER_INIT_HOPS: i16=4;
 // var TIMER_LAPLACIAN_XY: i16=5;
 // var TIMER_LAPLACIAN_Z: i16=6;
@@ -265,13 +255,13 @@ var TIMER_SPMV_COMMUNICATION: i16=10;
 // var timer_only_recv_local = @zeros([4 * timer.tsc_size_words]u16);
 
 fn save_timestamp_start(timer_id: i16) void {
-    timer.start(timer_id);
+    timer_stencil.start(timer_id);
 }
 
 fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
-    timer.stop(timer_id);   // 200 cycles
-    const offset: i16 = level * timer.tsc_size_words;
-    timer.accumulate_elapsed(timer_id, @ptrcast(*[timer.tsc_size_words]u16, &timing_array[offset]));    // adds 1000 cycles 
+    timer_stencil.stop(timer_id);   // 200 cycles
+    const offset: i16 = level * timer_stencil.tsc_size_words;
+    timer_stencil.accumulate_elapsed(timer_id, @ptrcast(*[timer_stencil.tsc_size_words]u16, &timing_array[offset]));    // adds 1000 cycles 
 }
 
 // The portal function of 7-point stencil module
@@ -365,7 +355,7 @@ fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32, current_level: i16, timing
     mem_x_z_buf_dsd = @set_dsd_base_addr(mem_x_z_buf_dsd, x);
     mem_x_z_buf_dsd = @set_dsd_length(mem_x_z_buf_dsd, @bitcast(u16,zDim));
 
-    // Setup boundary DSDs for Dirichlet boundary conditions
+    // Setup boundary DSDs for Dirichlet boundary conditions, ZDIM
     // Bottom boundary: y[0] and x[0]
     const one: u16 = 1; 
     mem_y_z_boundary_bottom_dsd = @set_dsd_base_addr(mem_y_z_boundary_bottom_dsd, y);
@@ -411,7 +401,7 @@ fn laplacian_xy() void {
     // save_timestamp_start(TIMER_LAPLACIAN_XY);
     // OPTIMIZATION 2: Skip laplacian computation for inactive PEs
     if (!is_active_pe) {
-        // save_timestamp_end(current_level_local, &timer_laplacian_xy_local, TIMER_LAPLACIAN_XY); // Why 2, because if early return then we never measured time.
+        // save_timestamp_end(current_level_local, &timer_laplacian_xy_local, TIMER_LAPLACIAN_XY); // Why ?, because if early return then we never measured time.
         return; // Inactive PEs don't need to compute laplacian
     }
     // // Handle boundary conditions
@@ -634,7 +624,8 @@ task f_recv() void {
             //@mov32(mem_west_buf_dsd, fab_recv_west_wdsd, .{.async=true, .activate = f_recv });
             if (inactive_horizontal){
                 // forward data from WEST to EAST  
-                @load_to_dsr(dest_dsr_recv, fab_trans_east_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = out_ut }); 
+                // @load_to_dsr(dest_dsr_recv, fab_trans_east_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = out_ut }); 
+                @load_to_dsr(dest_dsr_recv, fab_trans_east_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = in_ut});
                 @load_to_dsr(src1_dsr_recv, fab_recv_west_wdsd, .{.async=true});          
             }else{
                 @load_to_dsr(dest_dsr_recv, mem_west_buf_dsd);
@@ -651,7 +642,8 @@ task f_recv() void {
             //@mov32(mem_east_buf_dsd, fab_recv_east_wdsd, .{.async=true, .activate = f_recv });
             if (inactive_horizontal){
                 // forward data from EAST to WEST  
-                @load_to_dsr(dest_dsr_recv, fab_trans_west_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = out_ut }); 
+                // @load_to_dsr(dest_dsr_recv, fab_trans_west_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = out_ut }); 
+                @load_to_dsr(dest_dsr_recv, fab_trans_west_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = in_ut});
                 @load_to_dsr(src1_dsr_recv, fab_recv_east_wdsd, .{.async=true});
             }else{
                 @load_to_dsr(dest_dsr_recv, mem_east_buf_dsd);
@@ -668,7 +660,8 @@ task f_recv() void {
             //@mov32(mem_south_buf_dsd, fab_recv_south_wdsd, .{.async=true, .activate = f_recv });
             if (inactive_vertical){
                 // forward data from SOUTH to NORTH 
-                @load_to_dsr(dest_dsr_recv, fab_trans_north_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = out_ut });
+                // @load_to_dsr(dest_dsr_recv, fab_trans_north_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = out_ut });
+                @load_to_dsr(dest_dsr_recv, fab_trans_north_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = in_ut});
                 @load_to_dsr(src1_dsr_recv, fab_recv_south_wdsd, .{.async=true}); 
             }else{
                 @load_to_dsr(dest_dsr_recv, mem_south_buf_dsd);
@@ -685,7 +678,8 @@ task f_recv() void {
             //@mov32(mem_north_buf_dsd, fab_recv_north_wdsd, .{.async=true, .activate = f_recv });
             if (inactive_vertical){
                 // forward data from NORTH to SOUTH
-                @load_to_dsr(dest_dsr_recv, fab_trans_south_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = out_ut });
+                // @load_to_dsr(dest_dsr_recv, fab_trans_south_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = out_ut });
+                @load_to_dsr(dest_dsr_recv, fab_trans_south_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = in_ut});
                 @load_to_dsr(src1_dsr_recv, fab_recv_north_wdsd, .{.async=true});
             }else{
                 @load_to_dsr(dest_dsr_recv, mem_north_buf_dsd);
@@ -811,42 +805,10 @@ task f_comm() void {
         
         save_timestamp_end(current_level_local, timing_spmv_total_local, TIMER_SPMV_TOTAL);   // compute + communication
 
-        const offset: i16 = current_level_local * timer.tsc_size_words;
-        timer.subtract_timestamps(@ptrcast(*[timer.tsc_size_words]u16, &timing_spmv_total_local[offset]), 
-                            @ptrcast(*[timer.tsc_size_words]u16, &timing_spmv_communication_local[offset]), 
-                            @ptrcast(*[timer.tsc_size_words]u16, &timing_spmv_compute_local[offset]));  // result = a - b , therefore compute = total - communication
-        // const pe_id_x: i16 = @as(i16, layout_mod.get_x_coord());
-        // const pe_id_y: i16 = @as(i16, layout_mod.get_y_coord());
-        // if (pe_id_x == 0 and pe_id_y == 0) {
-        //     const offset: i16 = current_level_local * timer.tsc_size_words;
-        //     simprint.fmt_with_coords(
-        //         "\n stencil_mod.spmv_total_time=[{d},{d},{d}], \n stencil_mod.spmv_communication_time=[{d},{d},{d}],\t\n stencil_mod.only_send_time=[{d},{d},{d}], \t\n stencil_mod.only_recv_time=[{d},{d},{d}], \n stencil_mod.spmv_compute_time=[{d},{d},{d}],  \t\n stencil_mod.laplacian_xy_time=[{d},{d},{d}],   \t\n stencil_mod.laplacian_z_time=[{d},{d},{d}]",
-        //         .{
-
-        //             timing_spmv_total_local[offset + 0],
-        //             timing_spmv_total_local[offset + 1],
-        //             timing_spmv_total_local[offset + 2],
-        //             timing_spmv_communication_local[offset + 0],
-        //             timing_spmv_communication_local[offset + 1],
-        //             timing_spmv_communication_local[offset + 2],
-        //                 timer_only_send_local[offset +0],
-        //                 timer_only_send_local[offset +1],
-        //                 timer_only_send_local[offset +2],
-        //                 timer_only_recv_local[offset +0],
-        //                 timer_only_recv_local[offset +1],
-        //                 timer_only_recv_local[offset +2],
-        //             timing_spmv_compute_local[offset + 0],
-        //             timing_spmv_compute_local[offset + 1],
-        //             timing_spmv_compute_local[offset + 2],
-        //                 timer_laplacian_xy_local[offset +0],
-        //                 timer_laplacian_xy_local[offset +1],
-        //                 timer_laplacian_xy_local[offset +2],
-        //                 timer_laplacian_z_local[offset +0],
-        //                 timer_laplacian_z_local[offset +1],
-        //                 timer_laplacian_z_local[offset +2],
-        //         }
-        //     );
-        // }
+        const offset: i16 = current_level_local * timer_stencil.tsc_size_words;
+        timer_stencil.subtract_timestamps(@ptrcast(*[timer_stencil.tsc_size_words]u16, &timing_spmv_total_local[offset]), 
+                            @ptrcast(*[timer_stencil.tsc_size_words]u16, &timing_spmv_communication_local[offset]), 
+                            @ptrcast(*[timer_stencil.tsc_size_words]u16, &timing_spmv_compute_local[offset]));  // result = a - b , therefore compute = total - communication
         
         //sys_mod.unblock_cmd_stream();
         f_callback();
@@ -1046,3 +1008,37 @@ comptime {
         @initialize_queue(oq_send_south, .{.color = c_send_south});
     }
 }
+
+
+  // const pe_id_x: i16 = @as(i16, layout_mod.get_x_coord());
+        // const pe_id_y: i16 = @as(i16, layout_mod.get_y_coord());
+        // if (pe_id_x == 0 and pe_id_y == 0) {
+        //     const offset: i16 = current_level_local * timer.tsc_size_words;
+        //     simprint.fmt_with_coords(
+        //         "\n stencil_mod.spmv_total_time=[{d},{d},{d}], \n stencil_mod.spmv_communication_time=[{d},{d},{d}],\t\n stencil_mod.only_send_time=[{d},{d},{d}], \t\n stencil_mod.only_recv_time=[{d},{d},{d}], \n stencil_mod.spmv_compute_time=[{d},{d},{d}],  \t\n stencil_mod.laplacian_xy_time=[{d},{d},{d}],   \t\n stencil_mod.laplacian_z_time=[{d},{d},{d}]",
+        //         .{
+
+        //             timing_spmv_total_local[offset + 0],
+        //             timing_spmv_total_local[offset + 1],
+        //             timing_spmv_total_local[offset + 2],
+        //             timing_spmv_communication_local[offset + 0],
+        //             timing_spmv_communication_local[offset + 1],
+        //             timing_spmv_communication_local[offset + 2],
+        //                 timer_only_send_local[offset +0],
+        //                 timer_only_send_local[offset +1],
+        //                 timer_only_send_local[offset +2],
+        //                 timer_only_recv_local[offset +0],
+        //                 timer_only_recv_local[offset +1],
+        //                 timer_only_recv_local[offset +2],
+        //             timing_spmv_compute_local[offset + 0],
+        //             timing_spmv_compute_local[offset + 1],
+        //             timing_spmv_compute_local[offset + 2],
+        //                 timer_laplacian_xy_local[offset +0],
+        //                 timer_laplacian_xy_local[offset +1],
+        //                 timer_laplacian_xy_local[offset +2],
+        //                 timer_laplacian_z_local[offset +0],
+        //                 timer_laplacian_z_local[offset +1],
+        //                 timer_laplacian_z_local[offset +2],
+        //         }
+        //     );
+        // }

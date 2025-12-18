@@ -169,7 +169,7 @@ def process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, 
         64: 64,
         128: 128, # Let's keep a sweet spot of totalsize/4, so 1/4 th size is block size.
         256: 256,
-        512: 256,
+        512: 256,  # Why? Can't fit problem, need to reduce allocation
     }
     BSIZE  = bsizemap[size]
 
@@ -200,7 +200,6 @@ def process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, 
     write_run_info(out_path, size, levels, channels, max_ite, pre_iter, post_iter, bottom_iter, Compile_command, Run_command)
     artifact_path, compile_duration = compile_app(layout_file, Compile_command, out_path)
     run_duration = run_on_appliance(artifact_path, out_path, Run_command)
-    
     # Print and save timing results for this problem
     print(f"\nCOMPILE TIME: {compile_duration:.3f} seconds")
     print(f"RUN TIME: {run_duration:.3f} seconds")
@@ -248,10 +247,10 @@ def main():
         #  (8, 3, 100, 1e-5, 6, 6, 100),   # Tiny problem
         #  (16, 4, 100, 1e-5, 6, 6, 100),   # Small problem
         #  (32, 5, 100, 1e-5, 6, 6, 100),   # Small problem
-         (64, 6, 100, 1e-5, 6, 6, 10),   # Medium problem
+        #  (64, 6, 100, 1e-5, 6, 6, 100),   # Medium problem
         #  (128, 7, 100, 1e-5, 6, 6, 100),   # Large problem
         #  (256, 8, 100, 1e-5, 6, 6, 100),   # Very large
-        #  (512, 9, 100, 1e-5, 6, 6, 100),   # Very large
+         (512, 9, 100, 1e-5, 6, 6, 100),   # Very large
 
 
         # OSCAR matching problems
@@ -301,10 +300,10 @@ def main():
     # Process device runs
     if args.only_device or args.host_and_device:
         for size, levels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter in problems:
-            if size > 8:
-                channels = 8
+            if size > 16: 
+                channels = 16
             else:
-                channels = 4
+                channels = size
             try:
                 process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter)
             except Exception as e:
