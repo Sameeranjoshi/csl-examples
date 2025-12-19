@@ -121,42 +121,41 @@ def compile_app(layout_file, Compile_command, out_path):
     
     return artifact_path, compile_duration
 
-# RUN FUNCTION
+# RUN FUNCTION - fire and forget
 def run_on_appliance(artifact_path, out_path, Run_command):
-    print(f"Artifact path: {artifact_path}")
-    with SdkLauncher(artifact_path, simulator=False, disable_version_check=True) as launcher:
-
-        print("Staging files on appliance ----------------------------------------")
-        files_to_stage = [
-            "cmd_parser.py",
-            "run_gmg_vcycle.py",
-            "util.py", 
-            "python_gmg/gmgoscar.py",
-        ]
-        for file_to_stage in files_to_stage:
-            launcher.stage(file_to_stage)
-        print("Running host code on appliance ----------------------------------------")
-        run_start = time.time()
-        response = launcher.run(Run_command)
-        run_end = time.time()
-        print(response)
-        print("Copying data from appliance ----------------------------------------")
-        with open(f"./{out_path}/response.txt", "a") as f:
-            f.write(f"\n{'='*70}\n")
-            f.write("Run output:\n")
-            f.write(f"{'='*70}\n")
-            f.write(response)
-        print("Done ----------------------------------------")
-        # Time
-        run_duration = run_end - run_start
-
-    return run_duration
+    """Submit job to queue - fires in background thread and returns immediately"""
+    import threading
+    
+    def _run():
+        with SdkLauncher(artifact_path, simulator=False, disable_version_check=True) as launcher:
+            files_to_stage = [
+                "cmd_parser.py",
+                "run_gmg_vcycle.py",
+                "util.py", 
+                "python_gmg/gmgoscar.py",
+            ]
+            for file_to_stage in files_to_stage:
+                launcher.stage(file_to_stage)
+            run_start = time.time()
+            response = launcher.run(Run_command)
+            run_end = time.time()
+            run_duration = run_end - run_start
+            with open(f"./{out_path}/response.txt", "a") as f:
+                f.write(f"\n{'='*70}\n")
+                f.write("Run output:\n")
+                f.write(f"{'='*70}\n")
+                f.write(response)
+                f.write(f"\nRun time (s): {run_duration:.6f}\n")
+    
+    # Fire job in background - don't wait
+    threading.Thread(target=_run, daemon=False).start()
 
 def process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter):
     """
-    Process a single problem: compile (if needed) and run.
-    Returns compile_duration and run_duration.
+    Fire compile + run job for a single problem.
+    Submits job and returns immediately - queue handles execution.
     """
+    import threading
     
     out_path = f"out_dir_S{size}x_L{levels}_M{max_ite}_P{pre_iter}_P{post_iter}_B{bottom_iter}"
     os.makedirs(out_path, exist_ok=True)
@@ -169,7 +168,8 @@ def process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, 
         64: 64,
         128: 128, # Let's keep a sweet spot of totalsize/4, so 1/4 th size is block size.
         256: 256,
-        512: 256,  # Why? Can't fit problem, need to reduce allocation
+        512: 256, # seems heuristically better when tested with different block sizes
+        # 512: 384,  # Why? Can't fit problem, need to reduce allocation
     }
     BSIZE  = bsizemap[size]
 
@@ -198,16 +198,17 @@ def process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, 
     )
 
     write_run_info(out_path, size, levels, channels, max_ite, pre_iter, post_iter, bottom_iter, Compile_command, Run_command)
-    artifact_path, compile_duration = compile_app(layout_file, Compile_command, out_path)
-    run_duration = run_on_appliance(artifact_path, out_path, Run_command)
-    # Print and save timing results for this problem
-    print(f"\nCOMPILE TIME: {compile_duration:.3f} seconds")
-    print(f"RUN TIME: {run_duration:.3f} seconds")
-    with open(f"./{out_path}/response.txt", "a") as response_file:
-        response_file.write(f"\nCompile time (s): {compile_duration:.6f}\n")
-        response_file.write(f"Run time (s): {run_duration:.6f}\n")
     
-    return compile_duration, run_duration
+    # Fire compile + run job in background - returns immediately
+    def _compile_and_run():
+        artifact_path, compile_duration = compile_app(layout_file, Compile_command, out_path)
+        with open(f"./{out_path}/response.txt", "a") as response_file:
+            response_file.write(f"\nCompile time (s): {compile_duration:.6f}\n")
+        run_on_appliance(artifact_path, out_path, Run_command)
+    
+    print(f"Firing compile+run job for {size}x{size}x{size}...")
+    threading.Thread(target=_compile_and_run, daemon=False).start()
+    print(f"Job submitted for {size}x{size}x{size} - moving to next problem")
 
 
 import argparse
@@ -243,13 +244,13 @@ def main():
     # Format: (size, levels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter)
     # NOTE: MANUALLY DELETE FOLDER IF THERE IS SOME CHANGES IN THE SOURCE CODE AS IT WILL SKIP COMPILATION DUE TO CACHING.
     problems = [
-        #  (4, 2, 100, 1e-5, 6, 6, 100),   # Tiny problem
-        #  (8, 3, 100, 1e-5, 6, 6, 100),   # Tiny problem
-        #  (16, 4, 100, 1e-5, 6, 6, 100),   # Small problem
-        #  (32, 5, 100, 1e-5, 6, 6, 100),   # Small problem
-        #  (64, 6, 100, 1e-5, 6, 6, 100),   # Medium problem
-        #  (128, 7, 100, 1e-5, 6, 6, 100),   # Large problem
-        #  (256, 8, 100, 1e-5, 6, 6, 100),   # Very large
+         (4, 2, 100, 1e-5, 6, 6, 100),   # Tiny problem
+         (8, 3, 100, 1e-5, 6, 6, 100),   # Tiny problem
+         (16, 4, 100, 1e-5, 6, 6, 100),   # Small problem
+         (32, 5, 100, 1e-5, 6, 6, 100),   # Small problem
+         (64, 6, 100, 1e-5, 6, 6, 100),   # Medium problem
+         (128, 7, 100, 1e-5, 6, 6, 100),   # Large problem
+         (256, 8, 100, 1e-5, 6, 6, 100),   # Very large
          (512, 9, 100, 1e-5, 6, 6, 100),   # Very large
 
 

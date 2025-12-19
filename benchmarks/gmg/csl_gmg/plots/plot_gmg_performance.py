@@ -182,15 +182,17 @@ def parse_spmv_totals(text: str) -> List[Dict]:
 def parse_vcycle_times(text: str) -> List[Dict]:
     """
     Parse V-cycle time from output file.
-    Extracts max of the two V-cycle time values.
+    Extracts the "Total V-cycle time (Kernel Launch + V-cycle time)" value.
     Returns list of dictionaries with grid_size and vcycle_time.
     """
     results = []
     
-    # Pattern to find V-cycle time section
+    # Pattern to find V-cycle time section - matches actual log format:
+    # "Total Upper bound V-cycle time (sum of operations):   1071.178 us (    937281 cycles)"
+    # "Total V-cycle time (Kernel Launch + V-cycle time):    899.928 us (    787437 cycles)"
     vcycle_pattern = re.compile(
-        r'Total V-cycle time \(sum of operations\):\s*([\d.]+)\s*us.*?\n'
-        r'Total V-cycle time \(\(No kernel launch\)V-cycle time\):\s*([\d.]+)\s*us',
+        r'Total Upper bound V-cycle time \(sum of operations\):\s*([\d.]+)\s*us.*?\n'
+        r'Total V-cycle time \(Kernel Launch \+ V-cycle time\):\s*([\d.]+)\s*us',
         re.DOTALL
     )
     
@@ -200,16 +202,18 @@ def parse_vcycle_times(text: str) -> List[Dict]:
     # Find all V-cycle time sections
     for match in vcycle_pattern.finditer(text):
         end = match.end()
-        # Look ahead to find the corresponding grid size (it appears after V-cycle time)
+        # Look backward and forward to find the corresponding grid size
+        # Grid size appears in Configuration Summary which comes after V-cycle time
         next_text = text[end:min(len(text), end+2000)]
         grid_match = grid_pattern.search(next_text)
         if grid_match:
             width, height, zdim = map(int, grid_match.groups())
             grid_size = f"{width}x{height}x{zdim}"
             
-            time1 = float(match.group(1))
-            time2 = float(match.group(2))
-            vcycle_time = max(time1, time2)  # Take maximum as instructed
+            time1 = float(match.group(1))  # Upper bound (sum of operations)
+            time2 = float(match.group(2))  # Actual V-cycle time (Kernel Launch + V-cycle)
+            # Use the actual V-cycle time (time2) which is the "Kernel Launch + V-cycle time"
+            vcycle_time = time2
             
             results.append({
                 'grid_size': grid_size,
