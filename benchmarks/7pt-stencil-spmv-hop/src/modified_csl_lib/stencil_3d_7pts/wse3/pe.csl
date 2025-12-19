@@ -642,7 +642,7 @@ task f_recv() void {
             //@mov32(mem_west_buf_dsd, fab_recv_west_wdsd, .{.async=true, .activate = f_recv });
             if (inactive_horizontal){
                 // forward data from WEST to EAST  
-                @load_to_dsr(dest_dsr_recv, fab_trans_east_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = out_ut }); 
+                @load_to_dsr(dest_dsr_recv, fab_trans_east_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = in_ut}); 
                 @load_to_dsr(src1_dsr_recv, fab_recv_west_wdsd, .{.async=true});          
             }else{
                 @load_to_dsr(dest_dsr_recv, mem_west_buf_dsd);
@@ -660,7 +660,7 @@ task f_recv() void {
             //@mov32(mem_east_buf_dsd, fab_recv_east_wdsd, .{.async=true, .activate = f_recv });
             if (inactive_horizontal){
                 // forward data from EAST to WEST  
-                @load_to_dsr(dest_dsr_recv, fab_trans_west_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = out_ut }); 
+                @load_to_dsr(dest_dsr_recv, fab_trans_west_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = in_ut}); 
                 @load_to_dsr(src1_dsr_recv, fab_recv_east_wdsd, .{.async=true});
             }else{
                 @load_to_dsr(dest_dsr_recv, mem_east_buf_dsd);
@@ -678,7 +678,7 @@ task f_recv() void {
             //@mov32(mem_south_buf_dsd, fab_recv_south_wdsd, .{.async=true, .activate = f_recv });
             if (inactive_vertical){
                 // forward data from SOUTH to NORTH 
-                @load_to_dsr(dest_dsr_recv, fab_trans_north_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = out_ut });
+                @load_to_dsr(dest_dsr_recv, fab_trans_north_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = in_ut});
                 @load_to_dsr(src1_dsr_recv, fab_recv_south_wdsd, .{.async=true}); 
             }else{
                 @load_to_dsr(dest_dsr_recv, mem_south_buf_dsd);
@@ -696,7 +696,7 @@ task f_recv() void {
             //@mov32(mem_north_buf_dsd, fab_recv_north_wdsd, .{.async=true, .activate = f_recv });
             if (inactive_vertical){
                 // forward data from NORTH to SOUTH
-                @load_to_dsr(dest_dsr_recv, fab_trans_south_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = out_ut });
+                @load_to_dsr(dest_dsr_recv, fab_trans_south_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = in_ut});
                 @load_to_dsr(src1_dsr_recv, fab_recv_north_wdsd, .{.async=true});
             }else{
                 @load_to_dsr(dest_dsr_recv, mem_north_buf_dsd);
