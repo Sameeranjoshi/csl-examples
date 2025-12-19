@@ -52,7 +52,7 @@ param dest_dsr_ids:[2]u16;
 param src0_dsr_ids:[1]u16;
 param src1_dsr_ids:[2]u16;
 
-// param timer: imported_module;
+param timer_mod: imported_module;
 
 const api_wse3 = @is_arch("wse3");
 
@@ -97,7 +97,7 @@ const stencilParams = .{
   .src0_dsr_ids = src0_dsr_ids,
   .src1_dsr_ids = src1_dsr_ids,
 
-  // .timer = timer
+  .timer_mod = timer_mod,
 };
 
 const stencil_mod = @import_module(get_stencil_module(), stencilParams);
@@ -114,6 +114,6 @@ fn setHopBasedParams(hops_value: u16, factor_value: u16, width: i16, height: i16
     stencil_mod.setHopBasedParams(hops_value, factor_value, width, height);
 }
 
-// fn enable_timer() void {
-//     stencil_mod.enable_timer();
-// }
+fn enable_timer() void {
+    stencil_mod.enable_timer();
+}

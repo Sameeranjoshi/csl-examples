@@ -150,7 +150,7 @@ def parse_spmv_totals(text: str) -> List[Dict]:
     grid_pattern = re.compile(r'HeightxWidthxZDim\s*:\s*(\d+)x(\d+)x(\d+)')
     
     # Find all SPMV table sections
-    sections = text.split('SPMV Compute vs Communication Time per Level')
+    sections = text.split('7-pt Stencil Compute vs Communication Time per Level')
     
     for section in sections[1:]:  # Skip first empty split
         # Extract total row
@@ -498,35 +498,40 @@ def parse_per_operation_timing(text: str) -> List[Dict]:
     
     for section in sections[1:]:  # Skip first empty split
         # Extract data from the table
-        # Pattern to match each level row: | level | smooth | residual | restriction | interpolation | setup_init | ...
+        # Pattern to match each level row: | level | smooth | residual | restriction | interpolation | total | ...
         # Example: |         0          | 63.338us(  55421)  |  4.687us(   4101)  | ...
         
         level_data = {}
         rows = []
         
         # Find all level rows (skip header and total rows)
-        # Pattern: | level | smooth | residual | restriction | interpolation | setup_init | ...
+        # Pattern: | level | smooth | residual | restriction | interpolation | total | ...
         # Example: |         0          | 63.338us(  55421)  |  4.687us(   4101)  | ...
+        # Note: The last column is "total" not "setup_init" in the new format
         row_pattern = re.compile(
             r'\|\s*(\d+)\s*\|'  # level number
             r'\s*([\d.]+)us\([^)]+\)\s*\|'  # smooth
             r'\s*([\d.]+)us\([^)]+\)\s*\|'  # residual
             r'\s*([\d.]+)us\([^)]+\)\s*\|'  # restriction
             r'\s*([\d.]+)us\([^)]+\)\s*\|'  # interpolation
-            r'\s*([\d.]+)us\([^)]+\)\s*\|'  # setup_init
+            r'\s*([\d.]+)us\([^)]+\)\s*\|'  # total (was setup_init)
         )
         
         # Split section into lines and process each line
         lines = section.split('\n')
         for line in lines:
             match = row_pattern.search(line)
-            if match and 'total' not in line.lower():  # Skip total row
+            if match:
+                # Additional check: make sure this is not the "total" summary row
+                # The total row has "total" as the first column value, not a number
+                if re.search(r'\|\s*total\s*\|', line, re.IGNORECASE):
+                    continue
                 level = int(match.group(1))
                 smooth = float(match.group(2))
                 residual = float(match.group(3))
                 restriction = float(match.group(4))
                 interpolation = float(match.group(5))
-                setup_init = float(match.group(6))
+                total = float(match.group(6))  # This is the total column, not setup_init
                 
                 rows.append({
                     'level': level,
@@ -534,7 +539,7 @@ def parse_per_operation_timing(text: str) -> List[Dict]:
                     'residual': residual,
                     'restriction': restriction,
                     'interpolation': interpolation,
-                    'setup_init': setup_init
+                    'setup_init': 0.0  # setup_init is no longer in this table, set to 0
                 })
         
         # Find grid size in this section
@@ -687,7 +692,7 @@ def print_per_operation_timing_tables(all_timing_data: List[Dict]):
         
         # Header
         print(f"{'Level':<8} {'Subdomain':<12} {'smooth (us)':<15} {'residual (us)':<15} "
-              f"{'restriction (us)':<18} {'interpolation (us)':<20} {'setup_init (us)':<18}")
+              f"{'restriction (us)':<18} {'interpolation (us)':<20} {'total (us)':<18}")
         print("-"*100)
         
         # Print each level
@@ -698,10 +703,12 @@ def print_per_operation_timing_tables(all_timing_data: List[Dict]):
             residual = level_data['residual']
             restriction = level_data['restriction']
             interpolation = level_data['interpolation']
-            setup_init = level_data['setup_init']
+            setup_init = level_data.get('setup_init', 0.0)  # May not be present in new format
+            # Calculate total if setup_init is 0 (new format)
+            total = smooth + residual + restriction + interpolation + setup_init if setup_init > 0 else smooth + residual + restriction + interpolation
             
             print(f"{level:<8} {subdomain_size}³{'':<8} {smooth:<15.2f} {residual:<15.2f} "
-                  f"{restriction:<18.2f} {interpolation:<20.2f} {setup_init:<18.2f}")
+                  f"{restriction:<18.2f} {interpolation:<20.2f} {total:<18.2f}")
         
         print(f"{'='*100}\n")
 
