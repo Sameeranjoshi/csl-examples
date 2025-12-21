@@ -166,17 +166,17 @@ def copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
     # simulator.launch("f_tic_h2d", nonblock=True)
     # Copy u and f arrays
     simulator.memcpy_h2d(symbol_u, u_1d, 0, 0, width, height, zDim,
-                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=True)
     simulator.memcpy_h2d(symbol_f, f_1d, 0, 0, width, height, zDim,
-                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=True)
     simulator.memcpy_h2d(symbol_hx_array, hx_flat, 0, 0, width, height, args.levels,
-                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=True)
     simulator.memcpy_h2d(symbol_hy_array, hy_flat, 0, 0, width, height, args.levels,
-                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=True)
     simulator.memcpy_h2d(symbol_hz_array, hz_flat, 0, 0, width, height, args.levels,
-                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=True)
     simulator.memcpy_h2d(symbol_jacobi_coeff_array, jacobi_flat, 0, 0, width, height, args.levels,
-                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
+                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=True)
     # simulator.launch("f_toc_h2d", nonblock=False)
     total_bytes = (
         u_1d.nbytes
@@ -189,32 +189,9 @@ def copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
 
     return total_bytes
 
-
 def make_u48(words):
     """Convert three u16 words to 48-bit timestamp"""
     return words[0] + (words[1] << 16) + (words[2] << 32)
-
-def copy_timing(height, width, levels, simulator, symbol_timing, words_per_entry):
-    """Copy timing data from device and return as numpy array"""
-    timing_size = levels * words_per_entry
-    timing_1d = np.zeros(height * width * timing_size, np.uint32)   # this is just placeholder, and not really 32 bit mismatch.
-    simulator.memcpy_d2h(timing_1d, symbol_timing, 0, 0, width, height, timing_size,
-                        streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, 
-                        order=MemcpyOrder.COL_MAJOR, nonblock=False)
-
-    # Convert to hwl format: (height, width, timing_size)
-    # With column-major, data for each PE is contiguous (all levels together)
-    timing_hwl = oned_to_hwl_colmajor(height, width, timing_size, timing_1d, np.uint16)
-    
-    # Now extract each level's 6 values from the third dimension
-    time_memcpy_hwl_levels = []
-    for level in range(levels):
-        offset = level * words_per_entry
-        time_memcpy_hwl_level = timing_hwl[:, :, offset:offset+words_per_entry]
-        time_memcpy_hwl_levels.append(time_memcpy_hwl_level)
-
-    return time_memcpy_hwl_levels
-  
 
 def process_reference_data(height, width, time_ref_hwl):
     """Adjust reference clock by propagation delay and convert to full timestamps
@@ -242,6 +219,7 @@ def process_reference_data(height, width, time_ref_hwl):
             time_ref[py, px] = time_ref[py, px] - ((width + height - 2) - (px + py))
     
     return time_ref
+
 def print_2d(matrix):
     for row in matrix:
         print(" | ".join(f"{v:8.2f}" for v in row))
@@ -259,25 +237,28 @@ def process_timing_data(height, width, levels, timing_hwl_levels, operation_name
         assert words_per_entry == WORDS_PER_TIMESTAMP
         elapsed_levels = []
         for level in range(levels):
-            timing_hwl = timing_hwl_levels[level]
-            elapsed = np.zeros((height, width)).astype(int) # 64 bit because of astype(int)
-            for w in range(width):
-                for h in range(height):
-                    word[0] = timing_hwl[h, w, 0]
-                    word[1] = timing_hwl[h, w, 1]
-                    word[2] = timing_hwl[h, w, 2]
-                    elapsed[h, w] = make_u48(word)
+            timing_level_data = timing_hwl_levels[level]
+            # elapsed = np.zeros((height, width)).astype(int) # 64 bit because of astype(int)
+            # for w in range(width):
+            #     for h in range(height):
+            word[0] = timing_level_data[0]
+            word[1] = timing_level_data[1]
+            word[2] = timing_level_data[2]
+            # elapsed[h, w] = make_u48(word)
+            elapsed = make_u48(word)
+            print(f"elapsed: {elapsed}")
             elapsed_levels.append(elapsed)
 
         for level in range(levels):
             elapsed = elapsed_levels[level]
-            cycles_send = elapsed.max()
+            # cycles_send = elapsed.max()
+            cycles_send = elapsed
             time_send = (cycles_send / 0.875) * 1.e-3
             timing_per_level.append({
                 'level': level,
                 'operation': operation_name,
-                'cycles_send': cycles_send if counters[level] > 0 else 0,
-                'time_send': time_send if counters[level] > 0 else 0
+                'cycles_send': cycles_send,
+                'time_send': time_send
             })
         return timing_per_level
 
@@ -355,83 +336,166 @@ def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
 
     return u_wse_1d, r_wse_1d, rho_wse[0], rho_history_array, total_bytes
 
-def copy_timing_data(height, width, levels, simulator, symbol_timing_smooth, 
-                    symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, 
-                    symbol_time_total_start_end, symbol_timing_spmv_total, symbol_timing_spmv_communication, 
-                    symbol_timing_spmv_compute, args):
-    """Copy timing data from device"""
-    timing_smooth_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_smooth, WORDS_PER_TIMESTAMP)
-    timing_residual_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_residual, WORDS_PER_TIMESTAMP)
-    # timing_apply_op_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_apply_op, WORDS_PER_TIMESTAMP)
-    timing_restrict_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_restrict, WORDS_PER_TIMESTAMP)
-    timing_interp_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_interp, WORDS_PER_TIMESTAMP)
-    # timing_setup_init_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_setup_init, WORDS_PER_TIMESTAMP)
-    # timing_rho_check_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_rho_check, WORDS_PER_TIMESTAMP)
-    # timing_communication_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_communication, WORDS_PER_TIMESTAMP)
-    # timing_compute_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_compute, WORDS_PER_TIMESTAMP)
-    timing_spmv_total_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_spmv_total, WORDS_PER_TIMESTAMP)
-    timing_spmv_communication_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_spmv_communication, WORDS_PER_TIMESTAMP)
-    timing_spmv_compute_hwl = copy_timing(height, width, args.levels, simulator, symbol_timing_spmv_compute, WORDS_PER_TIMESTAMP)
-    # EXTRA TIMES
-    time_total_start_end_hwl = copy_timing(height, width, 1, simulator, symbol_time_total_start_end, WORDS_PER_TIMESTAMP)    # Not level based
-    # time_h2d_hwl = copy_timing(height, width, 1, simulator, symbol_time_h2d, WORDS_PER_TIMESTAMP)    # Not level based
-    # time_d2h_hwl = copy_timing(height, width, 1, simulator, symbol_time_d2h, WORDS_PER_TIMESTAMP)    # Not level based
-    # time_ref_hwl = copy_timing(height, width, 1, simulator, symbol_time_ref, WORDS_PER_TIMESTAMP)    # Not level based
+def copy_timing_make_48bit(levels, simulator, symbol_timing, words_per_entry, operation_name):
+    timing_size = words_per_entry * levels
+    timing_1d = np.zeros(1*1*timing_size, np.uint32)   # this is just placeholder, and not really 32 bit mismatch.
+    simulator.memcpy_d2h(timing_1d, symbol_timing, 0, 0, 1, 1, timing_size,
+                        streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT,
+                        order=MemcpyOrder.ROW_MAJOR, nonblock=False)
+    timer_levels_reshaped_32bit = np.reshape(timing_1d, (levels, words_per_entry))
+    timer_levels_reshaped_16bit = timer_levels_reshaped_32bit & 0x0000FFFF # remove upper 16 bits
+    timing_per_level = []
+    for level, words in enumerate(timer_levels_reshaped_16bit):
+        cycles_send = make_u48(words)
+        time_send = (cycles_send / 0.875) * 1.e-3
+        timing_per_level.append({
+            'level': level,
+            'operation': operation_name,
+            'cycles_send': cycles_send,
+            'time_send': time_send
+        })
+    return timing_per_level
 
-    return timing_smooth_hwl, timing_residual_hwl, timing_restrict_hwl, timing_interp_hwl, \
-        time_total_start_end_hwl, timing_spmv_total_hwl, timing_spmv_communication_hwl, timing_spmv_compute_hwl
+
+def copy_timing(height, width, levels, simulator, symbol_timing, words_per_entry):
+    """Copy timing data from device and return as numpy array"""
+    copy_width, copy_height = 2, 1
+    timing_size = words_per_entry * levels
+    timing_1d = np.zeros(1*1*timing_size, np.uint32)   # this is just placeholder, and not really 32 bit mismatch.
+    simulator.memcpy_d2h(timing_1d, symbol_timing, 0, 0, 1, 1, timing_size,
+                        streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT,
+                        order=MemcpyOrder.ROW_MAJOR, nonblock=False)
+    print(f"timing_1d: {timing_1d}")
+    timer_levels_reshaped = np.reshape(timing_1d, (levels, words_per_entry))
+    print(f"timer_levels_reshaped: \n {timer_levels_reshaped}")
+    
+    # print in hex
+    for row in timer_levels_reshaped:
+        for v in row:
+            print(f"{v:08x}")
+    
+    print("converting to u16:")
+    # convert to u16 by dropping upper 16 bits
+    for row in timer_levels_reshaped:
+        for v in row:
+            v = v & 0x0000FFFF # remove upper 16 bits
+
+    print("After converting to u16:")
+    for row in timer_levels_reshaped:
+        for v in row:
+            print(f"{v:08x}")
+    # Convert to hwl format: (height, width, timing_size)
+    # With column-major, data for each PE is contiguous (all levels together)
+    # timing_hwl = oned_to_hwl_colmajor(copy_height, copy_width, timing_size, timing_1d, np.uint16)
+    
+    # Now extract each level's 6 values from the third dimension
+    time_memcpy_hwl_levels = []
+    for level in range(levels):
+        offset = level * words_per_entry
+        time_memcpy_hwl_level = timing_1d[offset:offset+words_per_entry]
+        time_memcpy_hwl_levels.append(time_memcpy_hwl_level)
+
+    return time_memcpy_hwl_levels
+  
+# def copy_timing_data(height, width, levels, simulator, symbol_timing_smooth, 
+#                     symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, 
+#                     symbol_time_total_start_end, symbol_timing_spmv_total, symbol_timing_spmv_communication, 
+#                     symbol_timing_spmv_compute, args):
+#     """Copy timing data from device"""
+#     timing_smooth_hwl = copy_timing(1, 1, args.levels, simulator, symbol_timing_smooth, WORDS_PER_TIMESTAMP)
+#     # timing_residual_hwl = copy_timing(1, 1, args.levels, simulator, symbol_timing_residual, WORDS_PER_TIMESTAMP)
+#     # # timing_apply_op_hwl = copy_timing(1, 1, args.levels, simulator, symbol_timing_apply_op, WORDS_PER_TIMESTAMP)
+#     # timing_restrict_hwl = copy_timing(1, 1, args.levels, simulator, symbol_timing_restrict, WORDS_PER_TIMESTAMP)
+#     # timing_interp_hwl = copy_timing(1, 1, args.levels, simulator, symbol_timing_interp, WORDS_PER_TIMESTAMP)
+#     # # timing_setup_init_hwl = copy_timing(1, 1, args.levels, simulator, symbol_timing_setup_init, WORDS_PER_TIMESTAMP)
+#     # # timing_rho_check_hwl = copy_timing(1, 1, args.levels, simulator, symbol_timing_rho_check, WORDS_PER_TIMESTAMP)
+#     # # timing_communication_hwl = copy_timing(1, 1, args.levels, simulator, symbol_timing_communication, WORDS_PER_TIMESTAMP)
+#     # # timing_compute_hwl = copy_timing(1, 1, args.levels, simulator, symbol_timing_compute, WORDS_PER_TIMESTAMP)
+#     # timing_spmv_total_hwl = copy_timing(1, 1, args.levels, simulator, symbol_timing_spmv_total, WORDS_PER_TIMESTAMP)
+#     # timing_spmv_communication_hwl = copy_timing(1, 1, args.levels, simulator, symbol_timing_spmv_communication, WORDS_PER_TIMESTAMP)
+#     # timing_spmv_compute_hwl = copy_timing(1, 1, args.levels, simulator, symbol_timing_spmv_compute, WORDS_PER_TIMESTAMP)
+#     # # EXTRA TIMES
+#     # time_total_start_end_hwl = copy_timing(1, 1, 1, simulator, symbol_time_total_start_end, WORDS_PER_TIMESTAMP)    # Not level based
+#     # time_h2d_hwl = copy_timing(height, width, 1, simulator, symbol_time_h2d, WORDS_PER_TIMESTAMP)    # Not level based
+#     # time_d2h_hwl = copy_timing(height, width, 1, simulator, symbol_time_d2h, WORDS_PER_TIMESTAMP)    # Not level based
+#     # time_ref_hwl = copy_timing(height, width, 1, simulator, symbol_time_ref, WORDS_PER_TIMESTAMP)    # Not level based
+
+#     return timing_smooth_hwl, timing_residual_hwl, timing_restrict_hwl, timing_interp_hwl, \
+#         time_total_start_end_hwl, timing_spmv_total_hwl, timing_spmv_communication_hwl, timing_spmv_compute_hwl
+
 
 def copy_counters(height, width, levels, simulator, symbol_counter):
     """Copy operation counter data from device - optimized to copy only minimal region (2x1) since only PE(0,0) is used"""
-    # Use minimal region (2x1) to avoid 1x1 hang, but only need PE(0,0)'s data
-    # All PEs have the same counter values, so we only need one PE's data
-    copy_width, copy_height = 2, 1
-    
-    counter_1d = np.zeros(copy_width * copy_height * levels, np.uint32)
-    simulator.memcpy_d2h(counter_1d, symbol_counter, 0, 0, copy_width, copy_height, levels,
-                        streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT, 
-                        order=MemcpyOrder.COL_MAJOR, nonblock=False)
-    
 
-    # Convert to hwl format: (copy_height, copy_width, levels)
-    counter_hwl = oned_to_hwl_colmajor(copy_height, copy_width, levels, counter_1d, np.uint16)
-    # Extract only PE(0,0)'s data (all PEs have the same counter values)
-    counter_per_level = counter_hwl[0, 0, :]
-    
-    return counter_per_level
+    counter_1d = np.zeros(1*1*levels, dtype=np.uint32)
+    simulator.memcpy_d2h(counter_1d, symbol_counter, 0, 0, 1, 1, levels,
+                        streaming=False, data_type=MemcpyDataType.MEMCPY_32BIT, 
+                        order=MemcpyOrder.ROW_MAJOR, nonblock=False)
+    counter_reshaped = np.reshape(counter_1d, (1, levels))
+    # # convert to u16 by dropping upper 16 bits
+    # for row in counter_reshaped:
+    #     for v in row:
+    #         v = v & 0x0000FFFF # remove upper 16 bits
+
+    # counter_levels_reshaped_16bit = counter_1d & 0x0000FFFF # remove upper 16 bits
+    return counter_reshaped
 
 def copy_rho_history(height, width, memcpy_dtype, memcpy_order, simulator, symbol_rho_history, counter_rho_check, args):
     """Copy rho_history from device using counter to determine how many elements to copy"""
     print("  6.3. Copying rho history from device...")
     
     # Get actual iterations from counter (already copied)
-    actual_iterations = int(counter_rho_check[0]) if np.ndim(counter_rho_check) > 0 and counter_rho_check.size > 0 else 0
+    # counter_rho_check has shape (1, levels), so access [0, 0] for first level's count
+    actual_iterations = int(counter_rho_check)
     
-    # rho_history is a per-PE array. Since 1x1xMAX_ITERATIONS hangs, use minimal region to avoid hang.
-    # All PEs have the same rho_history, so we only need one PE's data.
-    # Use smallest possible region: 2x1 (avoids 1x1 hang, minimizes data)
-    # Note: 1x1 works for small depths but 2x1 is safer to avoid hangs
-    copy_width, copy_height = 2, 1
-    
-    rho_history_1d = np.zeros(copy_width * copy_height * actual_iterations, np.float32)
-    simulator.memcpy_d2h(rho_history_1d, symbol_rho_history, 0, 0, copy_width, copy_height, actual_iterations,
-                        streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=False)
-    # Convert to hwl format and extract PE(0,0)'s data (all PEs have the same rho_history)
-    rho_history_hwl = oned_to_hwl_colmajor(copy_height, copy_width, actual_iterations, rho_history_1d, np.float32)
-    rho_history_array = rho_history_hwl[0, 0, :]  # Extract only PE(0,0)'s data
+    rho_history_1d = np.zeros(1 * 1 * actual_iterations, np.float32)
+    simulator.memcpy_d2h(rho_history_1d, symbol_rho_history, 0, 0, 1, 1, actual_iterations,
+                        streaming=False, data_type=MemcpyDataType.MEMCPY_32BIT, order=MemcpyOrder.ROW_MAJOR, nonblock=False)
+    # rho_history_array = rho_history_1d[0, 0, :]  # Extract only PE(0,0)'s data
+    # # Convert to hwl format and extract PE(0,0)'s data (all PEs have the same rho_history)
+    # rho_history_hwl = oned_to_hwl_colmajor(copy_height, copy_width, actual_iterations, rho_history_1d, np.float32)
+    # rho_history_array = rho_history_hwl[0, 0, :]  # Extract only PE(0,0)'s data
 
-    return rho_history_array, actual_iterations
+    return rho_history_1d, actual_iterations
 
 def copy_counter_data(height, width, levels, simulator, symbol_counter_smooth, symbol_counter_residual, 
                      symbol_counter_apply_op, symbol_counter_restrict, symbol_counter_interp, symbol_counter_setup_init, symbol_counter_rho_check, args):
     """Copy all operation counters from device"""
     counter_smooth = copy_counters(height, width, args.levels, simulator, symbol_counter_smooth)
+    # counter_smooth1 = copy_counters(height, width, args.levels, simulator, symbol_counter_smooth)
+    print(f"counter_smooth: \n {counter_smooth}")
+    # print(f"counter_smooth1: \n {counter_smooth1}")
+
     counter_residual = copy_counters(height, width, args.levels, simulator, symbol_counter_residual)
-    counter_apply_op = copy_counters(height, width, args.levels, simulator, symbol_counter_apply_op)
+    # counter_residual1 = copy_counters(height, width, args.levels, simulator, symbol_counter_residual)
+    print(f"counter_residual: \n {counter_residual}")
+    # print(f"counter_residual1: \n {counter_residual1}")
+
+    counter_setup_init = copy_counters(height, width, args.levels, simulator, symbol_counter_setup_init) # hang
+    # counter_setup_init1 = copy_counters(height, width, args.levels, simulator, symbol_counter_setup_init)
+    print(f"counter_setup_init: \n {counter_setup_init}")
+    # print(f"counter_setup_init1: \n {counter_setup_init1}")
+
     counter_restrict = copy_counters(height, width, args.levels, simulator, symbol_counter_restrict)
+    # counter_restrict1 = copy_counters(height, width, args.levels, simulator, symbol_counter_restrict)
+    print(f"counter_restrict: \n {counter_restrict}")
+    # print(f"counter_restrict1: \n {counter_restrict1}")
+
+    counter_apply_op = copy_counters(height, width, args.levels, simulator, symbol_counter_apply_op)
+    # counter_apply_op1 = copy_counters(height, width, args.levels, simulator, symbol_counter_apply_op)
+    print(f"counter_apply_op: \n {counter_apply_op}")
+    # print(f"counter_apply_op1: \n {counter_apply_op1}")
+
     counter_interp = copy_counters(height, width, args.levels, simulator, symbol_counter_interp)
-    counter_setup_init = copy_counters(height, width, args.levels, simulator, symbol_counter_setup_init)
+    # counter_interp1 = copy_counters(height, width, args.levels, simulator, symbol_counter_interp)
+    print(f"counter_interp: \n {counter_interp}")
+    # print(f"counter_interp1: \n {counter_interp1}")
+
     counter_rho_check = copy_counters(height, width, args.levels, simulator, symbol_counter_rho_check)
+    # counter_rho_check1 = copy_counters(height, width, args.levels, simulator, symbol_counter_rho_check)
+    print(f"counter_rho_check: \n {counter_rho_check}")
+    # print(f"counter_rho_check1: \n {counter_rho_check1}")
+
     return counter_smooth, counter_residual, counter_apply_op, counter_restrict, counter_interp, counter_setup_init, counter_rho_check
 
 def print_configuration_summary(
@@ -444,7 +508,8 @@ def print_configuration_summary(
     timing_total_start_end_data,
 ):
     dtype_name = DTYPE.__name__ if hasattr(DTYPE, "__name__") else str(DTYPE)
-    device_iterations = int(counter_rho_check[0]) if np.ndim(counter_rho_check) > 0 and counter_rho_check.size > 0 else 0
+    # counter_rho_check has shape (1, levels), so access [0, 0] for first level's count
+    device_iterations = int(counter_rho_check[0, 0]) if np.ndim(counter_rho_check) > 0 and counter_rho_check.size > 0 else 0
 
     print("\n" + "=" * 60)
     print("Configuration Summary")
@@ -475,37 +540,46 @@ def print_configuration_summary(
     for label, value in config_items:
         print(f"{label:<{key_width}}: {value}")
 
+
 def profiling(
-    args, height, width,
-    timing_smooth_hwl_levels, timing_residual_hwl_levels,
-    timing_restrict_hwl_levels, timing_interp_hwl_levels,
-    time_total_start_end_hwl,
-    timing_spmv_total_hwl_levels, timing_spmv_communication_hwl_levels,
-    timing_spmv_compute_hwl_levels,
-    counter_smooth, counter_residual, counter_restrict, counter_interp, counter_rho_check, counter_apply_op, counter_setup_init,
-    WORDS_PER_TIMESTAMP, WORDS_PER_START_END,
-    device_solver, device_rh
+        args,
+        WORDS_PER_TIMESTAMP,
+        device_solver, device_rh,
+        counter_smooth, counter_residual, counter_restrict, counter_interp, counter_rho_check, counter_apply_op, counter_setup_init,
+        simulator, 
+        symbol_timing_smooth, symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, symbol_timing_spmv_total, symbol_timing_spmv_communication, symbol_timing_spmv_compute, symbol_time_total_start_end
     ):
     print("\n" + "="*60)
     print("Performance Timing")
     print("="*60)
 
-    timing_smooth_data = process_timing_data(height, width, args.levels, timing_smooth_hwl_levels, "smooth", counter_smooth, False, WORDS_PER_TIMESTAMP)
-    timing_residual_data = process_timing_data(height, width, args.levels, timing_residual_hwl_levels, "residual", counter_residual, False, WORDS_PER_TIMESTAMP)
-    timing_restrict_data = process_timing_data(height, width, args.levels, timing_restrict_hwl_levels, "restriction", counter_restrict, False, WORDS_PER_TIMESTAMP)
-    timing_interp_data = process_timing_data(height, width, args.levels, timing_interp_hwl_levels, "interpolation", counter_interp, False, WORDS_PER_TIMESTAMP)
-    timing_spmv_total_data = process_timing_data(height, width, args.levels, timing_spmv_total_hwl_levels, "spmv_total", counter_apply_op, False, WORDS_PER_TIMESTAMP)
-    timing_spmv_communication_data = process_timing_data(height, width, args.levels, timing_spmv_communication_hwl_levels, "spmv_communication", counter_apply_op, False, WORDS_PER_TIMESTAMP)
-    timing_spmv_compute_data = process_timing_data(height, width, args.levels, timing_spmv_compute_hwl_levels, "spmv_compute", counter_apply_op, False, WORDS_PER_TIMESTAMP)
-    counter_one = np.array([1]) # Because we have only 1 level
-    ones = np.ones(args.levels, dtype=int)
-    timing_total_start_end_data = process_timing_data(height, width, 1, time_total_start_end_hwl, "total", counter_one, False, WORDS_PER_TIMESTAMP)
+    # timing_smooth_data = process_timing_data(height, width, args.levels, timing_smooth_hwl_levels, "smooth", counter_smooth, False, WORDS_PER_TIMESTAMP)
+    # timing_residual_data = process_timing_data(height, width, args.levels, timing_residual_hwl_levels, "residual", counter_residual, False, WORDS_PER_TIMESTAMP)
+    # timing_restrict_data = process_timing_data(height, width, args.levels, timing_restrict_hwl_levels, "restriction", counter_restrict, False, WORDS_PER_TIMESTAMP)
+    # timing_interp_data = process_timing_data(height, width, args.levels, timing_interp_hwl_levels, "interpolation", counter_interp, False, WORDS_PER_TIMESTAMP)
+    # timing_spmv_total_data = process_timing_data(height, width, args.levels, timing_spmv_total_hwl_levels, "spmv_total", counter_apply_op, False, WORDS_PER_TIMESTAMP)
+    # timing_spmv_communication_data = process_timing_data(height, width, args.levels, timing_spmv_communication_hwl_levels, "spmv_communication", counter_apply_op, False, WORDS_PER_TIMESTAMP)
+    # timing_spmv_compute_data = process_timing_data(height, width, args.levels, timing_spmv_compute_hwl_levels, "spmv_compute", counter_apply_op, False, WORDS_PER_TIMESTAMP)
+    # counter_one = np.array([1]) # Because we have only 1 level
+    # ones = np.ones(args.levels, dtype=int)
+    # timing_total_start_end_data = process_timing_data(height, width, 1, time_total_start_end_hwl, "total", counter_one, False, WORDS_PER_TIMESTAMP)
     # timing_setup_init_data = process_timing_data(height, width, args.levels, timing_setup_init_hwl_levels, "setup_init", counter_setup_init, False, WORDS_PER_TIMESTAMP)
     # timing_rho_check_data = process_timing_data(height, width, args.levels, timing_rho_check_hwl_levels, "rho_check", counter_rho_check, False, WORDS_PER_TIMESTAMP)
     # timing_h2d_data = process_timing_data(height, width, 1, time_h2d_hwl, "h2d", counter_one, False, WORDS_PER_TIMESTAMP)
     # timing_d2h_data = process_timing_data(height, width, 1, time_d2h_hwl, time_ref_hwl, "d2h", counter_one, False, WORDS_PER_TIMESTAMP)
     # timing_communication_data = process_timing_data(height, width, args.levels, timing_communication_hwl_levels, "communication", ones, False, WORDS_PER_TIMESTAMP)
     # timing_compute_data = process_timing_data(height, width, args.levels, timing_compute_hwl_levels, "compute", ones, False, WORDS_PER_TIMESTAMP)
+
+    timing_smooth_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_smooth, WORDS_PER_TIMESTAMP, "smooth")
+    timing_residual_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_residual, WORDS_PER_TIMESTAMP, "residual")
+    timing_restrict_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_restrict, WORDS_PER_TIMESTAMP, "restriction")
+    timing_interp_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_interp, WORDS_PER_TIMESTAMP, "interpolation")
+    timing_spmv_total_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_spmv_total, WORDS_PER_TIMESTAMP, "spmv_total")
+    timing_spmv_communication_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_spmv_communication, WORDS_PER_TIMESTAMP, "spmv_communication")
+    timing_spmv_compute_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_spmv_compute, WORDS_PER_TIMESTAMP, "spmv_compute")
+    counter_one = np.array([1]) # Because we have only 1 level
+    ones = np.ones(args.levels, dtype=int)
+    timing_total_start_end_data = copy_timing_make_48bit(1, simulator, symbol_time_total_start_end, WORDS_PER_TIMESTAMP, "total")
 
     ############################################################
     # Time per operation and level (us[cycles]):
@@ -805,7 +879,7 @@ def main():
     # simulator.launch("f_reference_timestamps", nonblock=False)
 
     print("5. Tic total...")
-    simulator.launch("f_tic_total", nonblock=False)
+    simulator.launch("f_tic_total", nonblock=True)
     # Run GMG V-cycle with convergence checking on device
     print(f"5. Running GMG V-cycle(max_iter={args.max_ite}, levels={args.levels}) on device...")
     simulator.launch("f_gmg_vcycle", 
@@ -824,6 +898,7 @@ def main():
 ############################################################
     # Copy results back
     print("6. Copying results from device...")
+
     
     # print("  6.1. Copying u from device...")
     # # timing measures inside the function
@@ -831,73 +906,116 @@ def main():
     # u_wse_3d = oned_to_hwl_colmajor(height, width, zDim, u_wse_1d, DTYPE)
     # r_wse_3d = oned_to_hwl_colmajor(height, width, zDim, r_wse_1d, DTYPE)
 
+    # print("  6.2. Copying operation counters...")
+    # counter_smooth, counter_residual, counter_apply_op, counter_restrict, counter_interp, counter_setup_init, counter_rho_check = \
+    #     copy_counter_data(height, width, args.levels, simulator, 
+    #                      symbol_counter_smooth, symbol_counter_residual, 
+    #                      symbol_counter_apply_op, symbol_counter_restrict, 
+    #                      symbol_counter_interp, symbol_counter_setup_init, symbol_counter_rho_check, args)
+    # # Copy rho_history after counter is available to minimize data transfer
+    # counter_rho_check = 1
+    # rho_history_array, actual_iterations = copy_rho_history(height, width, memcpy_dtype, memcpy_order, simulator, symbol_rho_history, counter_rho_check, args)
+
     # # Copy timing data from device
     print("  6.1. Copying timing data...")
-    timing_smooth_hwl_levels, timing_residual_hwl_levels, \
-        timing_restrict_hwl_levels, \
-            timing_interp_hwl_levels, \
-                time_total_start_end_hwl, \
-                    timing_spmv_total_hwl_levels, \
-                            timing_spmv_communication_hwl_levels, timing_spmv_compute_hwl_levels = \
-            copy_timing_data(height, width, args.levels, simulator, symbol_timing_smooth, 
-                             symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, 
-                             symbol_time_total_start_end,
-                             symbol_timing_spmv_total, symbol_timing_spmv_communication, 
-                             symbol_timing_spmv_compute, args)
-    print("  6.2. Copying operation counters...")
-    counter_smooth, counter_residual, counter_apply_op, counter_restrict, counter_interp, counter_setup_init, counter_rho_check = \
-        copy_counter_data(height, width, args.levels, simulator, 
-                         symbol_counter_smooth, symbol_counter_residual, 
-                         symbol_counter_apply_op, symbol_counter_restrict, 
-                         symbol_counter_interp, symbol_counter_setup_init, symbol_counter_rho_check, args)
-    
-    # Copy rho_history after counter is available to minimize data transfer
-    rho_history_array, actual_iterations = copy_rho_history(height, width, memcpy_dtype, memcpy_order, simulator, symbol_rho_history, counter_rho_check, args)
+
+
+    # timing_smooth_hwl = copy_timing_make_48bit(args.levels, simulator, symbol_timing_smooth, WORDS_PER_TIMESTAMP, "smooth")
+    # print(f"timing_smooth_hwl: \n {timing_smooth_hwl}")
+    # readRM = np.zeros(1*1*6, np.uint32, order='C') # row major
+    # simulator.memcpy_d2h(readRM, symbolrowmajor, 0, 0, 1, 1, 6,
+    #                     streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT,
+    #                     order=MemcpyOrder.COL_MAJOR, nonblock=False)
+    # print(f"readRM: {readRM}")
+    # timer_levels = np.reshape(readRM, (2, 3))
+    # shape = timer_levels.shape
+    # print(f"shape: {shape}")
+    # print(f"timer_levels: {timer_levels}")
+    # # print in hex
+    # for v in readRM:
+    #     print(f"{v:08x}")
 
 ############################################################
 # Stop simulator
 ############################################################
-    print("7. Stopping simulator...")
-    simulator.stop()
-    # device_solver.grids[0]['u'] = u_wse_3d
-    # device_solver.grids[0]['r'] = r_wse_3d
-    device_solver.grids[0]['rho_up'] = rho_history_array[actual_iterations - 1]
+    # # device_solver.grids[0]['u'] = u_wse_3d
+    # # device_solver.grids[0]['r'] = r_wse_3d
+    # device_solver.grids[0]['rho_up'] = rho_history_array[actual_iterations - 1]
 
 
 ############################################################
 # Convergence
 ############################################################
-    device_rh = device_solver.grids[0]['rho_up']
+    # device_rh = device_solver.grids[0]['rho_up']
 
-    # Print rho values after each iteration
-    print("\n" + "="*60)
-    print("Rho values after each iteration")
-    print("="*60)
-    if len(rho_history_array) > 0:
-        # Find actual number of iterations (find last non-zero value)
-        actual_iterations = 0
-        for i in range(len(rho_history_array)):
-            if rho_history_array[i] != 0.0:
-                actual_iterations = i + 1
+    # # Print rho values after each iteration
+    # print("\n" + "="*60)
+    # print("Rho values after each iteration")
+    # print("="*60)
+    # if len(rho_history_array) > 0:
+    #     # Find actual number of iterations (find last non-zero value)
+    #     actual_iterations = 0
+    #     for i in range(len(rho_history_array)):
+    #         if rho_history_array[i] != 0.0:
+    #             actual_iterations = i + 1
         
-        if actual_iterations > 0:
-            print(f"Total iterations performed: {actual_iterations}")
-            print(f"{'Iteration':<12} {'|rho|_max':<20}")
-            print("-" * 60)
-            for i in range(actual_iterations):
-                rho_val = rho_history_array[i]
-                print(f"{i+1:<12} {rho_val:>19.6e}")
-        else:
-            print("No iterations were performed.")
-    else:
-        print("No iterations were performed.")
+    #     if actual_iterations > 0:
+    #         print(f"Total iterations performed: {actual_iterations}")
+    #         print(f"{'Iteration':<12} {'|rho|_max':<20}")
+    #         print("-" * 60)
+    #         for i in range(actual_iterations):
+    #             rho_val = rho_history_array[i]
+    #             print(f"{i+1:<12} {rho_val:>19.6e}")
+    #     else:
+    #         print("No iterations were performed.")
+    # else:
+    #     print("No iterations were performed.")
 
-    print(f"[GMG] rho = |b-A*x|_inf = {device_rh:.6e}")
-    # Use rel_tolerance^2 for convergence check (matching solve_iterative pattern)
-    tolerance = device_solver.rel_tolerance
-    print(f"  Tolerance = {tolerance:.6e}")
-    converged = device_rh <= tolerance
-    print(f"  Converged: {'Yes' if converged else 'No'}")
+    # print(f"[GMG] rho = |b-A*x|_inf = {device_rh:.6e}")
+    # # Use rel_tolerance^2 for convergence check (matching solve_iterative pattern)
+    # tolerance = device_solver.rel_tolerance
+    # print(f"  Tolerance = {tolerance:.6e}")
+    # converged = device_rh <= tolerance
+    # print(f"  Converged: {'Yes' if converged else 'No'}")
+
+############################################################
+# Timing
+############################################################
+
+    counter_smooth = 0
+    counter_residual = 0
+    counter_restrict = 0
+    counter_interp = 0
+    counter_rho_check = 0
+    counter_apply_op = 0
+    counter_setup_init = 0
+    device_rh = 0.0
+    profiling(args,
+        WORDS_PER_TIMESTAMP,
+        device_solver, device_rh,
+        counter_smooth, counter_residual, counter_restrict, counter_interp, counter_rho_check, counter_apply_op, counter_setup_init,
+        simulator, 
+        symbol_timing_smooth, symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, symbol_timing_spmv_total, symbol_timing_spmv_communication, symbol_timing_spmv_compute, symbol_time_total_start_end
+        )  
+    print("7. Stopping simulator...")
+    simulator.stop()
+    if args.cmaddr is None:
+        # Move simulation logs
+        dst_log = Path(f"{logs_dir}/sim.log")
+        src_log = Path("sim.log")
+        if src_log.exists():
+            shutil.move(src_log, dst_log)
+        
+        dst_trace = Path(f"{logs_dir}/simfab_traces")
+        src_trace = Path("simfab_traces")
+        if dst_trace.exists():
+            shutil.rmtree(dst_trace)
+        if src_trace.exists():
+            shutil.move(src_trace, dst_trace)
+
+if __name__ == "__main__":
+    main()
+
 
 
 # ############################################################
@@ -926,34 +1044,3 @@ def main():
 #         nrm_z = np.linalg.norm(z, np.inf)
 #         print(f"|{field}_host - {field}_device| = {nrm_z}")
 #         print(f"\nSUCCESSFULLY VERIFIED {field} VALUES BETWEEN HOST AND DEVICE!")
-
-############################################################
-# Timing
-############################################################
-
-    profiling(args, height, width,
-        timing_smooth_hwl_levels, timing_residual_hwl_levels,
-        timing_restrict_hwl_levels, timing_interp_hwl_levels,
-        time_total_start_end_hwl,
-        timing_spmv_total_hwl_levels, timing_spmv_communication_hwl_levels, timing_spmv_compute_hwl_levels,
-        counter_smooth, counter_residual, counter_restrict, counter_interp, counter_rho_check, counter_apply_op, counter_setup_init,
-        WORDS_PER_TIMESTAMP, WORDS_PER_START_END,
-        device_solver, device_rh)  
-
-    if args.cmaddr is None:
-        # Move simulation logs
-        dst_log = Path(f"{logs_dir}/sim.log")
-        src_log = Path("sim.log")
-        if src_log.exists():
-            shutil.move(src_log, dst_log)
-        
-        dst_trace = Path(f"{logs_dir}/simfab_traces")
-        src_trace = Path("simfab_traces")
-        if dst_trace.exists():
-            shutil.rmtree(dst_trace)
-        if src_trace.exists():
-            shutil.move(src_trace, dst_trace)
-
-if __name__ == "__main__":
-    main()
-

@@ -107,19 +107,20 @@ layout{
     @export_name("timing_spmv_communication", [*]u16, true);
     @export_name("timing_spmv_compute", [*]u16, true);
     // counters
-    @export_name("counter_smooth", [*]u16, true);
-    @export_name("counter_apply_op", [*]u16, true);
-    @export_name("counter_residual", [*]u16, true);
-    @export_name("counter_restrict", [*]u16, true);
-    @export_name("counter_interp", [*]u16, true);
-    @export_name("counter_setup_init", [*]u16, true);
-    @export_name("counter_rho_check", [*]u16, true);
+    @export_name("counter_smooth", [*]u32, true);
+    @export_name("counter_apply_op", [*]u32, true);
+    @export_name("counter_residual", [*]u32, true);
+    @export_name("counter_restrict", [*]u32, true);
+    @export_name("counter_interp", [*]u32, true);
+    @export_name("counter_setup_init", [*]u32, true);
+    @export_name("counter_rho_check", [*]u32, true);
     // kernels
     @export_name("f_enable_timer", fn()void);
     @export_name("f_tic_total", fn()void);
     @export_name("f_toc_total", fn()void);
     @export_name("f_gmg_vcycle", fn(i16,i16,i16,i16,i16,f32)void);
     @export_name("rho_history", [*]f32, true);
+
     // @export_name("f_sync", fn()void);
     // @export_name("f_reference_timestamps", fn()void);
     // @export_name("timing_apply_op", [*]u16, true);

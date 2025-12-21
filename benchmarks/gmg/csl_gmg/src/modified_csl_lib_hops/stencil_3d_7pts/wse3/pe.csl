@@ -235,13 +235,14 @@ var inactive_vertical: bool = false;
 var is_pe_inside_grid: bool = false;
 // const simprint = @import_module("<simprint>", .{ .enable = true });
 const layout_mod = @import_module("<layout>");
-const timer_stencil = @import_module("timer_modified.csl", .{ .timerCount = 2 });
+const timer_stencil = @import_module("timer_modified.csl", .{ .timerCount = 3 });
 var current_level_local: i16 = 0;
 var timing_spmv_total_local: [*]u16;
 var timing_spmv_communication_local: [*]u16;
 var timing_spmv_compute_local: [*]u16;
 var TIMER_SPMV_TOTAL: i16=0;
 var TIMER_SPMV_COMMUNICATION: i16=1;
+var TIMER_SPMV_COMPUTE: i16=2;
 // var TIMER_INIT_HOPS: i16=4;
 // var TIMER_LAPLACIAN_XY: i16=5;
 // var TIMER_LAPLACIAN_Z: i16=6;
@@ -398,6 +399,7 @@ fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32, current_level: i16, timing
 fn laplacian_xy() void {
     const px: i16 = @as(i16, layout_mod.get_x_coord());
     const py: i16 = @as(i16, layout_mod.get_y_coord());
+    save_timestamp_start(TIMER_SPMV_COMPUTE);
     // save_timestamp_start(TIMER_LAPLACIAN_XY);
     // OPTIMIZATION 2: Skip laplacian computation for inactive PEs
     if (!is_active_pe) {
@@ -446,6 +448,7 @@ fn laplacian_xy() void {
     @fmacs(dest_dsr_send, src0_dsr, src1_dsr_send, c_north);
 
     // save_timestamp_end(current_level_local, &timer_laplacian_xy_local, TIMER_LAPLACIAN_XY);
+    save_timestamp_end(current_level_local, timing_spmv_compute_local, TIMER_SPMV_COMPUTE);
 }
 
 
@@ -458,6 +461,7 @@ fn laplacian_xy() void {
 // - need more logics to handle the boundary condition
 //
 fn laplacian_z() void {
+    save_timestamp_start(TIMER_SPMV_COMPUTE);
     // save_timestamp_start(TIMER_LAPLACIAN_Z);
     // OPTIMIZATION 2: Skip laplacian computation for inactive PEs
     if (!is_active_pe) {
@@ -500,6 +504,7 @@ fn laplacian_z() void {
     @fmacs(dest_dsr_send, src0_dsr, src1_dsr_send, -c_top);
 
     // save_timestamp_end(current_level_local, &timer_laplacian_z_local, TIMER_LAPLACIAN_Z);
+    save_timestamp_end(current_level_local, timing_spmv_compute_local, TIMER_SPMV_COMPUTE);
 }
 
 // If both SEND and RECV are done, perform
@@ -508,7 +513,7 @@ fn laplacian_z() void {
 // - activate COMM
 fn compute_and_next_send_recv() void {
     if (2 <= count_send_recv){
-        save_timestamp_end(current_level_local, timing_spmv_communication_local, TIMER_SPMV_COMMUNICATION);
+        // save_timestamp_end(current_level_local, timing_spmv_communication_local, TIMER_SPMV_COMMUNICATION);
         // RECV/SEND of this block are done
         laplacian_xy();
         // advance start_x, mem_center_buf_dsd and mem_y_buf_dsd for next block
@@ -538,6 +543,7 @@ task f_send() void {
     const px: i16 = @as(i16, layout_mod.get_x_coord());
     const py: i16 = @as(i16, layout_mod.get_y_coord());
     if (SEND_STATE_EAST == send_state){ // send to east
+        save_timestamp_start(TIMER_SPMV_COMMUNICATION);
         // save_timestamp_start(TIMER_ONLY_SEND);
         // The last PE of x-dir has no east neighbor, so it does not send data to the east
         if (!is_pe_inside_grid or px == @as(i16, last_active_px)){
@@ -599,6 +605,7 @@ task f_send() void {
         }
         send_state = SEND_STATE_DONE;
     }else{
+        save_timestamp_end(current_level_local, timing_spmv_communication_local, TIMER_SPMV_COMMUNICATION);
         // save_timestamp_end(current_level_local, &timer_only_send_local, TIMER_ONLY_SEND);
         count_send_recv += 1;
         // if both SEND and RECV are done, perform
@@ -617,6 +624,7 @@ task f_recv() void {
     const py: i16 = @as(i16, layout_mod.get_y_coord());
     if (RECV_STATE_WEST == recv_state){ // receive from west
         // save_timestamp_start(TIMER_ONLY_RECV);
+        save_timestamp_start(TIMER_SPMV_COMMUNICATION);
         // The first PE of x-dir has no west neighbor so it does not receive data from the west
         if (px == @as(i16, first_active_px) or !is_pe_inside_grid){   // Doesn't include last active px as it can handle receive.
             @activate(RECV); // nothing to receive
@@ -689,6 +697,7 @@ task f_recv() void {
         }
         recv_state = RECV_STATE_DONE;
     }else{
+        save_timestamp_end(current_level_local, timing_spmv_communication_local, TIMER_SPMV_COMMUNICATION);
         // save_timestamp_end(current_level_local, &timer_only_recv_local, TIMER_ONLY_RECV);
         count_send_recv += 1;
         // if both SEND and RECV are done, perform
@@ -793,7 +802,7 @@ task f_comm() void {
 
         // restart a block SEND/RECV
         count_send_recv = 0;
-        save_timestamp_start(TIMER_SPMV_COMMUNICATION);
+        // save_timestamp_start(TIMER_SPMV_COMMUNICATION);
         // send data to the east 1 HOP, we repeat this pattern for n hops
         @activate(SEND);
         // recv data from the west 1 HOP, we repeat this pattern for n hops
@@ -805,10 +814,10 @@ task f_comm() void {
         
         save_timestamp_end(current_level_local, timing_spmv_total_local, TIMER_SPMV_TOTAL);   // compute + communication
 
-        const offset: i16 = current_level_local * timer_stencil.tsc_size_words;
-        timer_stencil.subtract_timestamps(@ptrcast(*[timer_stencil.tsc_size_words]u16, &timing_spmv_total_local[offset]), 
-                            @ptrcast(*[timer_stencil.tsc_size_words]u16, &timing_spmv_communication_local[offset]), 
-                            @ptrcast(*[timer_stencil.tsc_size_words]u16, &timing_spmv_compute_local[offset]));  // result = a - b , therefore compute = total - communication
+        // const offset: i16 = current_level_local * timer_stencil.tsc_size_words;
+        // timer_stencil.subtract_timestamps(@ptrcast(*[timer_stencil.tsc_size_words]u16, &timing_spmv_total_local[offset]), 
+        //                     @ptrcast(*[timer_stencil.tsc_size_words]u16, &timing_spmv_communication_local[offset]), 
+        //                     @ptrcast(*[timer_stencil.tsc_size_words]u16, &timing_spmv_compute_local[offset]));  // result = a - b , therefore compute = total - communication
         
         //sys_mod.unblock_cmd_stream();
         f_callback();

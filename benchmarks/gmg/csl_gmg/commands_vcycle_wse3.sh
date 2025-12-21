@@ -57,7 +57,7 @@ cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=12,10 --fabric-offset
 --memcpy --channels=4 --width-west-buf=0 --width-east-buf=0 --max-inlined-iterations=1000000
 
 cs_python ./run_gmg_vcycle.py -m=4 -n=4 -k=4 --latestlink out_vcycle --channels=4 \
---width-west-buf=0 --width-east-buf=0 --zDim=4 --run-only --levels=2 --max-ite=10 --pre-iter=6 --post-iter=6 --bottom-iter=100 --tolerance=1e-5
+--width-west-buf=0 --width-east-buf=0 --zDim=4 --run-only --levels=2 --max-ite=100 --pre-iter=6 --post-iter=6 --bottom-iter=100 --tolerance=1e-5
 
 ./check_memory_usage.sh out_vcycle 0 0 --summary
 
