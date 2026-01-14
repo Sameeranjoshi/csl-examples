@@ -250,7 +250,8 @@ def main():
         #  (32, 5, 100, 1e-5, 6, 6, 100),   # Small problem
         #  (64, 6, 100, 1e-5, 6, 6, 100),   # Medium problem
         #  (128, 7, 100, 1e-5, 6, 6, 100),   # Large problem
-        (256, 8, 100, 1e-5, 6, 6, 100),   # Very large
+         (256, 8, 100, 1e-5, 6, 6, 100),   # Very large
+         (512, 9, 100, 1e-5, 6, 6, 100),   # Very large
         # (512, 9, 100, 1e-5, 6, 6, 1),   # Very large
         # (512, 9, 100, 1e-5, 1, 1, 1),   # Very large
 

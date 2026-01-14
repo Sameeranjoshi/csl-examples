@@ -591,34 +591,9 @@ task f_state() void {
         // Initialize current level
         f_setup_level(@as(u16, current_level), 1); // (.. , down=True/False)
         current_smooth_iter = 0;
-        next_state = STATE_DOWN_SMOOTH_APPLY;
+        next_state = STATE_DOWN_RESIDUAL_APPLY;
         f_trigger_state_machine();
-        
-    } else if (STATE_DOWN_SMOOTH_APPLY == cur_state) {
 
-        // Apply operator for Jacobi smoothing
-        // Start timing for DOWN smooth (first iteration only)
-        if (current_smooth_iter == 0) {
-            save_timestamp_start(TIMER_ID_SMOOTH);
-        }
-        next_state = STATE_DOWN_SMOOTH_UPDATE;
-        f_apply_operator();
-
-    } else if (STATE_DOWN_SMOOTH_UPDATE == cur_state) {
-        f_jacobi_smooth();
-        current_smooth_iter = current_smooth_iter + 1;
-        next_state = STATE_DOWN_SMOOTH_CHECK;
-        f_trigger_state_machine();
-        
-    } else if (STATE_DOWN_SMOOTH_CHECK == cur_state) {
-        if (current_smooth_iter < pre_smooth_iter) {
-            next_state = STATE_DOWN_SMOOTH_APPLY;
-        } else {
-            // End timing for DOWN smoothing
-            save_timestamp_end(current_level, &timing_smooth, TIMER_ID_SMOOTH);
-            next_state = STATE_DOWN_RESIDUAL_APPLY;
-        }
-        f_trigger_state_machine();
         
     } else if (STATE_DOWN_RESIDUAL_APPLY == cur_state) {
         // Apply operator for residual
@@ -630,22 +605,9 @@ task f_state() void {
         // Compute residual
         f_residual();
         save_timestamp_end(current_level, &timing_residual, TIMER_ID_RESIDUAL);
-        next_state = STATE_DOWN_RESTRICT_REDUCE;
-        f_trigger_state_machine();
-        
-    } else if (STATE_DOWN_RESTRICT_REDUCE == cur_state) {
-        // Restriction: reduce to top-left
-        save_timestamp_start(TIMER_ID_RESTRICT);
-        next_state = STATE_DOWN_RESTRICT_DIV;
-        f_reduce_row_col_top_left();
-        
-    } else if (STATE_DOWN_RESTRICT_DIV == cur_state) {
-        // Restriction: divide by number of active PEs
-        f_restriction_division();
-        save_timestamp_end(current_level, &timing_restrict, TIMER_ID_RESTRICT);
         next_state = STATE_DOWN_LEVEL_CHECK;
         f_trigger_state_machine();
-        
+
     } else if (STATE_DOWN_LEVEL_CHECK == cur_state) {
         current_level = current_level + 1;
         if (current_level < num_levels - 1) {   // (coarsest - 1) level
@@ -663,33 +625,7 @@ task f_state() void {
         // Initialize coarsest level
         f_setup_level(@as(u16, current_level), 1);
         current_smooth_iter = 0;
-        next_state = STATE_COARSE_SMOOTH_APPLY;
-        f_trigger_state_machine();
-        
-    } else if (STATE_COARSE_SMOOTH_APPLY == cur_state) {
-        // Start timing for coarse solve (use down array, first iteration only)
-        if (current_smooth_iter == 0) {
-            save_timestamp_start(TIMER_ID_SMOOTH);
-        }
-        next_state = STATE_COARSE_SMOOTH_UPDATE;
-        f_apply_operator();
-
-    } else if (STATE_COARSE_SMOOTH_UPDATE == cur_state) {
-        f_jacobi_smooth();
-        current_smooth_iter = current_smooth_iter + 1;
-        next_state = STATE_COARSE_SMOOTH_CHECK;
-        f_trigger_state_machine();
-        
-    } else if (STATE_COARSE_SMOOTH_CHECK == cur_state) {
-        if (current_smooth_iter < bottom_solver_iter) {
-            next_state = STATE_COARSE_SMOOTH_APPLY;
-        } else {
-            save_timestamp_end(current_level, &timing_smooth, TIMER_ID_SMOOTH);
-            // Start up cycle
-            current_level = current_level - 1;
-            next_state = STATE_UP_INIT;
-            // print_time_debug();
-        }
+        next_state = STATE_UP_INIT;
         f_trigger_state_machine();
         
     }
@@ -699,52 +635,7 @@ task f_state() void {
     else if (STATE_UP_INIT == cur_state) {
         // Initialize level for up cycle
         f_setup_level(@as(u16, current_level), 0); // (.. , down=False for up cycle)
-        next_state = STATE_UP_EXPAND_Z;
-        f_trigger_state_machine();
-        
-    } else if (STATE_UP_EXPAND_Z == cur_state) {
-        // Expand z dimension: duplicate each coarse element to 2 fine elements
-        // This prepares u for broadcasting (u currently has coarse z dim, needs fine z dim)
-        save_timestamp_start(TIMER_ID_INTERP);
-        f_interpolation_expand_z();
-        next_state = STATE_UP_BCAST;
-        f_trigger_state_machine();
-        
-    } else if (STATE_UP_BCAST == cur_state) {
-        // Broadcast from top-left
-        next_state = STATE_UP_INTERP_ADD;
-        f_bcast_from_top_left();
-        
-    } else if (STATE_UP_INTERP_ADD == cur_state) {
-        // Add interpolated correction
-        f_interpolation_add();
-        save_timestamp_end(current_level, &timing_interp, TIMER_ID_INTERP);
-        current_smooth_iter = 0;
-        next_state = STATE_UP_SMOOTH_APPLY;
-        f_trigger_state_machine();
-        
-    } else if (STATE_UP_SMOOTH_APPLY == cur_state) {
-        // Start timing for UP smooth (first iteration only)
-        if (current_smooth_iter == 0) {
-            save_timestamp_start(TIMER_ID_SMOOTH);
-        }
-        next_state = STATE_UP_SMOOTH_UPDATE;
-        f_apply_operator();
-        
-    } else if (STATE_UP_SMOOTH_UPDATE == cur_state) {
-        f_jacobi_smooth();
-        current_smooth_iter = current_smooth_iter + 1;
-        next_state = STATE_UP_SMOOTH_CHECK;
-        f_trigger_state_machine();
-        
-    } else if (STATE_UP_SMOOTH_CHECK == cur_state) {    // post-smooth iterations loop
-        if (current_smooth_iter < post_smooth_iter) {
-            next_state = STATE_UP_SMOOTH_APPLY;
-        } else {
-            // End timing for UP smoothing
-            save_timestamp_end(current_level, &timing_smooth, TIMER_ID_SMOOTH);
-            next_state = STATE_UP_LEVEL_CHECK;
-        }
+        next_state = STATE_UP_LEVEL_CHECK;
         f_trigger_state_machine();
         
     } else if (STATE_UP_LEVEL_CHECK == cur_state) {

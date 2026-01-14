@@ -616,35 +616,35 @@ task f_state() void {
         } else {
             // End timing for DOWN smoothing
             save_timestamp_end(current_level, &timing_smooth, TIMER_ID_SMOOTH);
-            next_state = STATE_DOWN_RESIDUAL_APPLY;
+            next_state = STATE_DOWN_LEVEL_CHECK;
         }
         f_trigger_state_machine();
         
-    } else if (STATE_DOWN_RESIDUAL_APPLY == cur_state) {
-        // Apply operator for residual
-        save_timestamp_start(TIMER_ID_RESIDUAL);
-        next_state = STATE_DOWN_RESIDUAL_COMPUTE;
-        f_apply_operator();
+    // } else if (STATE_DOWN_RESIDUAL_APPLY == cur_state) {
+    //     // Apply operator for residual
+    //     save_timestamp_start(TIMER_ID_RESIDUAL);
+    //     next_state = STATE_DOWN_RESIDUAL_COMPUTE;
+    //     f_apply_operator();
         
-    } else if (STATE_DOWN_RESIDUAL_COMPUTE == cur_state) {
-        // Compute residual
-        f_residual();
-        save_timestamp_end(current_level, &timing_residual, TIMER_ID_RESIDUAL);
-        next_state = STATE_DOWN_RESTRICT_REDUCE;
-        f_trigger_state_machine();
+    // } else if (STATE_DOWN_RESIDUAL_COMPUTE == cur_state) {
+    //     // Compute residual
+    //     f_residual();
+    //     save_timestamp_end(current_level, &timing_residual, TIMER_ID_RESIDUAL);
+    //     next_state = STATE_DOWN_RESTRICT_REDUCE;
+    //     f_trigger_state_machine();
         
-    } else if (STATE_DOWN_RESTRICT_REDUCE == cur_state) {
-        // Restriction: reduce to top-left
-        save_timestamp_start(TIMER_ID_RESTRICT);
-        next_state = STATE_DOWN_RESTRICT_DIV;
-        f_reduce_row_col_top_left();
+    // } else if (STATE_DOWN_RESTRICT_REDUCE == cur_state) {
+    //     // Restriction: reduce to top-left
+    //     save_timestamp_start(TIMER_ID_RESTRICT);
+    //     next_state = STATE_DOWN_RESTRICT_DIV;
+    //     f_reduce_row_col_top_left();
         
-    } else if (STATE_DOWN_RESTRICT_DIV == cur_state) {
-        // Restriction: divide by number of active PEs
-        f_restriction_division();
-        save_timestamp_end(current_level, &timing_restrict, TIMER_ID_RESTRICT);
-        next_state = STATE_DOWN_LEVEL_CHECK;
-        f_trigger_state_machine();
+    // } else if (STATE_DOWN_RESTRICT_DIV == cur_state) {
+    //     // Restriction: divide by number of active PEs
+    //     f_restriction_division();
+    //     save_timestamp_end(current_level, &timing_restrict, TIMER_ID_RESTRICT);
+    //     next_state = STATE_DOWN_LEVEL_CHECK;
+    //     f_trigger_state_machine();
         
     } else if (STATE_DOWN_LEVEL_CHECK == cur_state) {
         current_level = current_level + 1;
@@ -699,29 +699,29 @@ task f_state() void {
     else if (STATE_UP_INIT == cur_state) {
         // Initialize level for up cycle
         f_setup_level(@as(u16, current_level), 0); // (.. , down=False for up cycle)
-        next_state = STATE_UP_EXPAND_Z;
-        f_trigger_state_machine();
-        
-    } else if (STATE_UP_EXPAND_Z == cur_state) {
-        // Expand z dimension: duplicate each coarse element to 2 fine elements
-        // This prepares u for broadcasting (u currently has coarse z dim, needs fine z dim)
-        save_timestamp_start(TIMER_ID_INTERP);
-        f_interpolation_expand_z();
-        next_state = STATE_UP_BCAST;
-        f_trigger_state_machine();
-        
-    } else if (STATE_UP_BCAST == cur_state) {
-        // Broadcast from top-left
-        next_state = STATE_UP_INTERP_ADD;
-        f_bcast_from_top_left();
-        
-    } else if (STATE_UP_INTERP_ADD == cur_state) {
-        // Add interpolated correction
-        f_interpolation_add();
-        save_timestamp_end(current_level, &timing_interp, TIMER_ID_INTERP);
-        current_smooth_iter = 0;
         next_state = STATE_UP_SMOOTH_APPLY;
         f_trigger_state_machine();
+        
+    // } else if (STATE_UP_EXPAND_Z == cur_state) {
+    //     // Expand z dimension: duplicate each coarse element to 2 fine elements
+    //     // This prepares u for broadcasting (u currently has coarse z dim, needs fine z dim)
+    //     save_timestamp_start(TIMER_ID_INTERP);
+    //     f_interpolation_expand_z();
+    //     next_state = STATE_UP_BCAST;
+    //     f_trigger_state_machine();
+        
+    // } else if (STATE_UP_BCAST == cur_state) {
+    //     // Broadcast from top-left
+    //     next_state = STATE_UP_INTERP_ADD;
+    //     f_bcast_from_top_left();
+        
+    // } else if (STATE_UP_INTERP_ADD == cur_state) {
+    //     // Add interpolated correction
+    //     f_interpolation_add();
+    //     save_timestamp_end(current_level, &timing_interp, TIMER_ID_INTERP);
+    //     current_smooth_iter = 0;
+    //     next_state = STATE_UP_SMOOTH_APPLY;
+    //     f_trigger_state_machine();
         
     } else if (STATE_UP_SMOOTH_APPLY == cur_state) {
         // Start timing for UP smooth (first iteration only)
@@ -755,29 +755,29 @@ task f_state() void {
             // V-cycle complete, need to compute residual at level 0 for convergence checking
             // Set current_level back to 0 and compute residual
             current_level = 0;
-            next_state = STATE_RESIDUAL_AFTER_V_CYCLE_APPLY;
+            next_state = STATE_CALC_RHO;
         }
         f_trigger_state_machine();
         
-    } else if (STATE_RESIDUAL_AFTER_V_CYCLE_APPLY == cur_state) {
-        // After V-cycle: restore level 0 context and apply operator to compute Au
-        // CRITICAL: Must restore level 0 context to ensure:
-        // 1. f is restored to original RHS from save_f_down
-        // 2. DSD lengths (n) are correct for level 0
-        // 3. Stencil coefficients are correct for level 0
-        f_setup_level(@as(u16, current_level), 0); // down=False, restores f from save_f_down
-        next_state = STATE_RESIDUAL_AFTER_V_CYCLE_COMPUTE;
+    // } else if (STATE_RESIDUAL_AFTER_V_CYCLE_APPLY == cur_state) {
+    //     // After V-cycle: restore level 0 context and apply operator to compute Au
+    //     // CRITICAL: Must restore level 0 context to ensure:
+    //     // 1. f is restored to original RHS from save_f_down
+    //     // 2. DSD lengths (n) are correct for level 0
+    //     // 3. Stencil coefficients are correct for level 0
+    //     f_setup_level(@as(u16, current_level), 0); // down=False, restores f from save_f_down
+    //     next_state = STATE_RESIDUAL_AFTER_V_CYCLE_COMPUTE;
         
-        // timer.start(TIMER_ID_RHO_CHECK);
-        f_apply_operator();
+    //     // timer.start(TIMER_ID_RHO_CHECK);
+    //     f_apply_operator();
         
-    } else if (STATE_RESIDUAL_AFTER_V_CYCLE_COMPUTE == cur_state) {
-        // Compute residual r = f - Au at level 0
-        // At this point, f should be the original RHS (restored by f_setup_level)
-        counter_residual[current_level] -= 1;       // Adjust the counter as we count the final residual check for RHO as seperate and not in residual computation
-        f_residual();
-        next_state = STATE_CALC_RHO;
-        f_trigger_state_machine();
+    // } else if (STATE_RESIDUAL_AFTER_V_CYCLE_COMPUTE == cur_state) {
+    //     // Compute residual r = f - Au at level 0
+    //     // At this point, f should be the original RHS (restored by f_setup_level)
+    //     counter_residual[current_level] -= 1;       // Adjust the counter as we count the final residual check for RHO as seperate and not in residual computation
+    //     f_residual();
+    //     next_state = STATE_CALC_RHO;
+    //     f_trigger_state_machine();
         
     } else if (STATE_CALC_RHO == cur_state) {
         // Compute rho = max(r) at level 0
