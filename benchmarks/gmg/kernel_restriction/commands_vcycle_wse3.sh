@@ -51,28 +51,48 @@ echo ""
 # Clean previous runs
 # rm -rf out_vcycle sim.log simfab_traces
 
+# (16, 4, 1, 1e-5, 6, 6, 100),   # Small problem
 echo "Compiling..."
-cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=12,10 --fabric-offsets=4,1 \
---params=width:4,height:4,MAX_ZDIM:4,LEVELS:2,BLOCK_SIZE:4 -o=out_vcycle \
---memcpy --channels=4 --width-west-buf=0 --width-east-buf=0 --max-inlined-iterations=1000000
+cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=25,18 --fabric-offsets=4,1 \
+--params=width:16,height:16,MAX_ZDIM:16,LEVELS:4,BLOCK_SIZE:16 -o=out_vcycle \
+--memcpy --channels=15 --width-west-buf=0 --width-east-buf=0 --max-inlined-iterations=1000000
 
-cs_python ./run_gmg_vcycle.py -m=4 -n=4 -k=4 --latestlink out_vcycle --channels=4 \
---width-west-buf=0 --width-east-buf=0 --zDim=4 --run-only --levels=2 --max-ite=100 --pre-iter=6 --post-iter=6 --bottom-iter=100 --tolerance=1e-5
+cs_python ./run_gmg_vcycle.py -m=16 -n=16 -k=16 --latestlink out_vcycle --channels=15 \
+--width-west-buf=0 --width-east-buf=0 --zDim=16 --run-only --levels=4 --max-ite=1 --pre-iter=6 --post-iter=6 --bottom-iter=100 --tolerance=1e-5 --blockSize=16
 
 ./check_memory_usage.sh out_vcycle 0 0 --summary
 
 # echo "============================================"
 # echo "Done"
 # echo "============================================"
+# (4, 2, 1, 1e-5, 6, 6, 100),
 # echo "Compiling..."
-# cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=25,18 --fabric-offsets=4,1 \
-# --params=width:16,height:16,MAX_ZDIM:16,LEVELS:4,BLOCK_SIZE:16 -o=out_vcycle \
-# --memcpy --channels=8 --width-west-buf=0 --width-east-buf=0 --max-inlined-iterations=1000000
+# cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=12,6 --fabric-offsets=4,1 \
+# --params=width:4,height:4,MAX_ZDIM:4,LEVELS:2,BLOCK_SIZE:4 -o=out_vcycle \
+# --memcpy --channels=4 --width-west-buf=0 --width-east-buf=0 --max-inlined-iterations=1000000
+# cs_python ./run_gmg_vcycle.py -m=4 -n=4 -k=4 --latestlink out_vcycle --channels=4 \
+# --width-west-buf=0 --width-east-buf=0 --zDim=4 --run-only --levels=2 --max-ite=1 --pre-iter=6 --post-iter=6 --bottom-iter=100 --tolerance=1e-5 --blockSize=4
+# ./check_memory_usage.sh out_vcycle 0 0 --summary
 # echo "============================================"
-# echo "Running with 1 V-cycle, 1 pre-iter, 1 post-iter, 1 bottom-iter"
-# cs_python ./run_gmg_vcycle.py -m=16 -n=16 -k=16 --latestlink out_vcycle --channels=8 \
-# --width-west-buf=0 --width-east-buf=0 --zDim=16 --run-only --levels=4 --max-ite=1 --pre-iter=1 --post-iter=1 --bottom-iter=1
 
+# # (8, 3, 1, 1e-5, 6, 6, 100),
+# echo "Compiling..."
+# cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=16,10 --fabric-offsets=4,1 \
+# --params=width:8,height:8,MAX_ZDIM:8,LEVELS:3,BLOCK_SIZE:8 -o=out_vcycle \
+# --memcpy --channels=8 --width-west-buf=0 --width-east-buf=0 --max-inlined-iterations=1000000
+# cs_python ./run_gmg_vcycle.py -m=8 -n=8 -k=8 --latestlink out_vcycle --channels=8 \
+# --width-west-buf=0 --width-east-buf=0 --zDim=8 --run-only --levels=3 --max-ite=1 --pre-iter=6 --post-iter=6 --bottom-iter=100 --tolerance=1e-5 --blockSize=8
+# ./check_memory_usage.sh out_vcycle 0 0 --summary
+# echo "============================================"
+
+# # (32, 5, 1, 1e-5, 6, 6, 100)
+# echo "Compiling..."
+# cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=40,34 --fabric-offsets=4,1 \
+# --params=width:32,height:32,MAX_ZDIM:32,LEVELS:5,BLOCK_SIZE:32 -o=out_vcycle \
+# --memcpy --channels=16 --width-west-buf=0 --width-east-buf=0 --max-inlined-iterations=1000000
+# cs_python ./run_gmg_vcycle.py -m=32 -n=32 -k=32 --latestlink out_vcycle --channels=16 \
+# --width-west-buf=0 --width-east-buf=0 --zDim=32 --run-only --levels=5 --max-ite=1 --pre-iter=6 --post-iter=6 --bottom-iter=100 --tolerance=1e-5 --blockSize=32
+# ./check_memory_usage.sh out_vcycle 0 0 --summary
 # echo "============================================"
 # echo "Running with 1 V-cycle, 6 pre-iter, 6 post-iter, ? bottom-iter"
 # cs_python ./run_gmg_vcycle.py -m=16 -n=16 -k=16 --latestlink out_vcycle --channels=8 \

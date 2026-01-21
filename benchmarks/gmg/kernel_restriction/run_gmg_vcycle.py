@@ -16,8 +16,8 @@ import numpy as np
 import copy
 
 # sys.path.append(os.path.join(os.path.dirname(__file__), '..', "python_gmg"))
-# from python_gmg.gmgoscar import SimpleGMG as SimpleGMGOSCAR
-from gmgoscar import SimpleGMG as SimpleGMGOSCAR
+from python_gmg.gmgoscar import SimpleGMG as SimpleGMGOSCAR
+# from gmgoscar import SimpleGMG as SimpleGMGOSCAR
 from cmd_parser import parse_args, print_arguments
 from util import hwl_2_oned_colmajor, oned_to_hwl_colmajor
 
@@ -195,46 +195,6 @@ def copy_rho_history(height, width, memcpy_dtype, memcpy_order, simulator, symbo
 
     return rho_history_1d, actual_iterations
 
-def copy_counter_data(height, width, levels, simulator, symbol_counter_smooth, symbol_counter_residual, 
-                     symbol_counter_apply_op, symbol_counter_restrict, symbol_counter_interp, symbol_counter_setup_init, symbol_counter_rho_check, args):
-    """Copy all operation counters from device"""
-    counter_smooth = copy_counters(height, width, args.levels, simulator, symbol_counter_smooth)
-    # counter_smooth1 = copy_counters(height, width, args.levels, simulator, symbol_counter_smooth)
-    # print(f"counter_smooth: \n {counter_smooth}")
-    # print(f"counter_smooth1: \n {counter_smooth1}")
-
-    counter_residual = copy_counters(height, width, args.levels, simulator, symbol_counter_residual)
-    # counter_residual1 = copy_counters(height, width, args.levels, simulator, symbol_counter_residual)
-    # print(f"counter_residual: \n {counter_residual}")
-    # print(f"counter_residual1: \n {counter_residual1}")
-
-    counter_setup_init = copy_counters(height, width, args.levels, simulator, symbol_counter_setup_init) # hang
-    # counter_setup_init1 = copy_counters(height, width, args.levels, simulator, symbol_counter_setup_init)
-    # print(f"counter_setup_init: \n {counter_setup_init}")
-    # print(f"counter_setup_init1: \n {counter_setup_init1}")
-
-    counter_restrict = copy_counters(height, width, args.levels, simulator, symbol_counter_restrict)
-    # counter_restrict1 = copy_counters(height, width, args.levels, simulator, symbol_counter_restrict)
-    # print(f"counter_restrict: \n {counter_restrict}")
-    # print(f"counter_restrict1: \n {counter_restrict1}")
-
-    counter_apply_op = copy_counters(height, width, args.levels, simulator, symbol_counter_apply_op)
-    # counter_apply_op1 = copy_counters(height, width, args.levels, simulator, symbol_counter_apply_op)
-    # print(f"counter_apply_op: \n {counter_apply_op}")
-    # print(f"counter_apply_op1: \n {counter_apply_op1}")
-
-    counter_interp = copy_counters(height, width, args.levels, simulator, symbol_counter_interp)
-    # counter_interp1 = copy_counters(height, width, args.levels, simulator, symbol_counter_interp)
-    # print(f"counter_interp: \n {counter_interp}")
-    # print(f"counter_interp1: \n {counter_interp1}")
-
-    counter_rho_check = copy_counters(height, width, args.levels, simulator, symbol_counter_rho_check)
-    # counter_rho_check1 = copy_counters(height, width, args.levels, simulator, symbol_counter_rho_check)
-    # print(f"counter_rho_check: \n {counter_rho_check}")
-    # print(f"counter_rho_check1: \n {counter_rho_check1}")
-
-    return counter_smooth, counter_residual, counter_apply_op, counter_restrict, counter_interp, counter_setup_init, counter_rho_check
-
 def print_configuration_summary(
     args,
     device_solver,
@@ -284,22 +244,11 @@ def profiling(
         device_solver, device_rh,
         counter_smooth, counter_residual, counter_restrict, counter_interp, counter_rho_check, counter_apply_op, counter_setup_init,
         simulator, 
-        symbol_timing_smooth, symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, symbol_timing_spmv_total, symbol_timing_spmv_communication, symbol_timing_spmv_compute, symbol_time_total_start_end
+        timing_smooth_data, timing_residual_data, timing_restrict_data, timing_interp_data, timing_spmv_total_data, timing_spmv_communication_data, timing_spmv_compute_data, timing_total_start_end_data
     ):
     print("\n" + "="*60)
     print("Performance Timing")
     print("="*60)
-
-    timing_smooth_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_smooth, WORDS_PER_TIMESTAMP, "smooth")
-    timing_residual_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_residual, WORDS_PER_TIMESTAMP, "residual")
-    timing_restrict_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_restrict, WORDS_PER_TIMESTAMP, "restriction")
-    timing_interp_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_interp, WORDS_PER_TIMESTAMP, "interpolation")
-    timing_spmv_total_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_spmv_total, WORDS_PER_TIMESTAMP, "spmv_total")
-    timing_spmv_communication_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_spmv_communication, WORDS_PER_TIMESTAMP, "spmv_communication")
-    timing_spmv_compute_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_spmv_compute, WORDS_PER_TIMESTAMP, "spmv_compute")
-    counter_one = np.array([1]) # Because we have only 1 level
-    ones = np.ones(args.levels, dtype=int)
-    timing_total_start_end_data = copy_timing_make_48bit(1, simulator, symbol_time_total_start_end, WORDS_PER_TIMESTAMP, "total")
 
     ############################################################
     # Time per operation and level (us[cycles]):
@@ -601,29 +550,77 @@ def main():
     # Copy results back
     print("6. Copying results from device...")
 
+    print("  6.1. Copying timing data...")
+    timing_smooth_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_smooth, WORDS_PER_TIMESTAMP, "smooth")
+    timing_residual_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_residual, WORDS_PER_TIMESTAMP, "residual")
+    timing_restrict_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_restrict, WORDS_PER_TIMESTAMP, "restriction")
+    timing_interp_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_interp, WORDS_PER_TIMESTAMP, "interpolation")
+    timing_spmv_total_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_spmv_total, WORDS_PER_TIMESTAMP, "spmv_total")
+    timing_spmv_communication_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_spmv_communication, WORDS_PER_TIMESTAMP, "spmv_communication")
+    timing_spmv_compute_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_spmv_compute, WORDS_PER_TIMESTAMP, "spmv_compute")
+    counter_one = np.array([1]) # Because we have only 1 level
+    ones = np.ones(args.levels, dtype=int)
+    timing_total_start_end_data = copy_timing_make_48bit(1, simulator, symbol_time_total_start_end, WORDS_PER_TIMESTAMP, "total")
+
+    def init(levels, operation_name):
+        timing_per_level = []
+        for i in range(levels):
+            timing_per_level.append({
+                'level': i,
+                'operation': operation_name,
+                'cycles_send': 0,
+                'time_send': 0
+            })
+        return timing_per_level
+
+    # timing_smooth_data = init(args.levels, "smooth")
+    # timing_residual_data = init(args.levels, "residual")
+    # timing_interp_data = init(args.levels, "interpolation")
+    # timing_spmv_total_data = init(args.levels, "spmv_total")
+    # timing_spmv_communication_data = init(args.levels, "spmv_communication")
+    # timing_spmv_compute_data = init(args.levels, "spmv_compute")
+    # timing_total_start_end_data = init(1, "total")
+
+    # print(f"timing_smooth_data: {timing_smooth_data}")
+    # print(f"timing_residual_data: {timing_residual_data}")
+    # print(f"timing_restrict_data: {timing_restrict_data}")
+    # print(f"timing_interp_data: {timing_interp_data}")
+    # print(f"timing_spmv_total_data: {timing_spmv_total_data}")
+    # print(f"timing_spmv_communication_data: {timing_spmv_communication_data}")
+    # print(f"timing_spmv_compute_data: {timing_spmv_compute_data}")
+    # print(f"timing_total_start_end_data: {timing_total_start_end_data}")
+
+
     print("  6.2. Copying operation counters...")
-    counter_smooth, counter_residual, counter_apply_op, counter_restrict, counter_interp, counter_setup_init, counter_rho_check = \
-        copy_counter_data(height, width, args.levels, simulator, 
-                         symbol_counter_smooth, symbol_counter_residual, 
-                         symbol_counter_apply_op, symbol_counter_restrict, 
-                         symbol_counter_interp, symbol_counter_setup_init, symbol_counter_rho_check, args)
+    counter_smooth = copy_counters(height, width, args.levels, simulator, symbol_counter_smooth)
+    counter_residual = copy_counters(height, width, args.levels, simulator, symbol_counter_residual)
+    counter_setup_init = copy_counters(height, width, args.levels, simulator, symbol_counter_setup_init) # hang
+    counter_restrict = copy_counters(height, width, args.levels, simulator, symbol_counter_restrict)
+    counter_apply_op = copy_counters(height, width, args.levels, simulator, symbol_counter_apply_op)
+    counter_interp = copy_counters(height, width, args.levels, simulator, symbol_counter_interp)
+    counter_rho_check = copy_counters(height, width, args.levels, simulator, symbol_counter_rho_check)
+    print(f"counter_smooth: {counter_smooth}")
+    print(f"counter_residual: {counter_residual}")
+    print(f"counter_setup_init: {counter_setup_init}")
+    print(f"counter_restrict: {counter_restrict}")
+    print(f"counter_apply_op: {counter_apply_op}")
+    print(f"counter_interp: {counter_interp}")
+    print(f"counter_rho_check: {counter_rho_check}")
+
+    
     # Copy rho_history after counter is available to minimize data transfer
     rho_history_array, actual_iterations = copy_rho_history(height, width, memcpy_dtype, memcpy_order, simulator, symbol_rho_history, counter_rho_check, args)
-
-    # # Copy timing data from device
-    print("  6.1. Copying timing data...")
-
-############################################################
-# Stop simulator
-############################################################
-    # device_solver.grids[0]['u'] = u_wse_3d
-    # device_solver.grids[0]['r'] = r_wse_3d
-    device_solver.grids[0]['rho_up'] = rho_history_array[actual_iterations - 1]
+    print(f"rho_history_array: {rho_history_array}")
+    print(f"actual_iterations: {actual_iterations}")
+    if actual_iterations > 0:
+        device_solver.grids[0]['rho_up'] = rho_history_array[actual_iterations - 1]
+    else:
+        device_solver.grids[0]['rho_up'] = 0.0
 
 
-############################################################
-# Convergence
-############################################################
+    ###########################################################
+    # Convergence
+    ###########################################################
     device_rh = device_solver.grids[0]['rho_up']
 
     # Print rho values after each iteration
@@ -660,6 +657,7 @@ def main():
 # Timing
 ############################################################
 
+
     # counter_smooth = 0
     # counter_residual = 0
     # counter_restrict = 0
@@ -673,7 +671,7 @@ def main():
         device_solver, device_rh,
         counter_smooth, counter_residual, counter_restrict, counter_interp, counter_rho_check, counter_apply_op, counter_setup_init,
         simulator, 
-        symbol_timing_smooth, symbol_timing_residual, symbol_timing_restrict, symbol_timing_interp, symbol_timing_spmv_total, symbol_timing_spmv_communication, symbol_timing_spmv_compute, symbol_time_total_start_end
+        timing_smooth_data, timing_residual_data, timing_restrict_data, timing_interp_data, timing_spmv_total_data, timing_spmv_communication_data, timing_spmv_compute_data, timing_total_start_end_data
         )  
     print("7. Stopping simulator...")
     simulator.stop()

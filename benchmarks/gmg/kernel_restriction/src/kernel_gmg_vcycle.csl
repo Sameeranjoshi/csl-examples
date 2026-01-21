@@ -298,6 +298,8 @@ fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
     timer.stop(timer_id);
     const offset: i16 = level * timer.tsc_size_words;
     timer.accumulate_elapsed(timer_id, @ptrcast(*[timer.tsc_size_words]u16, &timing_array[offset]));
+    // timer.elapsed(timer_id, @ptrcast(*[timer.tsc_size_words]u16, &timing_array[offset]));
+
 }
 //-------------------------------------------------
 // GMG KERNELS
@@ -588,6 +590,7 @@ task f_state() void {
     // DOWN CYCLE
     // ------------------------------------------------
     else if (STATE_DOWN_INIT == cur_state) {
+        // reduce_mod.allreduce(1, &dot, reduce_mod.TYPE_BINARY_OP.ADD);
         // Initialize current level
         f_setup_level(@as(u16, current_level), 1); // (.. , down=True/False)
         current_smooth_iter = 0;
@@ -599,7 +602,8 @@ task f_state() void {
         save_timestamp_start(TIMER_ID_RESTRICT);
         next_state = STATE_DOWN_RESTRICT_DIV;
         f_reduce_row_col_top_left();
-        
+        // f_trigger_state_machine();
+
     } else if (STATE_DOWN_RESTRICT_DIV == cur_state) {
         // Restriction: divide by number of active PEs
         f_restriction_division();
@@ -612,68 +616,68 @@ task f_state() void {
         if (current_level < num_levels - 1) {   // (coarsest - 1) level
             next_state = STATE_DOWN_INIT;
         } else {
-            next_state = STATE_COARSE_INIT;
+            next_state = STATE_EXIT;
         }
         f_trigger_state_machine();
         
-    } 
+    }
     // ------------------------------------------------
     // COARSE LEVEL
     // ------------------------------------------------
-    else if (STATE_COARSE_INIT == cur_state) {
-        // Initialize coarsest level
-        f_setup_level(@as(u16, current_level), 1);
-        current_smooth_iter = 0;
-        next_state = STATE_UP_INIT;
-        f_trigger_state_machine();
+    // else if (STATE_COARSE_INIT == cur_state) {
+    //     // Initialize coarsest level
+    //     f_setup_level(@as(u16, current_level), 1);
+    //     current_smooth_iter = 0;
+    //     next_state = STATE_UP_INIT;
+    //     f_trigger_state_machine();
 
-    }
+    // }
     // ------------------------------------------------
     // UP CYCLE
     // ------------------------------------------------
-    else if (STATE_UP_INIT == cur_state) {
-        // Initialize level for up cycle
-        f_setup_level(@as(u16, current_level), 0); // (.. , down=False for up cycle)
-        next_state = STATE_UP_LEVEL_CHECK;
-        f_trigger_state_machine();
+    // else if (STATE_UP_INIT == cur_state) {
+    //     // Initialize level for up cycle
+    //     f_setup_level(@as(u16, current_level), 0); // (.. , down=False for up cycle)
+    //     next_state = STATE_UP_LEVEL_CHECK;
+    //     f_trigger_state_machine();
         
-    } else if (STATE_UP_LEVEL_CHECK == cur_state) {
-        current_level = current_level - 1;
-        if (current_level >= 0) {
-            next_state = STATE_UP_INIT;
-        } else {
-            // V-cycle complete, need to compute residual at level 0 for convergence checking
-            // Set current_level back to 0 and compute residual
-            current_level = 0;
-            next_state = STATE_CONV_CHECK;
-        }
-        f_trigger_state_machine();
+    // } else if (STATE_UP_LEVEL_CHECK == cur_state) {
+    //     current_level = current_level - 1;
+    //     if (current_level >= 0) {
+    //         next_state = STATE_UP_INIT;
+    //     } else {
+    //         // V-cycle complete, need to compute residual at level 0 for convergence checking
+    //         // Set current_level back to 0 and compute residual
+    //         current_level = 0;
+    //         next_state = STATE_CONV_CHECK;
+    //     }
+    //     f_trigger_state_machine();
         
-    } else if (STATE_CONV_CHECK == cur_state) {
-        // Store rho[0] in history array for host reading
-        if (k < MAX_ITERATIONS) {
-            rho_history[k] = rho[0];
-        }
-        // Compute rho = max(r)
-        // if max(r) < tol, then exit
-        // if (rho > tolerance) and (k < max_iter), continue
-        // This matches the Python implementation: while (xi_max > self.rel_tolerance) and (iterations < max_iter)
-        k = k + 1;
-        if ((rho[0] > tolerance) and (k < max_iter)) {
-            // Not converged and iterations remaining: increment counter and start next V-cycle
-            next_state = STATE_INIT;
-        } else {
-            // Converged or max iterations reached: exit
-            next_state = STATE_EXIT;
-            // f_toc_total();
+    // } else if (STATE_CONV_CHECK == cur_state) {
+    //     // Store rho[0] in history array for host reading
+    //     if (k < MAX_ITERATIONS) {
+    //         rho_history[k] = rho[0];
+    //     }
+    //     // Compute rho = max(r)
+    //     // if max(r) < tol, then exit
+    //     // if (rho > tolerance) and (k < max_iter), continue
+    //     // This matches the Python implementation: while (xi_max > self.rel_tolerance) and (iterations < max_iter)
+    //     k = k + 1;
+    //     if ((rho[0] > tolerance) and (k < max_iter)) {
+    //         // Not converged and iterations remaining: increment counter and start next V-cycle
+    //         next_state = STATE_INIT;
+    //     } else {
+    //         // Converged or max iterations reached: exit
+    //         next_state = STATE_EXIT;
+    //         // f_toc_total();
 
-        }
-        // save_timestamp_end(current_level, &timing_rho_check, TIMER_ID_RHO_CHECK);
-        counter_rho_check[current_level] += 1;
-        // print_time_debug();
-        f_trigger_state_machine();
+    //     }
+    //     // save_timestamp_end(current_level, &timing_rho_check, TIMER_ID_RHO_CHECK);
+    //     counter_rho_check[current_level] += 1;
+    //     // print_time_debug();
+    //     f_trigger_state_machine();
         
-    }
+    // }
     // ------------------------------------------------
     // EXIT
     // ------------------------------------------------    
