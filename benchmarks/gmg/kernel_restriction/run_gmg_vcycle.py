@@ -518,32 +518,32 @@ def main():
 ############################################################
     # Enable timing and synchronize PEs
     print("1. Enabling timer...")
-    simulator.launch("f_enable_timer", nonblock=False)
+    # simulator.launch("f_enable_timer", nonblock=False)
     
     # Copy initial data
     print("2. Copying initial data to device...")
    # Timing measures inside the function
-    total_bytes_h2d = copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, 
-                 symbol_u, symbol_f, symbol_hx_array, symbol_hy_array, symbol_hz_array, symbol_jacobi_coeff_array, device_solver, args)
+    # total_bytes_h2d = copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, 
+    #              symbol_u, symbol_f, symbol_hx_array, symbol_hy_array, symbol_hz_array, symbol_jacobi_coeff_array, device_solver, args)
 ############################################################
 # Kernel launch
 ############################################################
 
     print("5. Tic total...")
-    simulator.launch("f_tic_total", nonblock=True)
+    # simulator.launch("f_tic_total", nonblock=True)
     # Run GMG V-cycle with convergence checking on device
     print(f"5. Running GMG V-cycle(max_iter={args.max_ite}, levels={args.levels}) on device...")
-    simulator.launch("f_gmg_vcycle", 
-                    # np.int16(zDim), 
-                    np.int16(args.levels),
-                    np.int16(args.pre_iter),
-                    np.int16(args.post_iter),
-                    np.int16(args.bottom_iter),
-                    np.int16(args.max_ite),  # max_iter parameter
-                    np.float32(device_solver.rel_tolerance),  # tolerance parameter (relative tolerance, will be squared in kernel)
-                    nonblock=False)
+    # simulator.launch("f_gmg_vcycle", 
+    #                 # np.int16(zDim), 
+    #                 np.int16(args.levels),
+    #                 np.int16(args.pre_iter),
+    #                 np.int16(args.post_iter),
+    #                 np.int16(args.bottom_iter),
+    #                 np.int16(args.max_ite),  # max_iter parameter
+    #                 np.float32(device_solver.rel_tolerance),  # tolerance parameter (relative tolerance, will be squared in kernel)
+    #                 nonblock=False)
     print("6. Toc total...")
-    simulator.launch("f_toc_total", nonblock=False)
+    # simulator.launch("f_toc_total", nonblock=False)
 ############################################################
 # Copy results and timing data back
 ############################################################
@@ -558,9 +558,9 @@ def main():
     timing_spmv_total_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_spmv_total, WORDS_PER_TIMESTAMP, "spmv_total")
     timing_spmv_communication_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_spmv_communication, WORDS_PER_TIMESTAMP, "spmv_communication")
     timing_spmv_compute_data = copy_timing_make_48bit(args.levels, simulator, symbol_timing_spmv_compute, WORDS_PER_TIMESTAMP, "spmv_compute")
-    counter_one = np.array([1]) # Because we have only 1 level
-    ones = np.ones(args.levels, dtype=int)
-    timing_total_start_end_data = copy_timing_make_48bit(1, simulator, symbol_time_total_start_end, WORDS_PER_TIMESTAMP, "total")
+    # counter_one = np.array([1]) # Because we have only 1 level
+    # ones = np.ones(args.levels, dtype=int)
+    # timing_total_start_end_data = copy_timing_make_48bit(1, simulator, symbol_time_total_start_end, WORDS_PER_TIMESTAMP, "total")
 
     def init(levels, operation_name):
         timing_per_level = []
@@ -573,99 +573,91 @@ def main():
             })
         return timing_per_level
 
-    # timing_smooth_data = init(args.levels, "smooth")
-    # timing_residual_data = init(args.levels, "residual")
-    # timing_interp_data = init(args.levels, "interpolation")
-    # timing_spmv_total_data = init(args.levels, "spmv_total")
-    # timing_spmv_communication_data = init(args.levels, "spmv_communication")
-    # timing_spmv_compute_data = init(args.levels, "spmv_compute")
-    # timing_total_start_end_data = init(1, "total")
-
-    # print(f"timing_smooth_data: {timing_smooth_data}")
-    # print(f"timing_residual_data: {timing_residual_data}")
-    # print(f"timing_restrict_data: {timing_restrict_data}")
-    # print(f"timing_interp_data: {timing_interp_data}")
-    # print(f"timing_spmv_total_data: {timing_spmv_total_data}")
-    # print(f"timing_spmv_communication_data: {timing_spmv_communication_data}")
-    # print(f"timing_spmv_compute_data: {timing_spmv_compute_data}")
-    # print(f"timing_total_start_end_data: {timing_total_start_end_data}")
+    timing_smooth_data = init(args.levels, "smooth")
+    timing_residual_data = init(args.levels, "residual")
+    timing_restrict_data = init(args.levels, "restriction")
+    timing_interp_data = init(args.levels, "interpolation")
+    timing_spmv_total_data = init(args.levels, "spmv_total")
+    timing_spmv_communication_data = init(args.levels, "spmv_communication")
+    timing_spmv_compute_data = init(args.levels, "spmv_compute")
+    timing_total_start_end_data = init(1, "total")
 
 
-    print("  6.2. Copying operation counters...")
+    # print("  6.2. Copying operation counters...")
     counter_smooth = copy_counters(height, width, args.levels, simulator, symbol_counter_smooth)
     counter_residual = copy_counters(height, width, args.levels, simulator, symbol_counter_residual)
-    counter_setup_init = copy_counters(height, width, args.levels, simulator, symbol_counter_setup_init) # hang
-    counter_restrict = copy_counters(height, width, args.levels, simulator, symbol_counter_restrict)
-    counter_apply_op = copy_counters(height, width, args.levels, simulator, symbol_counter_apply_op)
-    counter_interp = copy_counters(height, width, args.levels, simulator, symbol_counter_interp)
-    counter_rho_check = copy_counters(height, width, args.levels, simulator, symbol_counter_rho_check)
+    # counter_setup_init = copy_counters(height, width, args.levels, simulator, symbol_counter_setup_init) # hang
+    # counter_restrict = copy_counters(height, width, args.levels, simulator, symbol_counter_restrict)
+    # counter_apply_op = copy_counters(height, width, args.levels, simulator, symbol_counter_apply_op)
+    # counter_interp = copy_counters(height, width, args.levels, simulator, symbol_counter_interp)
+    # counter_rho_check = copy_counters(height, width, args.levels, simulator, symbol_counter_rho_check)  # This line breaks!
     print(f"counter_smooth: {counter_smooth}")
-    print(f"counter_residual: {counter_residual}")
-    print(f"counter_setup_init: {counter_setup_init}")
-    print(f"counter_restrict: {counter_restrict}")
-    print(f"counter_apply_op: {counter_apply_op}")
-    print(f"counter_interp: {counter_interp}")
-    print(f"counter_rho_check: {counter_rho_check}")
+    # print(f"counter_residual: {counter_residual}")
+    # print(f"counter_setup_init: {counter_setup_init}")
+    # print(f"counter_restrict: {counter_restrict}")
+    # print(f"counter_apply_op: {counter_apply_op}")
+    # print(f"counter_interp: {counter_interp}")
+    # print(f"counter_rho_check: {counter_rho_check}")
 
     
-    # Copy rho_history after counter is available to minimize data transfer
-    rho_history_array, actual_iterations = copy_rho_history(height, width, memcpy_dtype, memcpy_order, simulator, symbol_rho_history, counter_rho_check, args)
-    print(f"rho_history_array: {rho_history_array}")
-    print(f"actual_iterations: {actual_iterations}")
-    if actual_iterations > 0:
-        device_solver.grids[0]['rho_up'] = rho_history_array[actual_iterations - 1]
-    else:
-        device_solver.grids[0]['rho_up'] = 0.0
+    # # Copy rho_history after counter is available to minimize data transfer
+    # rho_history_array, actual_iterations = copy_rho_history(height, width, memcpy_dtype, memcpy_order, simulator, symbol_rho_history, counter_rho_check, args)
+    # print(f"rho_history_array: {rho_history_array}")
+    # print(f"actual_iterations: {actual_iterations}")
+    # if actual_iterations > 0:
+    #     device_solver.grids[0]['rho_up'] = rho_history_array[actual_iterations - 1]
+    # else:
+    #     device_solver.grids[0]['rho_up'] = 0.0
 
 
     ###########################################################
     # Convergence
     ###########################################################
-    device_rh = device_solver.grids[0]['rho_up']
+    # device_rh = device_solver.grids[0]['rho_up']
 
-    # Print rho values after each iteration
-    print("\n" + "="*60)
-    print("Rho values after each iteration")
-    print("="*60)
-    if len(rho_history_array) > 0:
-        # Find actual number of iterations (find last non-zero value)
-        actual_iterations = 0
-        for i in range(len(rho_history_array)):
-            if rho_history_array[i] != 0.0:
-                actual_iterations = i + 1
+    # # Print rho values after each iteration
+    # print("\n" + "="*60)
+    # print("Rho values after each iteration")
+    # print("="*60)
+    # if len(rho_history_array) > 0:
+    #     # Find actual number of iterations (find last non-zero value)
+    #     actual_iterations = 0
+    #     for i in range(len(rho_history_array)):
+    #         if rho_history_array[i] != 0.0:
+    #             actual_iterations = i + 1
         
-        if actual_iterations > 0:
-            print(f"Total iterations performed: {actual_iterations}")
-            print(f"{'Iteration':<12} {'|rho|_max':<20}")
-            print("-" * 60)
-            for i in range(actual_iterations):
-                rho_val = rho_history_array[i]
-                print(f"{i+1:<12} {rho_val:>19.6e}")
-        else:
-            print("No iterations were performed.")
-    else:
-        print("No iterations were performed.")
+    #     if actual_iterations > 0:
+    #         print(f"Total iterations performed: {actual_iterations}")
+    #         print(f"{'Iteration':<12} {'|rho|_max':<20}")
+    #         print("-" * 60)
+    #         for i in range(actual_iterations):
+    #             rho_val = rho_history_array[i]
+    #             print(f"{i+1:<12} {rho_val:>19.6e}")
+    #     else:
+    #         print("No iterations were performed.")
+    # else:
+    #     print("No iterations were performed.")
 
-    print(f"[GMG] rho = |b-A*x|_inf = {device_rh:.6e}")
-    # Use rel_tolerance^2 for convergence check (matching solve_iterative pattern)
-    tolerance = device_solver.rel_tolerance
-    print(f"  Tolerance = {tolerance:.6e}")
-    converged = device_rh <= tolerance
-    print(f"  Converged: {'Yes' if converged else 'No'}")
+    # print(f"[GMG] rho = |b-A*x|_inf = {device_rh:.6e}")
+    # # Use rel_tolerance^2 for convergence check (matching solve_iterative pattern)
+    # tolerance = device_solver.rel_tolerance
+    # print(f"  Tolerance = {tolerance:.6e}")
+    # converged = device_rh <= tolerance
+    # print(f"  Converged: {'Yes' if converged else 'No'}")
 
 ############################################################
 # Timing
 ############################################################
 
 
-    # counter_smooth = 0
-    # counter_residual = 0
-    # counter_restrict = 0
-    # counter_interp = 0
-    # counter_rho_check = 0
-    # counter_apply_op = 0
-    # counter_setup_init = 0
-    # device_rh = 0.0
+    counter_smooth = 0
+    counter_residual = 0
+    counter_restrict = 0
+    counter_interp = 0
+    counter_rho_check = 0
+    counter_apply_op = 0
+    counter_setup_init = 0
+    device_rh = 0.0
     profiling(args,
         WORDS_PER_TIMESTAMP,
         device_solver, device_rh,
