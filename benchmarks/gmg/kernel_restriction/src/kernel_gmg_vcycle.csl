@@ -74,6 +74,7 @@ const STATE_CONV_CHECK: i16 = 23;  // Convergence check after V-cycle
 const STATE_CALC_RHO: i16 = 24;  // Calculate rho = |r|^2
 const STATE_RESIDUAL_AFTER_V_CYCLE_APPLY: i16 = 25;  // Apply operator after V-cycle to compute Au
 const STATE_RESIDUAL_AFTER_V_CYCLE_COMPUTE: i16 = 26;  // Compute residual after V-cycle
+const STATE_SYNC: i16 = 27;
 
 
 // Timer identifiers
@@ -144,14 +145,14 @@ var time_total_start_end_u16 = @zeros([timer.tsc_size_words]u16);   // this is a
 // var timing_setup_init = @zeros([LEVELS * timer.tsc_size_words]u16);      // setup initialization accumulated elapsed timing
 // var timing_rho_check = @zeros([LEVELS * timer.tsc_size_words]u16);      // rho check accumulated elapsed timing
 
-// Operation counters - track number of operations at each level
-var counter_smooth = @zeros([LEVELS]u32);    // Number of up smoothing iterations per level
-var counter_apply_op = @zeros([LEVELS]u32);     // Number of operator applications per level
-var counter_residual = @zeros([LEVELS]u32);     // Number of residual operations per level
+// // Operation counters - track number of operations at each level
+// var counter_smooth = @zeros([LEVELS]u32);    // Number of up smoothing iterations per level
+// var counter_apply_op = @zeros([LEVELS]u32);     // Number of operator applications per level
+// var counter_residual = @zeros([LEVELS]u32);     // Number of residual operations per level
 var counter_rho_check = @zeros([LEVELS]u32);   // Number of rho check operations per level
-var counter_restrict = @zeros([LEVELS]u32);     // Number of restriction operations per level
-var counter_interp = @zeros([LEVELS]u32);       // Number of interpolation operations per level
-var counter_setup_init = @zeros([LEVELS]u32);   // Number of setup initialization operations per level
+// var counter_restrict = @zeros([LEVELS]u32);     // Number of restriction operations per level
+// var counter_interp = @zeros([LEVELS]u32);       // Number of interpolation operations per level
+// var counter_setup_init = @zeros([LEVELS]u32);   // Number of setup initialization operations per level
 
 
 // Reference clock from allreduce module (for TSC synchronization)
@@ -240,12 +241,6 @@ var ptr_timing_spmv_compute: [*]u16 = &timing_spmv_compute;
 // var ptr_timing_communication: [*]u16 = &timing_communication;
 
 // counter pointers
-var ptr_counter_smooth: [*]u32 = &counter_smooth;
-var ptr_counter_apply_op: [*]u32 = &counter_apply_op;
-var ptr_counter_residual: [*]u32 = &counter_residual;
-var ptr_counter_restrict: [*]u32 = &counter_restrict;
-var ptr_counter_interp: [*]u32 = &counter_interp;
-var ptr_counter_setup_init: [*]u32 = &counter_setup_init;
 var ptr_counter_rho_check: [*]u32 = &counter_rho_check;
 var ptr_rho_history: [*]f32 = &rho_history;
 // var ptr_rho: [*]f32 = &rho;
@@ -307,14 +302,14 @@ fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
 
 // Apply operator for Jacobi smoothing
 fn f_apply_operator() void {
-    counter_apply_op[current_level] += 1;
+    // counter_apply_op[current_level] += 1;
     @fmovs(mem_Au_dsd, 0.0);
     stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute);
 }
 
 // Jacobi smoothing: u = u + JACOBI_COEFF * (f - Au)
 fn f_jacobi_smooth() void {
-    counter_smooth[current_level] += 1;
+    // counter_smooth[current_level] += 1;
     const jacobi_coeff: f32 = jacobi_coeff_array[current_level];
     if (is_active_pe) {
         @fsubs(mem_residual_temp_dsd, mem_f_dsd, mem_Au_dsd);
@@ -327,7 +322,7 @@ fn f_jacobi_smooth() void {
 
 // Calculate residual: r = f - Au
 fn f_residual() void {
-    counter_residual[current_level] += 1;
+    // counter_residual[current_level] += 1;
     if (is_active_pe) {
         @fsubs(mem_r_dsd, mem_f_dsd, mem_Au_dsd);
     } else {
@@ -352,7 +347,7 @@ fn f_reduce_row_col_top_left() void {
 // Restriction: divide the window into 2x2x2 blocks and sum the pairs in z dimension.
 // TODO: OPTIMIZEME - use registers like dsrs
 fn f_restriction_division() void {
-    counter_restrict[current_level] += 1;
+    // counter_restrict[current_level] += 1;
 
     if (is_top_left_of_restriction_window(pe_id_x, pe_id_y, 
         restriction_window_width, restriction_window_height)) {
@@ -433,7 +428,7 @@ fn f_interpolation_expand_z() void {
 
 // Interpolation: u = u + u_smooth only on active PEs.
 fn f_interpolation_add() void {
-    counter_interp[current_level] += 1;
+    // counter_interp[current_level] += 1;
     if (is_active_pe) {
         @fadds(mem_u_dsd, mem_u_dsd, mem_save_u_smooth_dsd);
     } else {
@@ -466,7 +461,7 @@ fn f_init_spmv_and_reduce(level_id: u16) void {
 // Setup the level parameters.
 fn f_setup_level(level_id: u16, down: i16) void {
     // save_timestamp_start(TIMER_ID_SETUP_INIT);
-    counter_setup_init[current_level] += 1;
+    // counter_setup_init[current_level] += 1;
 
     // TODO: OPTIMIZEME - use DSR or DSDs or do once.
     var const_2: f16 = 2.0;
@@ -543,8 +538,8 @@ fn f_setup_level(level_id: u16, down: i16) void {
 // ------------------------------------------------
 // Synchronize all PEs using allreduce (also captures reference clock)
 // fn f_sync() void {
-//     cur_state = STATE_SYNC;
-//     @activate(STATE);
+//     // cur_state = STATE_SYNC;
+//     // @activate(STATE);
 // }
 
 // Main V-cycle entry point
@@ -562,7 +557,7 @@ fn f_gmg_vcycle(levels: i16, pre_iter: i16, post_iter: i16, bottom_iter: i16, ma
     pe_id_y = layout_mod.get_y_coord();
     
     current_level = 0;
-    cur_state = STATE_INIT;
+    cur_state = STATE_SYNC;
     @activate(STATE);
 }
 
@@ -575,22 +570,23 @@ fn f_trigger_state_machine() void {
 }
 
 task f_state() void {
-    // if (STATE_SYNC == cur_state) {  // unreachable
-    //     // sync all PEs by internal allreduce module
-    //     next_state = STATE_EXIT;
-    //     reduce_mod.allreduce(1, &dot, reduce_mod.TYPE_BINARY_OP.ADD);
-    // }
-    if (STATE_INIT == cur_state) {
+    if (STATE_SYNC == cur_state) {  // unreachable
+        // sync all PEs by internal allreduce module
+        next_state = STATE_INIT;
+        reduce_mod.allreduce(1, &dot, reduce_mod.TYPE_BINARY_OP.ADD);
+    }
+    else if (STATE_INIT == cur_state) {
         // Start down cycle at level 0
         current_level = 0;
         next_state = STATE_DOWN_INIT;
+        // reduce_mod.allreduce(1, &dot, reduce_mod.TYPE_BINARY_OP.ADD);
         f_trigger_state_machine();
     }
     // ------------------------------------------------
     // DOWN CYCLE
     // ------------------------------------------------
     else if (STATE_DOWN_INIT == cur_state) {
-        // reduce_mod.allreduce(1, &dot, reduce_mod.TYPE_BINARY_OP.ADD);
+
         // Initialize current level
         f_setup_level(@as(u16, current_level), 1); // (.. , down=True/False)
         current_smooth_iter = 0;
@@ -612,11 +608,16 @@ task f_state() void {
         f_trigger_state_machine();
         
     } else if (STATE_DOWN_LEVEL_CHECK == cur_state) {
+        // if (pe_id_x == 0 and pe_id_y == 0) {
+        //     const offset: i16 = current_level * timer.tsc_size_words;
+        //     simprint.fmt_with_coords("TIMING_DEBUG: level={d}, timing_restrict=[{d},{d},{d}]", .{@as(u16, current_level), @as(u16, timing_restrict[offset + 0]), @as(u16, timing_restrict[offset + 1]), @as(u16, timing_restrict[offset + 2])});
+        // }
         current_level = current_level + 1;
         if (current_level < num_levels - 1) {   // (coarsest - 1) level
             next_state = STATE_DOWN_INIT;
         } else {
-            next_state = STATE_EXIT;
+            next_state = STATE_COARSE_INIT;
+            // next_state = STATE_CONV_CHECK;
         }
         f_trigger_state_machine();
         
@@ -624,66 +625,66 @@ task f_state() void {
     // ------------------------------------------------
     // COARSE LEVEL
     // ------------------------------------------------
-    // else if (STATE_COARSE_INIT == cur_state) {
-    //     // Initialize coarsest level
-    //     f_setup_level(@as(u16, current_level), 1);
-    //     current_smooth_iter = 0;
-    //     next_state = STATE_UP_INIT;
-    //     f_trigger_state_machine();
+    else if (STATE_COARSE_INIT == cur_state) {
+        // Initialize coarsest level
+        f_setup_level(@as(u16, current_level), 1);
+        current_smooth_iter = 0;
+        next_state = STATE_UP_INIT;
+        f_trigger_state_machine();
 
-    // }
+    }
     // ------------------------------------------------
     // UP CYCLE
     // ------------------------------------------------
-    // else if (STATE_UP_INIT == cur_state) {
-    //     // Initialize level for up cycle
-    //     f_setup_level(@as(u16, current_level), 0); // (.. , down=False for up cycle)
-    //     next_state = STATE_UP_LEVEL_CHECK;
-    //     f_trigger_state_machine();
+    else if (STATE_UP_INIT == cur_state) {
+        // Initialize level for up cycle
+        f_setup_level(@as(u16, current_level), 0); // (.. , down=False for up cycle)
+        next_state = STATE_UP_LEVEL_CHECK;
+        f_trigger_state_machine();
         
-    // } else if (STATE_UP_LEVEL_CHECK == cur_state) {
-    //     current_level = current_level - 1;
-    //     if (current_level >= 0) {
-    //         next_state = STATE_UP_INIT;
-    //     } else {
-    //         // V-cycle complete, need to compute residual at level 0 for convergence checking
-    //         // Set current_level back to 0 and compute residual
-    //         current_level = 0;
-    //         next_state = STATE_CONV_CHECK;
-    //     }
-    //     f_trigger_state_machine();
+    } else if (STATE_UP_LEVEL_CHECK == cur_state) {
+        current_level = current_level - 1;
+        if (current_level >= 0) {
+            next_state = STATE_UP_INIT;
+        } else {
+            // V-cycle complete, need to compute residual at level 0 for convergence checking
+            // Set current_level back to 0 and compute residual
+            current_level = 0;
+            next_state = STATE_CONV_CHECK;
+        }
+        f_trigger_state_machine();
         
-    // } else if (STATE_CONV_CHECK == cur_state) {
-    //     // Store rho[0] in history array for host reading
-    //     if (k < MAX_ITERATIONS) {
-    //         rho_history[k] = rho[0];
-    //     }
-    //     // Compute rho = max(r)
-    //     // if max(r) < tol, then exit
-    //     // if (rho > tolerance) and (k < max_iter), continue
-    //     // This matches the Python implementation: while (xi_max > self.rel_tolerance) and (iterations < max_iter)
-    //     k = k + 1;
-    //     if ((rho[0] > tolerance) and (k < max_iter)) {
-    //         // Not converged and iterations remaining: increment counter and start next V-cycle
-    //         next_state = STATE_INIT;
-    //     } else {
-    //         // Converged or max iterations reached: exit
-    //         next_state = STATE_EXIT;
-    //         // f_toc_total();
+    } else if (STATE_CONV_CHECK == cur_state) {
+        // Store rho[0] in history array for host reading
+        if (k < MAX_ITERATIONS) {
+            rho_history[k] = rho[0];
+        }
+        // Compute rho = max(r)
+        // if max(r) < tol, then exit
+        // if (rho > tolerance) and (k < max_iter), continue
+        // This matches the Python implementation: while (xi_max > self.rel_tolerance) and (iterations < max_iter)
+        k = k + 1;
+        if ((rho[0] > tolerance) and (k < max_iter)) {
+            // Not converged and iterations remaining: increment counter and start next V-cycle
+            next_state = STATE_INIT;
+        } else {
+            // Converged or max iterations reached: exit
+            next_state = STATE_EXIT;
+            // f_toc_total();
 
-    //     }
-    //     // save_timestamp_end(current_level, &timing_rho_check, TIMER_ID_RHO_CHECK);
-    //     counter_rho_check[current_level] += 1;
-    //     // print_time_debug();
-    //     f_trigger_state_machine();
+        }
+        // save_timestamp_end(current_level, &timing_rho_check, TIMER_ID_RHO_CHECK);
+        counter_rho_check[current_level] += 1;
+        // print_time_debug();
+        f_trigger_state_machine();
         
-    // }
+    }
     // ------------------------------------------------
     // EXIT
     // ------------------------------------------------    
     else if (STATE_EXIT == cur_state) {
         // save_timestamp_end(current_level, &time_total_start_end_u16, TIMER_ID_TOTAL);
-        // simprint.fmt_with_coords("TIMING_DEBUG: timing_residual=[{d},{d},{d}]", .{@as(u16, timing_residual[0]), @as(u16, timing_residual[1]), @as(u16, timing_residual[2])});
+        
         sys_mod.unblock_cmd_stream();
         
     } else {
@@ -729,12 +730,12 @@ comptime {
     // @export_symbol(ptr_time_d2h, "time_d2h");
 
     // counters
-    @export_symbol(ptr_counter_smooth, "counter_smooth");
-    @export_symbol(ptr_counter_apply_op, "counter_apply_op");
-    @export_symbol(ptr_counter_residual, "counter_residual");
-    @export_symbol(ptr_counter_restrict, "counter_restrict");
-    @export_symbol(ptr_counter_interp, "counter_interp");
-    @export_symbol(ptr_counter_setup_init, "counter_setup_init");
+    // @export_symbol(ptr_counter_smooth, "counter_smooth");
+    // @export_symbol(ptr_counter_apply_op, "counter_apply_op");
+    // @export_symbol(ptr_counter_residual, "counter_residual");
+    // @export_symbol(ptr_counter_restrict, "counter_restrict");
+    // @export_symbol(ptr_counter_interp, "counter_interp");
+    // @export_symbol(ptr_counter_setup_init, "counter_setup_init");
     @export_symbol(ptr_counter_rho_check, "counter_rho_check");
     @export_symbol(ptr_rho_history, "rho_history");
     // @export_symbol(ptr_rho, "rho");

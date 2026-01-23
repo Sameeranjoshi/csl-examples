@@ -1,0 +1,54 @@
+
+// Parameters
+param MAX_ZDIM: i16;
+param width: i16;
+param height: i16;
+param BLOCK_SIZE: i16;
+param LEVELS: i16;
+
+
+const memcpy = @import_module( "<memcpy/get_params>", .{
+    .width = width,
+    .height = height,
+    });
+
+layout{
+
+    @set_rectangle( width, height );
+
+    var py: i16 = 0;
+    while(py < height) : (py +=1) {
+        var px: i16 = 0;
+        while(px < width) : (px +=1) {
+            const memcpyParams = memcpy.get_params(px);
+            var params: comptime_struct = .{
+                .memcpyParams = memcpyParams,
+                .MAX_ZDIM = MAX_ZDIM,
+                .BLOCK_SIZE = BLOCK_SIZE,
+                .LEVELS = LEVELS,
+            };
+
+            @set_tile_code(px, py, "kernel_gmg_vcycle.csl", params);
+        }
+    }
+
+
+    @export_name("timing_smooth", [*]u16, true);
+    @export_name("timing_residual", [*]u16, true);
+    @export_name("timing_restrict", [*]u16, true);
+    @export_name("timing_interp", [*]u16, true);
+    @export_name("time_total_start_end", [*]u16, true);
+    @export_name("timing_spmv_total", [*]u16, true);
+    @export_name("timing_spmv_communication", [*]u16, true);
+    @export_name("timing_spmv_compute", [*]u16, true);
+    // counters
+    @export_name("counter_smooth", [*]u16, true);
+    @export_name("counter_apply_op", [*]u16, true);
+    @export_name("counter_residual", [*]u16, true);
+    @export_name("counter_restrict", [*]u16, true);
+    @export_name("counter_interp", [*]u16, true);
+    @export_name("counter_setup_init", [*]u16, true);
+    @export_name("counter_rho_check", [*]u16, true);
+   
+}
+
