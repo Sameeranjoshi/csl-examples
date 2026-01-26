@@ -81,9 +81,11 @@ def write_run_info(out_path, size, levels, channels, max_ite, pre_iter, post_ite
     """
     Writes compile and run information into a response.txt file in the specified output directory.
     """
+    # write the folder name as well
     print(f"Compile command: {Compile_command}")
     print(f"Run command: {Run_command}")
     with open(f"./{out_path}/response.txt", "w") as f:
+        f.write(f"Output directory: {out_path}\n")
         f.write(f"########################################################\n")
         f.write(f"Parameters: size={size}, levels={levels}, channels={channels}\n")
         f.write(f"Run parameters: max_ite={max_ite}, pre_iter={pre_iter}, post_iter={post_iter}, bottom_iter={bottom_iter}\n")
@@ -253,6 +255,16 @@ def main():
          (256, 8, 100, 1e-5, 6, 6, 100),   # Very large
          (512, 9, 100, 1e-5, 6, 6, 100),   # Very large
 
+
+        # 3/3/6
+         (4, 2, 100, 1e-5, 3, 3, 6),   # Tiny problem
+         (8, 3, 100, 1e-5, 3, 3, 6),   # Tiny problem
+         (16, 4, 100, 1e-5, 3, 3, 6),   # Small problem
+         (32, 5, 100, 1e-5, 3, 3, 6),   # Small problem
+         (64, 6, 100, 1e-5, 3, 3, 6),   # Medium problem
+         (128, 7, 100, 1e-5, 3, 3, 6),   # Large problem
+         (256, 8, 100, 1e-5, 3, 3, 6),   # Very large
+         (512, 9, 100, 1e-5, 3, 3, 6),   # Very large        
 
         # OSCAR matching problems
     ]
