@@ -2,6 +2,7 @@
 """
 Plot performance data from GMG timing experiments.
 Extracts Communication Time, Compute Time, and V-cycle times from output files.
+ls -d out_dir_S*x* | sort -t'_' -k2.2n | xargs -I{} cat {}/response.txt > all_responses.txt
 """
 
 import re
@@ -102,6 +103,13 @@ def parse_configuration_summary(text: str) -> List[Dict]:
         iter_match = re.search(r'Device iterations\s*:\s*(\d+)', section)
         if iter_match:
             data['device_iterations'] = int(iter_match.group(1))
+        
+        # Extract 1-V cycle time(Average)
+        vcycle_avg_match = re.search(r'1-V cycle time\(Average\)\s*\(us\[cycles\]\):\s*([\d.]+)\s*us', section)
+        if vcycle_avg_match:
+            data['vcycle_avg_time_us'] = float(vcycle_avg_match.group(1))
+        else:
+            data['vcycle_avg_time_us'] = None
         
         # Extract device final |rho|_inf
         rho_match = re.search(r'Device final \|rho\|_inf\s*:\s*([\d.eE+-]+)', section)
@@ -265,6 +273,7 @@ def parse_all_data(text: str) -> List[Dict]:
             combined[grid].update({
                 'total_grid_size': item.get('total_grid_size', 0),
                 'device_iterations': item.get('device_iterations', None),
+                'vcycle_avg_time_us': item.get('vcycle_avg_time_us', None),
                 'device_rho_inf': item.get('device_rho_inf', None),
                 'converged': item.get('converged', None),
                 'compile_time_s': item.get('compile_time_s', None),
@@ -276,6 +285,7 @@ def parse_all_data(text: str) -> List[Dict]:
                 'grid_size': grid,
                 'total_grid_size': item.get('total_grid_size', 0),
                 'device_iterations': item.get('device_iterations', None),
+                'vcycle_avg_time_us': item.get('vcycle_avg_time_us', None),
                 'device_rho_inf': item.get('device_rho_inf', None),
                 'converged': item.get('converged', None),
                 'compile_time_s': item.get('compile_time_s', None),
@@ -776,15 +786,15 @@ def print_summary_table(data: List[Dict]):
     """
     Print a summary table of the parsed data with updated column names and units.
     """
-    print("\n" + "="*140)
+    print("\n" + "="*150)
     print("Performance Data Summary")
-    print("="*140)
+    print("="*150)
     header = (f"{'PE tiles':<15} {'Total Grid size':<18} {'Comm Time(spmv) (us)':<25} "
               f"{'Compute Time(spmv) (us)':<28} {'V-cycle Time (us)':<20} "
-              f"{'Iterations':<12} {'|rho|_inf':<15} {'Converged':<10} "
+              f"{'Iterations':<12} {'1-V cycle time(Average) (us)':<30} {'|rho|_inf':<15} {'Converged':<10} "
               f"{'Compile Time (s)':<18} {'Run Time (s)':<15}")
     print(header)
-    print("-"*140)
+    print("-"*150)
     
     for d in data:
         pe_tiles = d.get('pe_tiles', 'N/A')
@@ -793,22 +803,24 @@ def print_summary_table(data: List[Dict]):
         comp = d.get('compute_time_us', 0)
         vcycle = d.get('vcycle_time_us', 0)
         iterations = d.get('device_iterations', None)
+        vcycle_avg = d.get('vcycle_avg_time_us', None)
         rho_inf = d.get('device_rho_inf', None)
         converged = d.get('converged', None)
         compile_time = d.get('compile_time_s', None)
         run_time = d.get('run_time_s', None)
         
         iter_str = str(iterations) if iterations is not None else 'N/A'
+        vcycle_avg_str = f"{vcycle_avg:.3f}" if vcycle_avg is not None else 'N/A'
         rho_str = f"{rho_inf:.3e}" if rho_inf is not None else 'N/A'
         conv_str = 'Yes' if converged else 'No' if converged is False else 'N/A'
         compile_str = f"{compile_time:.3f}" if compile_time is not None else 'N/A'
         run_str = f"{run_time:.3f}" if run_time is not None else 'N/A'
         
         print(f"{pe_tiles:<15} {total_grid:<18,} {comm:<25.2f} {comp:<28.2f} "
-              f"{vcycle:<20.2f} {iter_str:<12} {rho_str:<15} {conv_str:<10} "
+              f"{vcycle:<20.2f} {iter_str:<12} {vcycle_avg_str:<30} {rho_str:<15} {conv_str:<10} "
               f"{compile_str:<18} {run_str:<15}")
     
-    print("="*140 + "\n")
+    print("="*150 + "\n")
 
 
 def main():

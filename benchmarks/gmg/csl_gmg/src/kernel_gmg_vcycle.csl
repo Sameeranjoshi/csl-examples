@@ -12,7 +12,7 @@ param MAX_ZDIM: i16;
 param BLOCK_SIZE: i16;
 param LEVELS: i16;
 param STATE: local_task_id;
-const MAX_ITERATIONS: i16 = 25;  // Maximum iterations for storing rho history, this takes some space be mindful with allocations.
+const MAX_ITERATIONS: i16 = 60;  // Maximum iterations for storing rho history, this takes some space be mindful with allocations.
 
 //-------------------------------------------------
 // LIBRARIES and STATE MACHINE STATES
@@ -74,6 +74,7 @@ const STATE_CONV_CHECK: i16 = 23;  // Convergence check after V-cycle
 const STATE_CALC_RHO: i16 = 24;  // Calculate rho = |r|^2
 const STATE_RESIDUAL_AFTER_V_CYCLE_APPLY: i16 = 25;  // Apply operator after V-cycle to compute Au
 const STATE_RESIDUAL_AFTER_V_CYCLE_COMPUTE: i16 = 26;  // Compute residual after V-cycle
+const STATE_SYNC: i16 = 27;  // Sync all PEs by internal allreduce module
 
 
 // Timer identifiers
@@ -82,10 +83,7 @@ const TIMER_ID_RESIDUAL: i16 = 1;
 const TIMER_ID_RESTRICT: i16 = 2;
 const TIMER_ID_INTERP: i16 = 3;
 const TIMER_ID_TOTAL: i16 = 4;
-// const TIMER_ID_SETUP_INIT: i16 = 5;
-// const TIMER_ID_RHO_CHECK: i16 = 6;
-// const TIMER_ID_H2D: i16 = 5;
-// const TIMER_ID_D2H: i16 = 6;
+
 
 
 //----------------------------------------------------//---------------------------------------------------
@@ -138,13 +136,9 @@ var timing_spmv_total = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv
 var timing_spmv_communication = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv communication accumulated elapsed timing
 var timing_spmv_compute = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv compute accumulated elapsed timing
 var time_total_start_end_u16 = @zeros([timer.tsc_size_words]u16);   // this is also elapsed time for entire V-cycle, 1 level
-// var timing_apply_op = @zeros([LEVELS * timer.tsc_size_words]u16);    // operator application accumulated elapsed timing
-// var timing_compute = @zeros([LEVELS * timer.tsc_size_words]u16);      // compute accumulated elapsed timing
-// var timing_communication = @zeros([LEVELS * timer.tsc_size_words]u16);      // communication accumulated elapsed timing
-// var timing_setup_init = @zeros([LEVELS * timer.tsc_size_words]u16);      // setup initialization accumulated elapsed timing
-// var timing_rho_check = @zeros([LEVELS * timer.tsc_size_words]u16);      // rho check accumulated elapsed timing
 
-// Operation counters - track number of operations at each level
+
+// // Operation counters - track number of operations at each level
 var counter_smooth = @zeros([LEVELS]u32);    // Number of up smoothing iterations per level
 var counter_apply_op = @zeros([LEVELS]u32);     // Number of operator applications per level
 var counter_residual = @zeros([LEVELS]u32);     // Number of residual operations per level
@@ -153,14 +147,6 @@ var counter_restrict = @zeros([LEVELS]u32);     // Number of restriction operati
 var counter_interp = @zeros([LEVELS]u32);       // Number of interpolation operations per level
 var counter_setup_init = @zeros([LEVELS]u32);   // Number of setup initialization operations per level
 
-
-// Reference clock from allreduce module (for TSC synchronization)
-// start, end
-// var time_ref_u16 = @zeros([timer.tsc_size_words]u16);
-// var time_h2d_u16 = @zeros([timer.tsc_size_words]u16);
-// var time_d2h_u16 = @zeros([timer.tsc_size_words]u16);
-// var tscStartBuffer = @zeros([timer.tsc_size_words]u16);
-// var tscEndBuffer = @zeros([timer.tsc_size_words]u16);
 
 // State machine parameters
 var dot = @zeros([1]f32); // dummy variable for f_sync
@@ -198,6 +184,105 @@ var current_smooth_iter: i16 = 0;
 var cur_state: i16 = 0;
 var next_state: i16 = 0;
 
+
+fn f_reset() void {
+
+        
+    // GMG data structures
+    var index: i16 = 0;
+    while(index < MAX_ZDIM) : (index +=1) {
+        u[index] = 0.0;
+        f[index] = 0.0;
+        r[index] = 0.0;
+        Au[index] = 0.0;
+        residual_temp[index] = 0.0;
+    }
+
+    index = 0;
+    while(index < TOTAL_GMG_SIZE) : (index +=1) {
+        save_u_smooth[index] = 0.0;
+        save_f_down[index] = 0.0;
+    }
+
+    // Grid spacing arrays for each level (passed from host)
+    index = 0;
+    while(index < LEVELS) : (index +=1) {
+        hx_array[index] = 0.0;
+        hy_array[index] = 0.0;
+        hz_array[index] = 0.0;
+        jacobi_coeff_array[index] = 0.0;
+    }
+    hx_level = @as(f32, 1.0);
+    hy_level = @as(f32, 1.0);
+    hz_level = @as(f32, 1.0);
+    index = 0;
+    while(index < 7) : (index +=1) {
+        stencil_coeff[index] = 0.0;
+    }
+   
+    index = 0;
+    while(index < LEVELS * timer.tsc_size_words) : (index +=1) {
+        timing_smooth[index] = 0;
+        timing_residual[index] = 0;
+        timing_restrict[index] = 0;
+        timing_interp[index] = 0;
+        timing_spmv_total[index] = 0;
+        timing_spmv_communication[index] = 0;
+        timing_spmv_compute[index] = 0;
+        time_total_start_end_u16[index] = 0;
+    }
+
+
+    // // Operation counters - track number of operations at each level
+    index = 0;
+    while(index < LEVELS) : (index +=1) {
+        counter_smooth[index] = 0;
+        counter_apply_op[index] = 0;
+        counter_residual[index] = 0;
+        counter_rho_check[index] = 0;
+        counter_restrict[index] = 0;
+        counter_interp[index] = 0;
+        counter_setup_init[index] = 0;
+    }
+
+
+    // State machine parameters
+    // dot = @zeros([1]f32); // dummy variable for f_sync
+    n = 0;  // zDim
+    num_levels = 0;
+    pre_smooth_iter = 0;
+    post_smooth_iter = 0;
+    bottom_solver_iter = 0;
+    max_iter = 0;  // Maximum number of V-cycle iterations
+    tolerance = @as(f32, 0.0);  // Convergence tolerance
+    // var rho: f32 = @as(f32, 0.0);  // L2 norm squared of residual (like PCG's xi)
+
+    // rho = fill_rho();
+    rho[0] = @as(f32, 1000.0);
+    k = 0;  // Current iteration counter
+    index = 0;
+    while(index < MAX_ITERATIONS) : (index +=1) {
+        rho_history[index] = 0.0;
+    }
+    // rho_history = @zeros([MAX_ITERATIONS]f32);
+    factor = 1;
+    hops = 1;
+    restriction_window_width = 1;
+    restriction_window_height = 1; // local vars to init at each level
+    active_pes_in_restriction_window_x = 2;
+    active_pes_in_restriction_window_y = 2;
+    pe_id_x = 0;
+    pe_id_y = 0;
+    current_level_id = 0;
+    is_active_pe = true;
+    current_level = 0;
+    current_smooth_iter = 0;
+    cur_state = 0;
+    next_state = 0;
+
+    sys_mod.unblock_cmd_stream();
+}
+
 //----------------------------------------------------//---------------------------------------------------
 // DSDs AND POINTERS
 //----------------------------------------------------//---------------------------------------------------
@@ -230,14 +315,6 @@ var ptr_time_total_start_end: [*]u16 = &time_total_start_end_u16;
 var ptr_timing_spmv_total: [*]u16 = &timing_spmv_total;
 var ptr_timing_spmv_communication: [*]u16 = &timing_spmv_communication;
 var ptr_timing_spmv_compute: [*]u16 = &timing_spmv_compute;
-// var ptr_time_ref: [*]u16 = &time_ref_u16;
-// var ptr_timing_apply_op: [*]u16 = &timing_apply_op;
-// var ptr_timing_setup_init: [*]u16 = &timing_setup_init;
-// var ptr_timing_rho_check: [*]u16 = &timing_rho_check;
-// var ptr_time_h2d: [*]u16 = &time_h2d_u16;
-// var ptr_time_d2h: [*]u16 = &time_d2h_u16;
-// var ptr_timing_compute: [*]u16 = &timing_compute;
-// var ptr_timing_communication: [*]u16 = &timing_communication;
 
 // counter pointers
 var ptr_counter_smooth: [*]u32 = &counter_smooth;
@@ -540,10 +617,10 @@ fn f_setup_level(level_id: u16, down: i16) void {
 // ENTRY POINTS KERNELs
 // ------------------------------------------------
 // Synchronize all PEs using allreduce (also captures reference clock)
-// fn f_sync() void {
-//     cur_state = STATE_SYNC;
-//     @activate(STATE);
-// }
+fn f_sync() void {
+    cur_state = STATE_SYNC;
+    @activate(STATE);
+}
 
 // Main V-cycle entry point
 fn f_gmg_vcycle(levels: i16, pre_iter: i16, post_iter: i16, bottom_iter: i16, max_iter_val: i16, tol: f32) void {
@@ -573,12 +650,12 @@ fn f_trigger_state_machine() void {
 }
 
 task f_state() void {
-    // if (STATE_SYNC == cur_state) {  // unreachable
-    //     // sync all PEs by internal allreduce module
-    //     next_state = STATE_EXIT;
-    //     reduce_mod.allreduce(1, &dot, reduce_mod.TYPE_BINARY_OP.ADD);
-    // }
-    if (STATE_INIT == cur_state) {
+    if (STATE_SYNC == cur_state) {
+        // sync all PEs by internal allreduce module
+        next_state = STATE_EXIT;
+        reduce_mod.allreduce(1, &dot, reduce_mod.TYPE_BINARY_OP.ADD);
+    }
+    else if (STATE_INIT == cur_state) {
         // Start down cycle at level 0
         current_level = 0;
         next_state = STATE_DOWN_INIT;
@@ -850,14 +927,7 @@ comptime {
     @export_symbol(ptr_timing_spmv_total, "timing_spmv_total");
     @export_symbol(ptr_timing_spmv_communication, "timing_spmv_communication");
     @export_symbol(ptr_timing_spmv_compute, "timing_spmv_compute");    
-    // @export_symbol(ptr_timing_apply_op, "timing_apply_op");
-    // @export_symbol(ptr_timing_setup_init, "timing_setup_init");
-    // @export_symbol(ptr_timing_rho_check, "timing_rho_check");
-    // @export_symbol(ptr_timing_communication, "timing_communication");
-    // @export_symbol(ptr_timing_compute, "timing_compute");
-    // @export_symbol(ptr_time_ref, "time_ref");
-    // @export_symbol(ptr_time_h2d, "time_h2d");
-    // @export_symbol(ptr_time_d2h, "time_d2h");
+
 
     // counters
     @export_symbol(ptr_counter_smooth, "counter_smooth");
@@ -874,16 +944,12 @@ comptime {
 
 comptime {
    
-    // @export_symbol(f_sync);
-    // @export_symbol(f_reference_timestamps);
-    // @export_symbol(f_tic_h2d);
-    // @export_symbol(f_toc_h2d);
-    // @export_symbol(f_tic_d2h);
-    // @export_symbol(f_toc_d2h);
+    @export_symbol(f_sync);
     @export_symbol(f_enable_timer);
     @export_symbol(f_tic_total);
     @export_symbol(f_toc_total);
     @export_symbol(f_gmg_vcycle);
+    @export_symbol(f_reset);
 }
 
 
