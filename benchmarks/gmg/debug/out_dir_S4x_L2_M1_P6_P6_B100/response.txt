@@ -1,0 +1,80 @@
+########################################################
+Parameters: size=4, levels=2, channels=4
+Run parameters: max_ite=1, pre_iter=6, post_iter=6, bottom_iter=100
+Fabric dims: 762,1172
+Compile command: --arch=wse3 --fabric-dims=762,1172 --fabric-offsets=4,1 --params=width:4,height:4,MAX_ZDIM:4,LEVELS:2 --params=BLOCK_SIZE:4 --memcpy --channels=4 --width-west-buf=0 --width-east-buf=0 -o out_vcycle4 --llvm-option=--inline-threshold=256 --llvm-option=--unroll-threshold=256
+Run command: cs_python run_gmg_vcycle.py -m=4 -n=4 -k=4 --latestlink out_vcycle4 --channels=4 --width-west-buf=0 --width-east-buf=0 --zDim=4 --run-only --levels=2 --max-ite=1 --blockSize=4 --pre-iter=6 --post-iter=6 --bottom-iter=100 --tolerance=1e-05 --cmaddr %CMADDR%
+########################################################
+
+Compile time (s): 130.195633
+
+======================================================================
+Run output:
+======================================================================
+Matplotlib created a temporary cache directory at /tmp/matplotlib-3lbngmrq because the default path (/.config/matplotlib) is not a writable directory; it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+Fontconfig error: Cannot load default config file: No such file: (null)
+WARNING: The message system is being used before initialization.
+         Messages will still be printed, but with limited support.
+COUT034   Latest HIOLIB used
+COUT034  TCP connect to: 10.254.2.66:9000
+COUT034  No credentials found, disabling TLS
+COUT034  TLS is disabled
+COUT034  TLS disabled
+COUT034  Poll
+COUT034  TCP connected
+COUT034  Connection successful
+COUT034  Local addr: 10.125.9.171:49130
+COUT034  TCP connect to: 10.254.2.66:9000
+COUT034  TLS disabled
+COUT034  Poll
+COUT034  TCP connected
+COUT034  Connection successful
+COUT034  Local addr: 10.125.9.171:49146
+HAAP425 18:06:14 GMT  WARNING: hio_group_program is deprecated, use hio_flows_program
+COUT002 18:06:14 GMT  ERROR: LOGGER NOT INITIALIZED:
+COUT002 18:06:14 GMT  ERROR: 		wio_groups.json is deprecated, use wio_flows.json instead
+HWKA425 18:06:20 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 4 streamer 0 P:2 C:19 (10.254.3.30:21, 10.254.3.36:21, 10.254.3.42:21, 10.254.3.48:21) mode: RoCE
+HWKA425 18:06:20 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 0 streamer 0 P:0 C:25 (10.254.3.26:27, 10.254.3.32:27, 10.254.3.38:27, 10.254.3.44:27) mode: RoCE
+HWKA425 18:06:21 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 1 streamer 0 P:1 C:0 (10.254.3.28:2, 10.254.3.34:2, 10.254.3.40:2, 10.254.3.46:2) mode: RoCE
+HWKA425 18:06:21 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 2 streamer 0 P:2 C:40 (10.254.3.30:42, 10.254.3.36:42, 10.254.3.42:42, 10.254.3.48:42) mode: RoCE
+HWKA425 18:06:22 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 3 streamer 0 P:0 C:59 (10.254.3.26:61, 10.254.3.32:61, 10.254.3.38:61, 10.254.3.44:61) mode: RoCE
+HWKA425 18:06:22 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 9 streamer 0 P:1 C:1 (10.254.3.28:3, 10.254.3.34:3, 10.254.3.40:3, 10.254.3.46:3) mode: RoCE
+HWKA425 18:06:23 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 5 streamer 0 P:0 C:118 (10.254.3.26:120, 10.254.3.32:120, 10.254.3.38:120, 10.254.3.44:120) mode: RoCE
+HWKA425 18:06:23 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 6 streamer 0 P:1 C:81 (10.254.3.28:83, 10.254.3.34:83, 10.254.3.40:83, 10.254.3.46:83) mode: RoCE
+HWKA425 18:06:24 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 7 streamer 0 P:2 C:75 (10.254.3.30:77, 10.254.3.36:77, 10.254.3.42:77, 10.254.3.48:77) mode: RoCE
+HWKA425 18:06:24 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+out_vcycle4 already exists
+
+============================================================
+Device calculations...
+============================================================
+  6.0. Initializing timers and counters...
+  6.1. Copying timing data...
+timing_smooth_data: 0.001us (1 cycles)
+timing_residual_data: 0.001us (1 cycles)
+timing_restrict_data: 0.001us (1 cycles)
+timing_interp_data: 0.001us (1 cycles)
+timing_spmv_total_data: 0.001us (1 cycles)
+timing_spmv_communication_data: 0.001us (1 cycles)
+timing_spmv_compute_data: 0.001us (1 cycles)
+timing_total_start_end_data: 0.001us (1 cycles)
+  6.2. Copying operation counters...
+counter_smooth: [1 1]
+counter_residual: [3 3]
+counter_setup_init: [7 7]
+counter_restrict: [5 5]
+counter_apply_op: [2 2]
+counter_interp: [6 6]
+counter_rho_check: [4 4]
+Opened egress stream flow 8 streamer 0 P:0 C:102 (10.254.3.26:104, 10.254.3.32:104, 10.254.3.38:104, 10.254.3.44:104) mode: RoCE
+
+Run time (s): 35.552652

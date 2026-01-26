@@ -42,13 +42,15 @@ layout{
     @export_name("timing_spmv_communication", [*]u16, true);
     @export_name("timing_spmv_compute", [*]u16, true);
     // counters
-    @export_name("counter_smooth", [*]u16, true);
-    @export_name("counter_apply_op", [*]u16, true);
-    @export_name("counter_residual", [*]u16, true);
-    @export_name("counter_restrict", [*]u16, true);
-    @export_name("counter_interp", [*]u16, true);
-    @export_name("counter_setup_init", [*]u16, true);
-    @export_name("counter_rho_check", [*]u16, true);
+    @export_name("counter_smooth", [*]u32, true);
+    @export_name("counter_apply_op", [*]u32, true);
+    @export_name("counter_residual", [*]u32, true);
+    @export_name("counter_restrict", [*]u32, true);
+    @export_name("counter_interp", [*]u32, true);
+    @export_name("counter_setup_init", [*]u32, true);
+    @export_name("counter_rho_check", [*]u32, true);
    
+    // kernels
+    @export_name("f_init_timers_and_counters", fn()void);
 }
 

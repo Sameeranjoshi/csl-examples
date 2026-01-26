@@ -35,13 +35,13 @@ var timing_spmv_compute = @zeros([timer.tsc_size_words]u16);      // spmv comput
 var time_total_start_end_u16 = @zeros([timer.tsc_size_words]u16);   // this is also elapsed time for entire V-cycle, 1 level
 
 // Operation counters - track number of operations at each level
-var counter_smooth = @zeros([LEVELS]u16);    // Number of up smoothing iterations per level
-var counter_apply_op = @zeros([LEVELS]u16);     // Number of operator applications per level
-var counter_residual = @zeros([LEVELS]u16);     // Number of residual operations per level
-var counter_rho_check = @zeros([LEVELS]u16);   // Number of rho check operations per level
-var counter_restrict = @zeros([LEVELS]u16);     // Number of restriction operations per level
-var counter_interp = @zeros([LEVELS]u16);       // Number of interpolation operations per level
-var counter_setup_init = @zeros([LEVELS]u16);   // Number of setup initialization operations per level
+var counter_smooth = @zeros([LEVELS]u32);    // Number of up smoothing iterations per level
+var counter_apply_op = @zeros([LEVELS]u32);     // Number of operator applications per level
+var counter_residual = @zeros([LEVELS]u32);     // Number of residual operations per level
+var counter_rho_check = @zeros([LEVELS]u32);   // Number of rho check operations per level
+var counter_restrict = @zeros([LEVELS]u32);     // Number of restriction operations per level
+var counter_interp = @zeros([LEVELS]u32);       // Number of interpolation operations per level
+var counter_setup_init = @zeros([LEVELS]u32);   // Number of setup initialization operations per level
 
 // timing pointers
 var ptr_timing_smooth: [*]u16 = &timing_smooth;
@@ -54,13 +54,49 @@ var ptr_timing_spmv_communication: [*]u16 = &timing_spmv_communication;
 var ptr_timing_spmv_compute: [*]u16 = &timing_spmv_compute;
 
 // counter pointers
-var ptr_counter_smooth: [*]u16 = &counter_smooth;
-var ptr_counter_apply_op: [*]u16 = &counter_apply_op;
-var ptr_counter_residual: [*]u16 = &counter_residual;
-var ptr_counter_restrict: [*]u16 = &counter_restrict;
-var ptr_counter_interp: [*]u16 = &counter_interp;
-var ptr_counter_setup_init: [*]u16 = &counter_setup_init;
-var ptr_counter_rho_check: [*]u16 = &counter_rho_check;
+var ptr_counter_smooth: [*]u32 = &counter_smooth;
+var ptr_counter_apply_op: [*]u32 = &counter_apply_op;
+var ptr_counter_residual: [*]u32 = &counter_residual;
+var ptr_counter_restrict: [*]u32 = &counter_restrict;
+var ptr_counter_interp: [*]u32 = &counter_interp;
+var ptr_counter_setup_init: [*]u32 = &counter_setup_init;
+var ptr_counter_rho_check: [*]u32 = &counter_rho_check;
+
+//-------------------------------------------------
+// FUNCTIONS
+//-------------------------------------------------
+
+fn f_init_timers_and_counters() void {
+    // Initialize all timing arrays to 1
+    var i: i16 = 0;
+    while (i < timer.tsc_size_words) : (i += 1) {
+        if (i == 0) {
+            timing_smooth[i] = 1;
+            timing_residual[i] = 1;
+            timing_restrict[i] = 1;
+            timing_interp[i] = 1;
+            timing_spmv_total[i] = 1;
+            timing_spmv_communication[i] = 1;
+            timing_spmv_compute[i] = 1;
+            time_total_start_end_u16[i] = 1;
+        }
+    }
+    
+    // Initialize all counter arrays to 1
+    var level: i16 = 0;
+    while (level < LEVELS) : (level += 1) {
+        counter_smooth[level] = 1;
+        counter_apply_op[level] = 2;
+        counter_residual[level] = 3;
+        counter_rho_check[level] = 4;
+        counter_restrict[level] = 5;
+        counter_interp[level] = 6;
+        counter_setup_init[level] = 7;
+    }
+    
+    // the user must unblock cmd color for every PE
+    sys_mod.unblock_cmd_stream();
+}
 
 comptime {
     // timing
@@ -82,5 +118,8 @@ comptime {
     @export_symbol(ptr_counter_interp, "counter_interp");
     @export_symbol(ptr_counter_setup_init, "counter_setup_init");
     @export_symbol(ptr_counter_rho_check, "counter_rho_check");
+
+    // kernels
+    @export_symbol(f_init_timers_and_counters);
 
 }

@@ -74,7 +74,7 @@ const STATE_CONV_CHECK: i16 = 23;  // Convergence check after V-cycle
 const STATE_CALC_RHO: i16 = 24;  // Calculate rho = |r|^2
 const STATE_RESIDUAL_AFTER_V_CYCLE_APPLY: i16 = 25;  // Apply operator after V-cycle to compute Au
 const STATE_RESIDUAL_AFTER_V_CYCLE_COMPUTE: i16 = 26;  // Compute residual after V-cycle
-
+const STATE_SYNC: i16 = 27;  // Sync after V-cycle
 
 // Timer identifiers
 const TIMER_ID_SMOOTH: i16 = 0;
@@ -560,7 +560,7 @@ fn f_gmg_vcycle(levels: i16, pre_iter: i16, post_iter: i16, bottom_iter: i16, ma
     pe_id_y = layout_mod.get_y_coord();
     
     current_level = 0;
-    cur_state = STATE_INIT;
+    cur_state = STATE_SYNC;
     @activate(STATE);
 }
 
@@ -573,12 +573,13 @@ fn f_trigger_state_machine() void {
 }
 
 task f_state() void {
-    // if (STATE_SYNC == cur_state) {  // unreachable
-    //     // sync all PEs by internal allreduce module
-    //     next_state = STATE_EXIT;
-    //     reduce_mod.allreduce(1, &dot, reduce_mod.TYPE_BINARY_OP.ADD);
-    // }
-    if (STATE_INIT == cur_state) {
+    if (STATE_SYNC == cur_state) {  // unreachable
+        // sync all PEs by internal allreduce module
+        next_state = STATE_INIT;
+        // reduce_mod.allreduce(1, &dot, reduce_mod.TYPE_BINARY_OP.ADD);
+        f_trigger_state_machine();
+    }
+    else if (STATE_INIT == cur_state) {
         // Start down cycle at level 0
         current_level = 0;
         next_state = STATE_DOWN_INIT;
@@ -612,7 +613,8 @@ task f_state() void {
         f_setup_level(@as(u16, current_level), 1);
         current_smooth_iter = 0;
         next_state = STATE_UP_INIT;
-        f_trigger_state_machine();
+        reduce_mod.allreduce(1, &dot, reduce_mod.TYPE_BINARY_OP.ADD);
+        // f_trigger_state_machine();
         
     }
     // ------------------------------------------------
