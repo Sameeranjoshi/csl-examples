@@ -396,107 +396,6 @@ def plot_comm_vs_compute(data: List[Dict], output_file: str = 'comm_vs_compute_t
     return fig
 
 
-def plot_vcycle_time(data: List[Dict], output_file: str = 'vcycle_time.png'):
-    """
-    Create log-log plot showing V-cycle time vs grid size.
-    """
-    if not HAS_MATPLOTLIB:
-        print("Error: matplotlib not available. Cannot create plots.")
-        return None
-    
-    grid_sizes = [d['grid_size'] for d in data]
-    vcycle_times = [d.get('vcycle_time_us', 0) for d in data]  # Keep in microseconds
-    
-    # Extract grid dimensions
-    grid_dims = []
-    for grid in grid_sizes:
-        dim = int(grid.split('x')[0])
-        grid_dims.append(dim)
-    
-    # Filter out entries without vcycle_time
-    filtered = [(dim, time, size) for dim, time, size in zip(grid_dims, vcycle_times, grid_sizes) if time > 0]
-    if not filtered:
-        print("Warning: No V-cycle time data found")
-        return None
-    
-    dims, times, sizes = zip(*filtered)
-    
-    # Create figure with single log-log plot
-    fig, ax = plt.subplots(figsize=(8, 6))
-    
-    # Log-log scale plot
-    ax.loglog(dims, times, 'o-', linewidth=2, markersize=8, color='#D62728')
-    ax.set_xlabel('Grid Size (Subdomain Dimension)', fontsize=12)
-    ax.set_ylabel('V-cycle Time (microseconds)', fontsize=12)
-    ax.set_title('V-cycle Time vs Grid Size(log-log scale)', fontsize=14, fontweight='bold')
-    ax.grid(True, which='major', linestyle='-', alpha=0.15)
-    ax.grid(False, which='minor')
-    ax.set_xticks(dims)
-    ax.set_xticklabels([f"{d}³" for d in dims])
-    
-    plt.tight_layout()
-    plt.savefig(output_file, dpi=150, bbox_inches='tight')
-    print(f"Saved: {output_file}")
-    return fig
-
-
-def plot_compile_runtime(data: List[Dict], output_file: str = 'compile_runtime.png'):
-    """
-    Create line chart showing Compile Time and Run Time vs grid size.
-    """
-    if not HAS_MATPLOTLIB:
-        print("Error: matplotlib not available. Cannot create plots.")
-        return None
-    
-    grid_sizes = [d['grid_size'] for d in data]
-    compile_times = [d.get('compile_time_s', 0) for d in data]
-    run_times = [d.get('run_time_s', 0) for d in data]
-    
-    # Extract grid dimensions
-    grid_dims = []
-    for grid in grid_sizes:
-        dim = int(grid.split('x')[0])
-        grid_dims.append(dim)
-    
-    # Filter out entries without compile/runtime data
-    filtered = [(dim, comp, run, size) for dim, comp, run, size in 
-                zip(grid_dims, compile_times, run_times, grid_sizes) 
-                if (comp is not None and comp > 0) or (run is not None and run > 0)]
-    
-    if not filtered:
-        print("Warning: No compile/runtime data found")
-        return None
-    
-    dims, comp_times, run_times, sizes = zip(*filtered)
-    
-    # Create figure
-    fig, ax = plt.subplots(figsize=(10, 6))
-    
-    # Use equal spacing on x-axis (categorical positions)
-    x_pos = np.arange(len(dims))
-    
-    # Plot both lines with equal spacing
-    line1 = ax.plot(x_pos, comp_times, 'o-', linewidth=2, markersize=8, 
-                    color='#2CA02C', label='Compile Time')
-    line2 = ax.plot(x_pos, run_times, 's-', linewidth=2, markersize=8, 
-                    color='#FF7F0E', label='Run Time')
-    
-    ax.set_xlabel('Grid Size (Subdomain Dimension)', fontsize=12)
-    ax.set_ylabel('Time (seconds)', fontsize=12)
-    ax.set_title('Compile Time and Run Time vs Grid Size', fontsize=14, fontweight='bold')
-    ax.set_xticks(x_pos)
-    ax.set_xticklabels([f"{d}³" for d in dims], rotation=45, ha='right')
-    ax.legend(loc='upper left', framealpha=0.9, fontsize=11)
-    # ax.grid(True, alpha=0.3, linestyle='--')
-    ax.grid(True, which='major', linestyle='-', alpha=0.15)
-    ax.grid(False, which='minor')
-    
-    plt.tight_layout()
-    plt.savefig(output_file, dpi=150, bbox_inches='tight')
-    print(f"Saved: {output_file}")
-    return fig
-
-
 def parse_per_operation_timing(text: str) -> List[Dict]:
     """
     Parse "Time per operation and level" tables from the output file.
@@ -867,8 +766,6 @@ def main():
     if HAS_MATPLOTLIB:
         print("\nGenerating plots...")
         plot_comm_vs_compute(data, 'comm_vs_compute_time.png')
-        plot_vcycle_time(data, 'vcycle_time.png')
-        plot_compile_runtime(data, 'compile_runtime.png')
         if all_timing_data:
             plot_all_per_operation_timing(all_timing_data)
         print("\n✓ All plots generated successfully!")
