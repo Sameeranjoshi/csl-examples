@@ -2,7 +2,7 @@
 """
 Plot performance data from GMG timing experiments.
 Extracts Communication Time, Compute Time, and V-cycle times from output files.
-ls -d out_dir_S*x* | sort -t'_' -k2.2n | xargs -I{} cat {}/response.txt > all_responses.txt
+ls -d out_dir_S*x* | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_6_6_6.txt
 """
 
 import re

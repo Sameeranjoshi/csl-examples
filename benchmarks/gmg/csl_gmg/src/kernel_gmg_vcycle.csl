@@ -110,7 +110,6 @@ var u = @zeros([MAX_ZDIM]f32);
 var f = @zeros([MAX_ZDIM]f32);
 var r = @zeros([MAX_ZDIM]f32);
 var Au = @zeros([MAX_ZDIM]f32);
-var residual_temp = @zeros([MAX_ZDIM]f32);
 const TOTAL_GMG_SIZE: i16 = compute_total_gmg_size();
 var save_u_smooth = @zeros([TOTAL_GMG_SIZE]f32);
 var save_f_down = @zeros([TOTAL_GMG_SIZE]f32);
@@ -195,7 +194,6 @@ fn f_reset() void {
         f[index] = 0.0;
         r[index] = 0.0;
         Au[index] = 0.0;
-        residual_temp[index] = 0.0;
     }
 
     index = 0;
@@ -292,7 +290,6 @@ var mem_r_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r[i] });
 var mem_Au_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> Au[i] });
 var mem_save_u_smooth_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> save_u_smooth[i] });
 var mem_save_f_down_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> save_f_down[i] });
-var mem_residual_temp_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> residual_temp[i] });
 var mem_r_even_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r[i] });
 var mem_r_odd_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r[i] });
 var mem_f_coarse_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> f[i] });
@@ -392,8 +389,10 @@ fn f_jacobi_smooth() void {
     counter_smooth[current_level] += 1;
     const jacobi_coeff: f32 = jacobi_coeff_array[current_level];
     if (is_active_pe) {
-        @fsubs(mem_residual_temp_dsd, mem_f_dsd, mem_Au_dsd);
-        @fmacs(mem_u_dsd, mem_u_dsd, mem_residual_temp_dsd, jacobi_coeff);
+        // Use r as temporary buffer: r is set to 0 in f_setup_level() and not used
+        // until f_residual() is called, which happens after all smoothing iterations
+        @fsubs(mem_r_dsd, mem_f_dsd, mem_Au_dsd);
+        @fmacs(mem_u_dsd, mem_u_dsd, mem_r_dsd, jacobi_coeff);
     } else {
         @fmovs(mem_u_dsd, 0.0);
     }
@@ -476,12 +475,14 @@ fn f_interpolation_expand_z() void {
     // Coarse z dimension is n/2, fine z dimension is n
     const coarse_n: i16 = n / 2;  // Coarse z dimension
     
-    // Save coarse values temporarily in residual_temp (first coarse_n elements)
+    // Save coarse values temporarily in r (first coarse_n elements)
+    // r is safe to use here: it's set to 0 in f_setup_level() and not used until
+    // STATE_RESIDUAL_AFTER_V_CYCLE_COMPUTE, which is much later in the state machine
     var mem_u_coarse_dsd = @set_dsd_base_addr(mem_u_dsd, &u);
     mem_u_coarse_dsd = @set_dsd_length(mem_u_coarse_dsd, @bitcast(u16, coarse_n));
-    var mem_residual_temp_coarse_dsd = @set_dsd_base_addr(mem_residual_temp_dsd, &residual_temp);
-    mem_residual_temp_coarse_dsd = @set_dsd_length(mem_residual_temp_coarse_dsd, @bitcast(u16, coarse_n));
-    @fmovs(mem_residual_temp_coarse_dsd, mem_u_coarse_dsd);  // Save coarse values
+    var mem_r_coarse_dsd = @set_dsd_base_addr(mem_r_dsd, &r);
+    mem_r_coarse_dsd = @set_dsd_length(mem_r_coarse_dsd, @bitcast(u16, coarse_n));
+    @fmovs(mem_r_coarse_dsd, mem_u_coarse_dsd);  // Save coarse values
     
     // Create strided DSDs to write to even and odd positions
     // DSD for even indices: 0, 2, 4, 6, ... (stride 2, starting at offset 0)
@@ -496,9 +497,9 @@ fn f_interpolation_expand_z() void {
     mem_u_odd_dsd = @set_dsd_stride(mem_u_odd_dsd, 2);  // Write to 1, 3, 5, 7, ...
     
     // Copy coarse values to even positions (0, 2, 4, 6, ...)
-    @fmovs(mem_u_even_dsd, mem_residual_temp_coarse_dsd);
+    @fmovs(mem_u_even_dsd, mem_r_coarse_dsd);
     // Copy coarse values to odd positions (1, 3, 5, 7, ...)
-    @fmovs(mem_u_odd_dsd, mem_residual_temp_coarse_dsd);
+    @fmovs(mem_u_odd_dsd, mem_r_coarse_dsd);
     
     // Now u has fine z dimension n with duplicated values
     // Update mem_u_dsd to reflect fine z dimension (n)
@@ -586,7 +587,6 @@ fn f_setup_level(level_id: u16, down: i16) void {
     mem_f_dsd = @set_dsd_length(mem_f_dsd, @bitcast(u16, n));
     mem_r_dsd = @set_dsd_length(mem_r_dsd, @bitcast(u16, n));
     mem_Au_dsd = @set_dsd_length(mem_Au_dsd, @bitcast(u16, n));
-    mem_residual_temp_dsd = @set_dsd_length(mem_residual_temp_dsd, @bitcast(u16, n));
     
     f_init_spmv_and_reduce(current_level_id);
     

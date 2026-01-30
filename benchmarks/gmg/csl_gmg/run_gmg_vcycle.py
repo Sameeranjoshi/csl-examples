@@ -302,7 +302,7 @@ def profiling(
     # ------------------------------------------------------------
     print("\n7-pt Stencil Compute vs Communication Time per Level (us[cycles]):")
     print("Note: Triangle inequality: max(x+y) <= max(x) + max(y), where x,y are 2D timings across wafer.")
-    compute_comm_header = ["level", "Total SpMV Time", "Communication Time", "Compute Time"]
+    compute_comm_header = ["level", "Total SpMV Time", "Communication Time", "Compute Time", "L1/L0(Communication)", "L1-L0(Communication)", "L1/L0(Compute)"]
     print(build_divider(compute_comm_header, "="))
     print("|" + "|".join(f"{name:^{col_width}}" for name in compute_comm_header) + "|")
     print(build_divider(compute_comm_header))
@@ -328,12 +328,37 @@ def profiling(
         spmv_communication_cycles_level = spmv_communication_entry["cycles_send"]
         spmv_compute_cycles_level = spmv_compute_entry["cycles_send"]
 
+        # Calculate ratio: level(i+1)/level(i)
+        if level + 1 < args.levels:
+            next_comm_time = timing_spmv_communication_data[level + 1]["time_send"]
+            if spmv_communication_time_level > 0:
+                comm_ratio = next_comm_time / spmv_communication_time_level
+                ratio_str = f"{comm_ratio:6.3f}".center(col_width)
+            else:
+                ratio_str = f"{'N/A':^{col_width}}"
+            # Calculate difference: L(i+1) - L(i)
+            comm_diff = next_comm_time - spmv_communication_time_level
+            diff_str = f"{comm_diff:6.3f}us".center(col_width)
+            # Compute ratio: compute[i+1]/compute[i]
+            next_compute_time = timing_spmv_compute_data[level + 1]["time_send"]
+            if spmv_compute_time_level > 0:
+                compute_ratio = next_compute_time / spmv_compute_time_level
+                compute_ratio_str = f"{compute_ratio:6.3f}".center(col_width)
+            else:
+                compute_ratio_str = f"{'N/A':^{col_width}}"
+        else:
+            ratio_str = f"{'N/A':^{col_width}}"
+            diff_str = f"{'N/A':^{col_width}}"
+            compute_ratio_str = f"{'N/A':^{col_width}}"
 
         row = [
             f"{level:^{col_width}}",
             f"{spmv_total_time_level:6.3f}us({spmv_total_cycles_level:7.0f})".center(col_width),
             f"{spmv_communication_time_level:6.3f}us({spmv_communication_cycles_level:7.0f})".center(col_width),
             f"{spmv_compute_time_level:6.3f}us({spmv_compute_cycles_level:7.0f})".center(col_width),
+            ratio_str,
+            diff_str,
+            compute_ratio_str,
         ]
         print("|" + "|".join(row) + "|")
         print(build_divider(compute_comm_header))
@@ -349,7 +374,10 @@ def profiling(
         f"{'total':^{col_width}}",
         f"{sum_spmv_total_time:6.3f}us({sum_spmv_total_cycles:7.0f})".center(col_width),
         f"{sum_spmv_communication_time:6.3f}us({sum_spmv_communication_cycles:7.0f})".center(col_width),
-        f"{sum_spmv_compute_time:6.3f}us({sum_spmv_compute_cycles:7.0f})".center(col_width)
+        f"{sum_spmv_compute_time:6.3f}us({sum_spmv_compute_cycles:7.0f})".center(col_width),
+        f"{'N/A':^{col_width}}",
+        f"{'N/A':^{col_width}}",
+        f"{'N/A':^{col_width}}"
     ]
     print("|" + "|".join(total_row) + "|")
     print(build_divider(compute_comm_header, "="))

@@ -159,8 +159,7 @@ def process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, 
     """
     import threading
     
-    out_path = f"out_dir_S{size}x_L{levels}_M{max_ite}_P{pre_iter}_P{post_iter}_B{bottom_iter}"
-    os.makedirs(out_path, exist_ok=True)
+    
     layout_file = "./src/layout_gmg_vcycle.csl"
     bsizemap = {
         4: 4,
@@ -171,9 +170,10 @@ def process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, 
         128: 128, # Let's keep a sweet spot of totalsize/4, so 1/4 th size is block size.
         256: 256,
         512: 256, # seems heuristically better when tested with different block sizes
-        # 512: 384,  # Why? Can't fit problem, need to reduce allocation
     }
     BSIZE  = bsizemap[size]
+    out_path = f"out_dir_S{size}x_L{levels}_M{max_ite}_P{pre_iter}_P{post_iter}_B{bottom_iter}"
+    os.makedirs(out_path, exist_ok=True)
 
     INLINE_THRESHOLD = 256    # inline always good for speed, # code segment
     artifact_name = f"out_vcycle{size}"
@@ -246,27 +246,48 @@ def main():
     # Format: (size, levels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter)
     # NOTE: MANUALLY DELETE FOLDER IF THERE IS SOME CHANGES IN THE SOURCE CODE AS IT WILL SKIP COMPILATION DUE TO CACHING.
     problems = [
-         (4, 2, 100, 1e-5, 6, 6, 100),   # Tiny problem
-         (8, 3, 100, 1e-5, 6, 6, 100),   # Tiny problem
-         (16, 4, 100, 1e-5, 6, 6, 100),   # Small problem
-         (32, 5, 100, 1e-5, 6, 6, 100),   # Small problem
-         (64, 6, 100, 1e-5, 6, 6, 100),   # Medium problem
-         (128, 7, 100, 1e-5, 6, 6, 100),   # Large problem
-         (256, 8, 100, 1e-5, 6, 6, 100),   # Very large
-         (512, 9, 100, 1e-5, 6, 6, 100),   # Very large
-
-
-        # 3/3/6
-         (4, 2, 100, 1e-5, 3, 3, 6),   # Tiny problem
-         (8, 3, 100, 1e-5, 3, 3, 6),   # Tiny problem
-         (16, 4, 100, 1e-5, 3, 3, 6),   # Small problem
-         (32, 5, 100, 1e-5, 3, 3, 6),   # Small problem
-         (64, 6, 100, 1e-5, 3, 3, 6),   # Medium problem
-         (128, 7, 100, 1e-5, 3, 3, 6),   # Large problem
-         (256, 8, 100, 1e-5, 3, 3, 6),   # Very large
-         (512, 9, 100, 1e-5, 3, 3, 6),   # Very large        
+        #  (4, 2, 100, 1e-5, 6, 6, 100),   # Tiny problem
+        #  (8, 3, 100, 1e-5, 6, 6, 100),   # Tiny problem
+        #  (16, 4, 100, 1e-5, 6, 6, 100),   # Small problem
+        #  (32, 5, 100, 1e-5, 6, 6, 100),   # Small problem
+        #  (64, 6, 100, 1e-5, 6, 6, 100),   # Medium problem
+        #  (128, 7, 100, 1e-5, 6, 6, 100),   # Large problem
+        #  (256, 8, 100, 1e-5, 6, 6, 100),   # Very large
+        #  (512, 9, 100, 1e-5, 6, 6, 100),   # Very large
+   
 
         # OSCAR matching problems
+        # # # 4/4/6
+        #  (4, 2, 100, 1e-5, 4, 4, 6),   # Tiny problem
+        #  (8, 3, 100, 1e-5, 4, 4, 6),   # Tiny problem
+        #  (16, 4, 100, 1e-5, 4, 4, 6),   # Small problem
+        #  (32, 5, 100, 1e-5, 4, 4, 6),   # Small problem
+        #  (64, 6, 100, 1e-5, 4, 4, 6),   # Medium problem
+        #  (128, 7, 100, 1e-5, 4, 4, 6),   # Large problem
+        #  (256, 8, 100, 1e-5, 4, 4, 6),   # Very large
+        #  (512, 9, 100, 1e-5, 4, 4, 6),   # Very large
+        # 
+
+        # 6/6/6
+        #  (4, 2, 100, 1e-5, 6, 6, 6),   # Tiny problem
+        #  (8, 3, 100, 1e-5, 6, 6, 6),   # Tiny problem
+        #  (16, 4, 100, 1e-5, 6, 6, 6),   # Small problem
+        #  (32, 5, 100, 1e-5, 6, 6, 6),   # Small problem
+        #  (64, 6, 100, 1e-5, 6, 6, 6),   # Medium problem
+        #  (128, 7, 100, 1e-5, 6, 6, 6),   # Large problem
+         (256, 8, 100, 1e-5, 6, 6, 6),   # Very large
+        #  (512, 9, 100, 1e-5, 6, 6, 6),   # Very large        
+
+        # # # 4/4/100
+        #  (4, 2, 100, 1e-5, 4, 4, 100),   # Tiny problem
+        #  (8, 3, 100, 1e-5, 4, 4, 100),   # Tiny problem
+        #  (16, 4, 100, 1e-5, 4, 4, 100),   # Small problem
+        #  (32, 5, 100, 1e-5, 4, 4, 100),   # Small problem
+        #  (64, 6, 100, 1e-5, 4, 4, 100),   # Medium problem
+        #  (128, 7, 100, 1e-5, 4, 4, 100),   # Large problem
+        #  (256, 8, 100, 1e-5, 4, 4, 100),   # Very large
+        #  (512, 9, 100, 1e-5, 4, 4, 100),   # Very large
+
     ]
     verbose = False    
     results = []
