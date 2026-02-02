@@ -393,7 +393,7 @@ fn save_timestamp_start(timer_id: i16) void {
 fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
     timer.stop(timer_id);
     const offset: i16 = level * timer.tsc_size_words;
-    timer.accumulate_elapsed(timer_id, @ptrcast(*[timer.tsc_size_words]u16, &timing_array[offset]));
+    timer.accumulate_elapsed(timer_id, @ptrcast(*[timer.tsc_size_words]u16, &timing_array[offset]));    // 1 instruction has a cost of ~100 cycles on 512 cycles problem.
 }
 //-------------------------------------------------
 // GMG KERNELS

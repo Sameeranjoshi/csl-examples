@@ -20,22 +20,14 @@ except ImportError:
 
 def parse_configuration_summary(text: str) -> List[Dict]:
     """
-    Parse Configuration Summary sections to extract all configuration parameters:
-    - Grid size (PE tiles)
-    - Levels, Max iterations, Tolerances
-    - Pre/Post/Bottom iterations
-    - Datatype, Jacobi omega, Stencil parameters
-    - Channels, Block size, Buffer widths
-    - Device iterations, Device final |rho|_inf
-    - Converged status, Compile time, Run time
+    Parse Configuration Summary sections to extract all configuration parameters.
+    Uses run blocks (Output directory: out_dir_*) so each problem size appears once.
     """
     results = []
-    
-    # Split by device runs - each run ends with Configuration Summary
-    # Look for pattern: "Device calculations..." -> ... -> "Configuration Summary"
-    device_runs = re.split(r'Device calculations\.\.\.', text)
-    
-    for run_idx, run_text in enumerate(device_runs[1:], 1):  # Skip first split (before first device run)
+    blocks = split_into_run_blocks(text)
+
+    for grid_size, block_text in blocks:
+        run_text = block_text
         # Find Configuration Summary in this run
         config_match = re.search(
             r'Configuration Summary\s*============================================================\s*(.*?)(?=\n\n|\nProcessing on host|\nCompile command|\Z)',
@@ -45,17 +37,14 @@ def parse_configuration_summary(text: str) -> List[Dict]:
         
         if not config_match:
             continue
-            
+
         section = config_match.group(1)
         data = {}
-        
-        # Extract grid size
-        grid_match = re.search(r'HeightxWidthxZDim\s*:\s*(\d+)x(\d+)x(\d+)', section)
-        if grid_match:
-            width, height, zdim = map(int, grid_match.groups())
-            data['grid_size'] = f"{width}x{height}x{zdim}"
-            data['total_grid_size'] = width * height * zdim
-            data['pe_tiles'] = f"{width}x{height}x{zdim}"
+        # Use grid_size from run block (one per problem size)
+        size_val = int(grid_size.split('x')[0])
+        data['grid_size'] = grid_size
+        data['total_grid_size'] = size_val * size_val * size_val
+        data['pe_tiles'] = grid_size
         
         # Extract all configuration parameters
         levels_match = re.search(r'Levels\s*:\s*(\d+)', section)
@@ -140,94 +129,204 @@ def parse_configuration_summary(text: str) -> List[Dict]:
             data['run_time_s'] = float(run_match.group(1))
         else:
             data['run_time_s'] = None
-        
-        if 'grid_size' in data:
-            results.append(data)
-    
+
+        results.append(data)
     return results
+
+
+def split_into_run_blocks(text: str) -> List[tuple]:
+    """
+    Split file into one block per run using 'Output directory: out_dir_'.
+    Returns list of (grid_size, block_text) where grid_size is e.g. '4x4x4'.
+    Ensures exactly one record per problem size (no duplicates).
+    """
+    blocks = []
+    # Split by run header; keep delimiter with following content
+    parts = re.split(r'(Output directory: out_dir_S\d+x[^\n]*)', text)
+    # parts[0] is preamble, then [delim, content, delim, content, ...]
+    for i in range(1, len(parts), 2):
+        if i + 1 >= len(parts):
+            break
+        header = parts[i]  # e.g. "Output directory: out_dir_S4x_L2_M100_P6_P6_B6"
+        block_text = parts[i + 1]
+        # Get size from next few lines: "Parameters: size=4, levels=2, ..."
+        size_match = re.search(r'Parameters:\s*size=(\d+)', block_text)
+        if size_match:
+            size = int(size_match.group(1))
+            grid_size = f"{size}x{size}x{size}"
+            blocks.append((grid_size, block_text))
+    return blocks
 
 
 def parse_spmv_totals(text: str) -> List[Dict]:
     """
     Parse SPMV Compute vs Communication Time tables from the output file.
-    Returns list of dictionaries with grid_size, comm_time, compute_time.
+    Returns list of dictionaries with grid_size, total_spmv_us, comm_time_us, compute_time_us.
+    Uses run blocks to avoid duplicate problem sizes.
     """
     results = []
-    
-    # Pattern to find grid size from Configuration Summary
-    grid_pattern = re.compile(r'HeightxWidthxZDim\s*:\s*(\d+)x(\d+)x(\d+)')
-    
-    # Find all SPMV table sections
-    sections = text.split('7-pt Stencil Compute vs Communication Time per Level')
-    
-    for section in sections[1:]:  # Skip first empty split
-        # Extract total row
+    blocks = split_into_run_blocks(text)
+    for grid_size, block_text in blocks:
+        # Find SPMV table in this block only
+        if '7-pt Stencil Compute vs Communication Time per Level' not in block_text:
+            continue
+        section = block_text.split('7-pt Stencil Compute vs Communication Time per Level', 1)[-1]
+        # Extract total row: | total | TotalSpMV | Comm | Compute | ...
         total_match = re.search(
             r'\|\s*total\s*\|\s*([\d.]+)us.*?\|\s*([\d.]+)us.*?\|\s*([\d.]+)us',
             section,
             re.DOTALL
         )
-        
         if total_match:
-            comm_time = float(total_match.group(2))
-            compute_time = float(total_match.group(3))
-            
-            # Find grid size in this section
-            grid_match = grid_pattern.search(section)
-            if grid_match:
-                width, height, zdim = map(int, grid_match.groups())
-                grid_size = f"{width}x{height}x{zdim}"
-                
-                results.append({
-                    'grid_size': grid_size,
-                    'comm_time_us': comm_time,
-                    'compute_time_us': compute_time,
+            total_spmv_us = float(total_match.group(1))
+            comm_time_us = float(total_match.group(2))
+            compute_time_us = float(total_match.group(3))
+            results.append({
+                'grid_size': grid_size,
+                'total_spmv_us': total_spmv_us,
+                'comm_time_us': comm_time_us,
+                'compute_time_us': compute_time_us,
+            })
+    return results
+
+
+def parse_spmv_per_level(text: str) -> List[Dict]:
+    """
+    Parse 7-pt Stencil Compute vs Communication table (all level rows) per run block.
+    Returns list of {grid_size, levels: [ {level, total_spmv_us, comm_time_us, compute_time_us}, ... ] }.
+    """
+    results = []
+    blocks = split_into_run_blocks(text)
+    # Data row: | level | Total SpMV Time | Communication Time | Compute Time | ...
+    row_re = re.compile(
+        r'\|\s*(\d+)\s*\|'  # level
+        r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'  # Total SpMV
+        r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'  # Communication
+        r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'   # Compute
+    )
+    for grid_size, block_text in blocks:
+        if '7-pt Stencil Compute vs Communication Time per Level' not in block_text:
+            continue
+        section = block_text.split('7-pt Stencil Compute vs Communication Time per Level', 1)[-1]
+        # Only parse the 7-pt Stencil table; stop at Interpolation Micro-Benchmark (same regex would match its rows)
+        if 'Interpolation Micro-Benchmark' in section:
+            section = section.split('Interpolation Micro-Benchmark', 1)[0]
+        levels = []
+        for line in section.split('\n'):
+            if re.search(r'\|\s*total\s*\|', line, re.IGNORECASE):
+                continue
+            match = row_re.search(line)
+            if match:
+                level = int(match.group(1))
+                levels.append({
+                    'level': level,
+                    'total_spmv_us': float(match.group(2)),
+                    'comm_time_us': float(match.group(3)),
+                    'compute_time_us': float(match.group(4)),
                 })
-    
+        if levels:
+            results.append({'grid_size': grid_size, 'levels': levels})
+    return results
+
+
+def parse_interpolation_totals(text: str) -> List[Dict]:
+    """
+    Parse Interpolation Micro-Benchmark table total row from each run block.
+    Returns list of dicts with grid_size, expand_z_T1, state_machine_T20, reset_routes_T21,
+    send_data_T22, interp_add_T3, interp_total (us).
+    """
+    results = []
+    blocks = split_into_run_blocks(text)
+    # Total row: | total | expand_z(T1) | bcast_total(T2) | state_machine(T2.0) | reset_routes(T2.1) | send_data(T2.2) | interp_add(T3) | interp_total |
+    total_row_re = re.compile(
+        r'\|\s*total\s*\|\s*([\d.]+)us\s*\([^)]+\)\s*\|'   # T1 expand_z
+        r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'                 # T2 bcast_total (skip in plot)
+        r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'                 # T2.0 state_machine
+        r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'                 # T2.1 reset_routes
+        r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'                 # T2.2 send_data
+        r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'                 # T3 interp_add
+        r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'                  # interp_total
+    )
+    for grid_size, block_text in blocks:
+        if 'Interpolation Micro-Benchmark' not in block_text:
+            continue
+        section = block_text.split('Interpolation Micro-Benchmark', 1)[-1]
+        match = total_row_re.search(section)
+        if match:
+            results.append({
+                'grid_size': grid_size,
+                'expand_z_T1': float(match.group(1)),
+                'state_machine_T20': float(match.group(3)),
+                'reset_routes_T21': float(match.group(4)),
+                'send_data_T22': float(match.group(5)),
+                'interp_add_T3': float(match.group(6)),
+                'interp_total': float(match.group(7)),
+            })
+    return results
+
+
+def parse_interpolation_per_level(text: str) -> List[Dict]:
+    """
+    Parse full Interpolation Micro-Benchmark table (all level rows) per run block.
+    Returns list of {grid_size, levels: [ {level, expand_z_T1, bcast_T2, state_machine_T20,
+    reset_routes_T21, send_data_T22, interp_add_T3, interp_total}, ... ] }.
+    """
+    results = []
+    blocks = split_into_run_blocks(text)
+    # Data row: | level | T1 | T2 | T2.0 | T2.1 | T2.2 | T3 | interp_total |
+    row_re = re.compile(
+        r'\|\s*(\d+)\s*\|'  # level
+        r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'  # T1 expand_z
+        r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'  # T2 bcast_total
+        r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'  # T2.0 state_machine
+        r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'  # T2.1 reset_routes
+        r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'  # T2.2 send_data
+        r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'  # T3 interp_add
+        r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'   # interp_total
+    )
+    for grid_size, block_text in blocks:
+        if 'Interpolation Micro-Benchmark' not in block_text:
+            continue
+        section = block_text.split('Interpolation Micro-Benchmark', 1)[-1]
+        levels = []
+        for line in section.split('\n'):
+            if re.search(r'\|\s*total\s*\|', line, re.IGNORECASE):
+                continue
+            match = row_re.search(line)
+            if match:
+                level = int(match.group(1))
+                levels.append({
+                    'level': level,
+                    'expand_z_T1': float(match.group(2)),
+                    'bcast_T2': float(match.group(3)),
+                    'state_machine_T20': float(match.group(4)),
+                    'reset_routes_T21': float(match.group(5)),
+                    'send_data_T22': float(match.group(6)),
+                    'interp_add_T3': float(match.group(7)),
+                    'interp_total': float(match.group(8)),
+                })
+        if levels:
+            results.append({'grid_size': grid_size, 'levels': levels})
     return results
 
 
 def parse_vcycle_times(text: str) -> List[Dict]:
     """
-    Parse V-cycle time from output file.
+    Parse V-cycle time from output file (one per run block).
     Extracts the "Total V-cycle time (Kernel Launch + V-cycle time)" value.
-    Returns list of dictionaries with grid_size and vcycle_time.
     """
     results = []
-    
-    # Pattern to find V-cycle time section - matches actual log format:
-    # "Total Upper bound V-cycle time (sum of operations):   1071.178 us (    937281 cycles)"
-    # "Total V-cycle time (Kernel Launch + V-cycle time):    899.928 us (    787437 cycles)"
+    blocks = split_into_run_blocks(text)
     vcycle_pattern = re.compile(
         r'Total Upper bound V-cycle time \(sum of operations\):\s*([\d.]+)\s*us.*?\n'
         r'Total V-cycle time \(Kernel Launch \+ V-cycle time\):\s*([\d.]+)\s*us',
         re.DOTALL
     )
-    
-    # Pattern to find grid size
-    grid_pattern = re.compile(r'HeightxWidthxZDim\s*:\s*(\d+)x(\d+)x(\d+)')
-    
-    # Find all V-cycle time sections
-    for match in vcycle_pattern.finditer(text):
-        end = match.end()
-        # Look backward and forward to find the corresponding grid size
-        # Grid size appears in Configuration Summary which comes after V-cycle time
-        next_text = text[end:min(len(text), end+2000)]
-        grid_match = grid_pattern.search(next_text)
-        if grid_match:
-            width, height, zdim = map(int, grid_match.groups())
-            grid_size = f"{width}x{height}x{zdim}"
-            
-            time1 = float(match.group(1))  # Upper bound (sum of operations)
-            time2 = float(match.group(2))  # Actual V-cycle time (Kernel Launch + V-cycle)
-            # Use the actual V-cycle time (time2) which is the "Kernel Launch + V-cycle time"
-            vcycle_time = time2
-            
-            results.append({
-                'grid_size': grid_size,
-                'vcycle_time_us': vcycle_time
-            })
-    
+    for grid_size, block_text in blocks:
+        match = vcycle_pattern.search(block_text)
+        if match:
+            time2 = float(match.group(2))  # Kernel Launch + V-cycle time
+            results.append({'grid_size': grid_size, 'vcycle_time_us': time2})
     return results
 
 
@@ -252,6 +351,7 @@ def parse_all_data(text: str) -> List[Dict]:
             'grid_size': grid,
             'comm_time_us': item['comm_time_us'],
             'compute_time_us': item['compute_time_us'],
+            'total_spmv_us': item.get('total_spmv_us'),
         }
     
     # Add V-cycle data
@@ -390,7 +490,101 @@ def plot_comm_vs_compute(data: List[Dict], output_file: str = 'comm_vs_compute_t
     # ax2.grid(axis='y', alpha=0.3, linestyle='--')
     ax2.grid(False)
     
-    plt.tight_layout() 
+    plt.tight_layout()
+    plt.savefig(output_file, dpi=150, bbox_inches='tight')
+    print(f"Saved: {output_file}")
+    return fig
+
+
+def plot_spmv_internal(spmv_per_level_data: List[Dict], output_file: str = 'spmv_internal.png'):
+    """
+    Plot 7-pt Stencil per level for 3 problem sizes (128³, 256³, 512³) in one figure.
+    One subplot per problem size; each subplot: level vs time (µs), Communication (solid),
+    Compute (solid), Total SpMV Time (dotted).
+    """
+    if not HAS_MATPLOTLIB or not spmv_per_level_data:
+        return None
+    want_order = ['128x128x128', '256x256x256', '512x512x512']
+    by_size = {d['grid_size']: d for d in spmv_per_level_data}
+    spmv_per_level_data = [by_size[g] for g in want_order if g in by_size]
+    if not spmv_per_level_data:
+        return None
+    n_plots = len(spmv_per_level_data)
+    fig, axes = plt.subplots(1, n_plots, figsize=(6 * n_plots, 5))
+    axes = np.atleast_1d(axes)
+    for idx, block in enumerate(spmv_per_level_data):
+        ax = axes.flat[idx]
+        grid_size = block['grid_size']
+        levels_data = sorted(block['levels'], key=lambda x: x['level'])
+        levels = [r['level'] for r in levels_data]
+        ax.plot(levels, [r['comm_time_us'] for r in levels_data], 'o-', label='Communication Time', linewidth=1.5, markersize=4)
+        ax.plot(levels, [r['compute_time_us'] for r in levels_data], 's-', label='Compute Time', linewidth=1.5, markersize=4)
+        ax.plot(levels, [r['total_spmv_us'] for r in levels_data], '^--', label='Total SpMV Time', linewidth=2, markersize=5)
+        dim = grid_size.split('x')[0]
+        ax.set_title(f'Grid {dim}³', fontsize=12, fontweight='bold')
+        ax.set_xlabel('Level', fontsize=10)
+        ax.set_ylabel('Time (µs)', fontsize=10)
+        ax.set_xticks(levels)
+        ax.legend(loc='best', framealpha=0.9, fontsize=9)
+        ax.grid(True, which='major', linestyle='-', alpha=0.2)
+    fig.suptitle('7-pt Stencil: Communication vs Compute vs Total SpMV Time per Level', fontsize=14, fontweight='bold', y=1.02)
+    plt.tight_layout()
+    plt.savefig(output_file, dpi=150, bbox_inches='tight')
+    print(f"Saved: {output_file}")
+    return fig
+
+
+def plot_interpolation_internal(interp_per_level_data: List[Dict], output_file: str = 'interpolation_internal.png'):
+    """
+    Plot Interpolation Micro-Benchmark table per level for 3 problem sizes (128³, 256³, 512³).
+    One subplot per problem size; each subplot shows level vs time (µs) for T1, T2, T2.0, T2.1,
+    T2.2, T3 (solid) and interp_total (dotted). Y-axis in log scale. All 3 in a single PNG.
+    """
+    if not HAS_MATPLOTLIB or not interp_per_level_data:
+        return None
+    want_order = ['128x128x128', '256x256x256', '512x512x512']
+    by_size = {d['grid_size']: d for d in interp_per_level_data}
+    interp_per_level_data = [by_size[g] for g in want_order if g in by_size]
+    if not interp_per_level_data:
+        return None
+    n_plots = len(interp_per_level_data)
+    fig, axes = plt.subplots(1, n_plots, figsize=(6 * n_plots, 5))
+    axes = np.atleast_1d(axes)  # shape (3,) or (1,) so axes.flat[i] is the i-th Axes
+    for idx, block in enumerate(interp_per_level_data):
+        ax = axes.flat[idx]
+        grid_size = block['grid_size']
+        levels_data = sorted(block['levels'], key=lambda x: x['level'])
+        levels = [r['level'] for r in levels_data]
+        # Skip level rows where all components are 0 (e.g. bottom level) for cleaner plot
+        def has_positive(row):
+            return (row['expand_z_T1'] or row['bcast_T2'] or row['state_machine_T20'] or
+                    row['reset_routes_T21'] or row['send_data_T22'] or row['interp_add_T3'] or row['interp_total']) > 0
+        plot_data = [r for r in levels_data if has_positive(r)]
+        if not plot_data:
+            plot_data = levels_data
+        levels = [r['level'] for r in plot_data]
+        # For log scale, avoid 0 (use small epsilon so line is visible)
+        eps = 1e-3
+        def _y(v):
+            return v if v > 0 else eps
+        ax.plot(levels, [_y(r['expand_z_T1']) for r in plot_data], 'o-', label='expand_z (T1)', linewidth=1.5, markersize=4)
+        ax.plot(levels, [_y(r['bcast_T2']) for r in plot_data], 's-', label='bcast_total (T2)', linewidth=1.5, markersize=4)
+        ax.plot(levels, [_y(r['state_machine_T20']) for r in plot_data], 'v-', label='state_machine (T2.0)', linewidth=1.5, markersize=4)
+        ax.plot(levels, [_y(r['reset_routes_T21']) for r in plot_data], '^-', label='reset_routes (T2.1)', linewidth=1.5, markersize=4)
+        ax.plot(levels, [_y(r['send_data_T22']) for r in plot_data], 'd-', label='send_data (T2.2)', linewidth=1.5, markersize=4)
+        ax.plot(levels, [_y(r['interp_add_T3']) for r in plot_data], 'p-', label='interp_add (T3)', linewidth=1.5, markersize=4)
+        ax.plot(levels, [_y(r['interp_total']) for r in plot_data], '*-', label='interp_total', linewidth=2, markersize=5, linestyle='--')
+        dim = grid_size.split('x')[0]
+        ax.set_title(f'Grid {dim}³', fontsize=12, fontweight='bold')
+        ax.set_xlabel('Level', fontsize=10)
+        ax.set_ylabel('Time (µs, log)', fontsize=10)
+        ax.set_yscale('log')
+        ax.set_xticks(levels)
+        ax.legend(loc='best', framealpha=0.9, fontsize=7)
+        ax.grid(True, which='major', linestyle='-', alpha=0.2)
+        ax.grid(True, which='minor', linestyle=':', alpha=0.15)
+    fig.suptitle('Interpolation Micro-Benchmark per Level (T1, T2, T2.0, T2.1, T2.2, T3, interp_total)', fontsize=14, fontweight='bold', y=1.02)
+    plt.tight_layout()
     plt.savefig(output_file, dpi=150, bbox_inches='tight')
     print(f"Saved: {output_file}")
     return fig
@@ -399,73 +593,46 @@ def plot_comm_vs_compute(data: List[Dict], output_file: str = 'comm_vs_compute_t
 def parse_per_operation_timing(text: str) -> List[Dict]:
     """
     Parse "Time per operation and level" tables from the output file.
-    Returns list of dictionaries, each containing grid_size and per-level operator timings.
+    Uses run blocks so each problem size appears once.
     """
     results = []
-    
-    # Pattern to find grid size from Configuration Summary
-    grid_pattern = re.compile(r'HeightxWidthxZDim\s*:\s*(\d+)x(\d+)x(\d+)')
-    
-    # Split text by "Time per operation and level" tables
-    sections = text.split('Time per operation and level (us[cycles]):')
-    
-    for section in sections[1:]:  # Skip first empty split
-        # Extract data from the table
-        # Pattern to match each level row: | level | smooth | residual | restriction | interpolation | total | ...
-        # Example: |         0          | 63.338us(  55421)  |  4.687us(   4101)  | ...
-        
-        level_data = {}
+    blocks = split_into_run_blocks(text)
+    row_pattern = re.compile(
+        r'\|\s*(\d+)\s*\|'
+        r'\s*([\d.]+)us\([^)]+\)\s*\|'
+        r'\s*([\d.]+)us\([^)]+\)\s*\|'
+        r'\s*([\d.]+)us\([^)]+\)\s*\|'
+        r'\s*([\d.]+)us\([^)]+\)\s*\|'
+        r'\s*([\d.]+)us\([^)]+\)\s*\|'
+    )
+    for grid_size, block_text in blocks:
+        if 'Time per operation and level (us[cycles]):' not in block_text:
+            continue
+        section = block_text.split('Time per operation and level (us[cycles]):', 1)[-1]
+        # Only parse the first table; stop at 7-pt Stencil or next table
+        if '7-pt Stencil Compute vs Communication' in section:
+            section = section.split('7-pt Stencil Compute vs Communication', 1)[0]
         rows = []
-        
-        # Find all level rows (skip header and total rows)
-        # Pattern: | level | smooth | residual | restriction | interpolation | total | ...
-        # Example: |         0          | 63.338us(  55421)  |  4.687us(   4101)  | ...
-        # Note: The last column is "total" not "setup_init" in the new format
-        row_pattern = re.compile(
-            r'\|\s*(\d+)\s*\|'  # level number
-            r'\s*([\d.]+)us\([^)]+\)\s*\|'  # smooth
-            r'\s*([\d.]+)us\([^)]+\)\s*\|'  # residual
-            r'\s*([\d.]+)us\([^)]+\)\s*\|'  # restriction
-            r'\s*([\d.]+)us\([^)]+\)\s*\|'  # interpolation
-            r'\s*([\d.]+)us\([^)]+\)\s*\|'  # total (was setup_init)
-        )
-        
-        # Split section into lines and process each line
-        lines = section.split('\n')
-        for line in lines:
+        for line in section.split('\n'):
+            if re.search(r'\|\s*total\s*\|', line, re.IGNORECASE):
+                continue
             match = row_pattern.search(line)
             if match:
-                # Additional check: make sure this is not the "total" summary row
-                # The total row has "total" as the first column value, not a number
-                if re.search(r'\|\s*total\s*\|', line, re.IGNORECASE):
-                    continue
                 level = int(match.group(1))
                 smooth = float(match.group(2))
                 residual = float(match.group(3))
                 restriction = float(match.group(4))
                 interpolation = float(match.group(5))
-                total = float(match.group(6))  # This is the total column, not setup_init
-                
                 rows.append({
                     'level': level,
                     'smooth': smooth,
                     'residual': residual,
                     'restriction': restriction,
                     'interpolation': interpolation,
-                    'setup_init': 0.0  # setup_init is no longer in this table, set to 0
+                    'setup_init': 0.0,
                 })
-        
-        # Find grid size in this section
-        grid_match = grid_pattern.search(section)
-        if grid_match and rows:
-            width, height, zdim = map(int, grid_match.groups())
-            grid_size = f"{width}x{height}x{zdim}"
-            
-            results.append({
-                'grid_size': grid_size,
-                'levels': rows
-            })
-    
+        if rows:
+            results.append({'grid_size': grid_size, 'levels': rows})
     return results
 
 
@@ -626,6 +793,59 @@ def print_per_operation_timing_tables(all_timing_data: List[Dict]):
         print(f"{'='*100}\n")
 
 
+def print_spmv_per_level_tables(spmv_per_level_data: List[Dict]):
+    """
+    Print 7-pt Stencil per-level tables for problem sizes 128³, 256³, 512³ (same data as spmv_internal.png).
+    """
+    want_order = ['128x128x128', '256x256x256', '512x512x512']
+    by_size = {d['grid_size']: d for d in spmv_per_level_data}
+    for grid_size in want_order:
+        if grid_size not in by_size:
+            continue
+        block = by_size[grid_size]
+        levels_data = sorted(block['levels'], key=lambda x: x['level'])
+        if not levels_data:
+            continue
+        grid_dim = int(grid_size.split('x')[0])
+        print(f"\n{'='*100}")
+        print(f"7-pt Stencil (SpMV) per Level: Grid {grid_size}")
+        print(f"{'='*100}")
+        print(f"{'Level':<8} {'Subdomain':<12} {'Total SpMV (us)':<18} {'Communication (us)':<20} {'Compute (us)':<15}")
+        print("-"*100)
+        for r in levels_data:
+            level = r['level']
+            subdomain = grid_dim // (2 ** level)
+            print(f"{level:<8} {subdomain}³{'':<8} {r['total_spmv_us']:<18.2f} {r['comm_time_us']:<20.2f} {r['compute_time_us']:<15.2f}")
+        print(f"{'='*100}\n")
+
+
+def print_interpolation_per_level_tables(interp_per_level_data: List[Dict]):
+    """
+    Print Interpolation Micro-Benchmark per-level tables for 128³, 256³, 512³ (same data as interpolation_internal.png).
+    """
+    want_order = ['128x128x128', '256x256x256', '512x512x512']
+    by_size = {d['grid_size']: d for d in interp_per_level_data}
+    for grid_size in want_order:
+        if grid_size not in by_size:
+            continue
+        block = by_size[grid_size]
+        levels_data = sorted(block['levels'], key=lambda x: x['level'])
+        if not levels_data:
+            continue
+        grid_dim = int(grid_size.split('x')[0])
+        print(f"\n{'='*120}")
+        print(f"Interpolation Micro-Benchmark per Level: Grid {grid_size}")
+        print(f"{'='*120}")
+        print(f"{'Level':<6} {'Sub':<6} {'expand_z(T1)':<14} {'bcast(T2)':<12} {'state_m(T2.0)':<14} {'reset(T2.1)':<12} {'send(T2.2)':<12} {'interp(T3)':<12} {'interp_total':<12}")
+        print("-"*120)
+        for r in levels_data:
+            level = r['level']
+            subdomain = grid_dim // (2 ** level)
+            print(f"{level:<6} {subdomain}³{'':<3} {r['expand_z_T1']:<14.2f} {r['bcast_T2']:<12.2f} {r['state_machine_T20']:<14.2f} "
+                  f"{r['reset_routes_T21']:<12.2f} {r['send_data_T22']:<12.2f} {r['interp_add_T3']:<12.2f} {r['interp_total']:<12.2f}")
+        print(f"{'='*120}\n")
+
+
 def print_configuration_table(config_data: List[Dict]):
     """
     Print configuration parameters table with problem sizes as columns and config parameters as rows.
@@ -762,10 +982,24 @@ def main():
     if all_timing_data:
         print_per_operation_timing_tables(all_timing_data)
     
-    # Step 6: Generate plots if matplotlib is available
+    # Step 6: Parse per-level data for 3-subplot figures (128³, 256³, 512³)
+    interp_per_level = parse_interpolation_per_level(text)
+    spmv_per_level = parse_spmv_per_level(text)
+
+    # Step 6b: Print SPMV and Interpolation tables (same data we plot)
+    if spmv_per_level:
+        print_spmv_per_level_tables(spmv_per_level)
+    if interp_per_level:
+        print_interpolation_per_level_tables(interp_per_level)
+
+    # Step 7: Generate plots if matplotlib is available
     if HAS_MATPLOTLIB:
         print("\nGenerating plots...")
         plot_comm_vs_compute(data, 'comm_vs_compute_time.png')
+        if spmv_per_level:
+            plot_spmv_internal(spmv_per_level, 'spmv_internal.png')
+        if interp_per_level:
+            plot_interpolation_internal(interp_per_level, 'interpolation_internal.png')
         if all_timing_data:
             plot_all_per_operation_timing(all_timing_data)
         print("\n✓ All plots generated successfully!")
