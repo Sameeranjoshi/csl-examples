@@ -228,7 +228,9 @@ def profiling(
         device_solver, device_rh,
         counter_rho_check,
         simulator, 
-        timing_smooth_data, timing_residual_data, timing_restrict_data, timing_interp_data, timing_spmv_total_data, timing_spmv_communication_data, timing_spmv_compute_data, timing_total_start_end_data
+        timing_smooth_data, timing_residual_data, timing_restrict_data, timing_interp_data,
+        timing_interp_expand_z_data, timing_interp_bcast_data, timing_bcast_configure_data, timing_bcast_to_all_data, timing_bcast_state_entry_data, timing_interp_add_data,
+        timing_spmv_total_data, timing_spmv_communication_data, timing_spmv_compute_data, timing_total_start_end_data
     ):
     print("\n" + "="*60)
     print("Performance Timing")
@@ -382,6 +384,58 @@ def profiling(
     print("|" + "|".join(total_row) + "|")
     print(build_divider(compute_comm_header, "="))
 
+    # ------------------------------------------------------------
+    # Interpolation Micro-Benchmark (f_interpolation_expand_z, f_bcast_from_top_left, f_interpolation_add)
+    # bcast breakdown: state_entry(activation+branching) | bcast_configure | bcast_to_all | remaining(fabric+TD)
+    # ------------------------------------------------------------
+    print("\nInterpolation Micro-Benchmark (us[cycles]) per Level:")
+    interp_micro_header = ["level", "expand_z(T1)", "bcast_total(T2)", "state_machine(T2.0)", "reset_routes(T2.1)", "send_data(T2.2)", "interp_add(T3)", "interp_total(T1+T2+T3)"]
+    print(build_divider(interp_micro_header, "="))
+    print("|" + "|".join(f"{name:^{col_width}}" for name in interp_micro_header) + "|")
+    print(build_divider(interp_micro_header))
+
+    for level in range(args.levels):
+        expand_z_entry = timing_interp_expand_z_data[level]
+        bcast_entry = timing_interp_bcast_data[level]
+        bcast_configure_entry = timing_bcast_configure_data[level]
+        bcast_to_all_entry = timing_bcast_to_all_data[level]
+        bcast_state_entry_entry = timing_bcast_state_entry_data[level]
+        interp_add_entry = timing_interp_add_data[level]
+        interp_total_entry = timing_interp_data[level]
+
+        row = [
+            f"{level:^{col_width}}",
+            f"{expand_z_entry['time_send']:6.3f}us({expand_z_entry['cycles_send']:7.0f})".center(col_width),
+            f"{bcast_entry['time_send']:6.3f}us({bcast_entry['cycles_send']:7.0f})".center(col_width),
+            f"{bcast_state_entry_entry['time_send']:6.3f}us({bcast_state_entry_entry['cycles_send']:7.0f})".center(col_width),
+            f"{bcast_configure_entry['time_send']:6.3f}us({bcast_configure_entry['cycles_send']:7.0f})".center(col_width),
+            f"{bcast_to_all_entry['time_send']:6.3f}us({bcast_to_all_entry['cycles_send']:7.0f})".center(col_width),
+            f"{interp_add_entry['time_send']:6.3f}us({interp_add_entry['cycles_send']:7.0f})".center(col_width),
+            f"{interp_total_entry['time_send']:6.3f}us({interp_total_entry['cycles_send']:7.0f})".center(col_width),
+        ]
+        print("|" + "|".join(row) + "|")
+        print(build_divider(interp_micro_header))
+
+    sum_expand_z = sum(e["cycles_send"] for e in timing_interp_expand_z_data)
+    sum_bcast = sum(e["cycles_send"] for e in timing_interp_bcast_data)
+    sum_bcast_configure = sum(e["cycles_send"] for e in timing_bcast_configure_data)
+    sum_bcast_to_all = sum(e["cycles_send"] for e in timing_bcast_to_all_data)
+    sum_bcast_state_entry = sum(e["cycles_send"] for e in timing_bcast_state_entry_data)
+    sum_interp_add_cycles = sum(e["cycles_send"] for e in timing_interp_add_data)
+    sum_interp_total_cycles = sum(e["cycles_send"] for e in timing_interp_data)
+    interp_micro_total_row = [
+        f"{'total':^{col_width}}",
+        f"{sum(e['time_send'] for e in timing_interp_expand_z_data):6.3f}us({sum_expand_z:7.0f})".center(col_width),
+        f"{sum(e['time_send'] for e in timing_interp_bcast_data):6.3f}us({sum_bcast:7.0f})".center(col_width),
+        f"{sum(e['time_send'] for e in timing_bcast_state_entry_data):6.3f}us({sum_bcast_state_entry:7.0f})".center(col_width),
+        f"{sum(e['time_send'] for e in timing_bcast_configure_data):6.3f}us({sum_bcast_configure:7.0f})".center(col_width),
+        f"{sum(e['time_send'] for e in timing_bcast_to_all_data):6.3f}us({sum_bcast_to_all:7.0f})".center(col_width),
+        f"{sum(e['time_send'] for e in timing_interp_add_data):6.3f}us({sum_interp_add_cycles:7.0f})".center(col_width),
+        f"{sum(e['time_send'] for e in timing_interp_data):6.3f}us({sum_interp_total_cycles:7.0f})".center(col_width),
+    ]
+    print("|" + "|".join(interp_micro_total_row) + "|")
+    print(build_divider(interp_micro_header, "="))
+
     ############################################################
     # Total time and bandwidth:
     ############################################################
@@ -462,6 +516,12 @@ def main():
     symbol_timing_residual = simulator.get_id("timing_residual")
     symbol_timing_restrict = simulator.get_id("timing_restrict")
     symbol_timing_interp = simulator.get_id("timing_interp")
+    symbol_timing_interp_expand_z = simulator.get_id("timing_interp_expand_z")
+    symbol_timing_interp_bcast = simulator.get_id("timing_interp_bcast")
+    symbol_timing_bcast_configure = simulator.get_id("timing_bcast_configure")
+    symbol_timing_bcast_to_all = simulator.get_id("timing_bcast_to_all")
+    symbol_timing_bcast_state_entry = simulator.get_id("timing_bcast_state_entry")
+    symbol_timing_interp_add = simulator.get_id("timing_interp_add")
     symbol_time_total_start_end = simulator.get_id("time_total_start_end")
     symbol_timing_spmv_total = simulator.get_id("timing_spmv_total")
     symbol_timing_spmv_communication = simulator.get_id("timing_spmv_communication")
@@ -526,6 +586,12 @@ def main():
     timing_residual_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_residual, WORDS_PER_TIMESTAMP, "residual")
     timing_restrict_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_restrict, WORDS_PER_TIMESTAMP, "restriction")
     timing_interp_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_interp, WORDS_PER_TIMESTAMP, "interpolation")
+    timing_interp_expand_z_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_interp_expand_z, WORDS_PER_TIMESTAMP, "interp_expand_z")
+    timing_interp_bcast_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_interp_bcast, WORDS_PER_TIMESTAMP, "interp_bcast")
+    timing_bcast_configure_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_bcast_configure, WORDS_PER_TIMESTAMP, "bcast_configure")
+    timing_bcast_to_all_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_bcast_to_all, WORDS_PER_TIMESTAMP, "bcast_to_all")
+    timing_bcast_state_entry_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_bcast_state_entry, WORDS_PER_TIMESTAMP, "bcast_state_entry")
+    timing_interp_add_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_interp_add, WORDS_PER_TIMESTAMP, "interp_add")
     timing_spmv_total_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_spmv_total, WORDS_PER_TIMESTAMP, "spmv_total")
     timing_spmv_communication_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_spmv_communication, WORDS_PER_TIMESTAMP, "spmv_communication")
     timing_spmv_compute_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_spmv_compute, WORDS_PER_TIMESTAMP, "spmv_compute")
@@ -584,7 +650,9 @@ def main():
         device_solver, device_rh,
         counter_rho_check,
         simulator, 
-        timing_smooth_data, timing_residual_data, timing_restrict_data, timing_interp_data, timing_spmv_total_data, timing_spmv_communication_data, timing_spmv_compute_data, timing_total_start_end_data
+        timing_smooth_data, timing_residual_data, timing_restrict_data, timing_interp_data,
+        timing_interp_expand_z_data, timing_interp_bcast_data, timing_bcast_configure_data, timing_bcast_to_all_data, timing_bcast_state_entry_data, timing_interp_add_data,
+        timing_spmv_total_data, timing_spmv_communication_data, timing_spmv_compute_data, timing_total_start_end_data
         )  
     
     ###########################################################

@@ -20,7 +20,7 @@ const MAX_ITERATIONS: i16 = 60;  // Maximum iterations for storing rho history, 
 const math_lib = @import_module("<math>");
 const blas_lib = @import_module("blas.csl"); // modified reduced some code.
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
-const timer = @import_module("timer_modified.csl", .{ .timerCount = 5 });
+const timer = @import_module("timer_modified.csl", .{ .timerCount = 8 });
 const layout_mod = @import_module("<layout>");
 const simprint = @import_module("<simprint>", .{.enable = true});
 // const timestamp = @import_module("<time>");
@@ -83,6 +83,10 @@ const TIMER_ID_RESIDUAL: i16 = 1;
 const TIMER_ID_RESTRICT: i16 = 2;
 const TIMER_ID_INTERP: i16 = 3;
 const TIMER_ID_TOTAL: i16 = 4;
+// Interpolation micro-benchmark timers (inside TIMER_ID_INTERP)
+const TIMER_ID_INTERP_EXPAND_Z: i16 = 5;
+const TIMER_ID_INTERP_BCAST: i16 = 6;
+const TIMER_ID_INTERP_ADD: i16 = 7;
 
 
 
@@ -131,6 +135,12 @@ var timing_smooth = @zeros([LEVELS * timer.tsc_size_words]u16); // pre-/post-smo
 var timing_residual = @zeros([LEVELS * timer.tsc_size_words]u16);    // residual accumulated elapsed timing
 var timing_restrict = @zeros([LEVELS * timer.tsc_size_words]u16);    // restriction accumulated elapsed timing
 var timing_interp = @zeros([LEVELS * timer.tsc_size_words]u16);      // interpolation accumulated elapsed timing
+var timing_interp_expand_z = @zeros([LEVELS * timer.tsc_size_words]u16);  // interpolation expand_z micro
+var timing_interp_bcast = @zeros([LEVELS * timer.tsc_size_words]u16);     // interpolation bcast micro
+var timing_bcast_configure = @zeros([LEVELS * timer.tsc_size_words]u16);  // bcast_from_top_left_configure
+var timing_bcast_to_all = @zeros([LEVELS * timer.tsc_size_words]u16);     // broadcast_to_all_inside_window
+var timing_bcast_state_entry = @zeros([LEVELS * timer.tsc_size_words]u16); // C_STATE_ENTRY activation + if-else branching
+var timing_interp_add = @zeros([LEVELS * timer.tsc_size_words]u16);       // interpolation add micro
 var timing_spmv_total = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv total accumulated elapsed timing
 var timing_spmv_communication = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv communication accumulated elapsed timing
 var timing_spmv_compute = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv compute accumulated elapsed timing
@@ -224,6 +234,12 @@ fn f_reset() void {
         timing_residual[index] = 0;
         timing_restrict[index] = 0;
         timing_interp[index] = 0;
+        timing_interp_expand_z[index] = 0;
+        timing_interp_bcast[index] = 0;
+        timing_bcast_configure[index] = 0;
+        timing_bcast_to_all[index] = 0;
+        timing_bcast_state_entry[index] = 0;
+        timing_interp_add[index] = 0;
         timing_spmv_total[index] = 0;
         timing_spmv_communication[index] = 0;
         timing_spmv_compute[index] = 0;
@@ -308,6 +324,12 @@ var ptr_timing_smooth: [*]u16 = &timing_smooth;
 var ptr_timing_residual: [*]u16 = &timing_residual;
 var ptr_timing_restrict: [*]u16 = &timing_restrict;
 var ptr_timing_interp: [*]u16 = &timing_interp;
+var ptr_timing_interp_expand_z: [*]u16 = &timing_interp_expand_z;
+var ptr_timing_interp_bcast: [*]u16 = &timing_interp_bcast;
+var ptr_timing_bcast_configure: [*]u16 = &timing_bcast_configure;
+var ptr_timing_bcast_to_all: [*]u16 = &timing_bcast_to_all;
+var ptr_timing_bcast_state_entry: [*]u16 = &timing_bcast_state_entry;
+var ptr_timing_interp_add: [*]u16 = &timing_interp_add;
 var ptr_time_total_start_end: [*]u16 = &time_total_start_end_u16;
 var ptr_timing_spmv_total: [*]u16 = &timing_spmv_total;
 var ptr_timing_spmv_communication: [*]u16 = &timing_spmv_communication;
@@ -518,8 +540,9 @@ fn f_interpolation_add() void {
 }
 
 // Broadcast the coarse solution to all fine points in the window.
+// Pass current_level and timing buffers for micro-benchmark (reduce_mod saves to locals, used by tasks).
 fn f_bcast_from_top_left() void {
-    reduce_mod.broadcast_from_top_left(n, &u);
+    reduce_mod.broadcast_from_top_left(n, &u, current_level, &timing_bcast_configure, &timing_bcast_to_all, &timing_bcast_state_entry);
 }
 
 // Setup the hops based spmv and restriction parameters.
@@ -645,6 +668,9 @@ fn f_gmg_vcycle(levels: i16, pre_iter: i16, post_iter: i16, bottom_iter: i16, ma
 // STATE MACHINE
 // ------------------------------------------------
 fn f_trigger_state_machine() void {
+    if (STATE_UP_BCAST == cur_state) {
+        save_timestamp_end(current_level, &timing_interp_bcast, TIMER_ID_INTERP_BCAST);
+    }
     cur_state = next_state;
     @activate(STATE);
 }
@@ -783,18 +809,23 @@ task f_state() void {
         // Expand z dimension: duplicate each coarse element to 2 fine elements
         // This prepares u for broadcasting (u currently has coarse z dim, needs fine z dim)
         save_timestamp_start(TIMER_ID_INTERP);
+        save_timestamp_start(TIMER_ID_INTERP_EXPAND_Z);
         f_interpolation_expand_z();
+        save_timestamp_end(current_level, &timing_interp_expand_z, TIMER_ID_INTERP_EXPAND_Z);
         next_state = STATE_UP_BCAST;
         f_trigger_state_machine();
         
     } else if (STATE_UP_BCAST == cur_state) {
-        // Broadcast from top-left
+        // Broadcast from top-left (async - callback runs when done)
+        save_timestamp_start(TIMER_ID_INTERP_BCAST);
         next_state = STATE_UP_INTERP_ADD;
         f_bcast_from_top_left();
         
     } else if (STATE_UP_INTERP_ADD == cur_state) {
         // Add interpolated correction
+        save_timestamp_start(TIMER_ID_INTERP_ADD);
         f_interpolation_add();
+        save_timestamp_end(current_level, &timing_interp_add, TIMER_ID_INTERP_ADD);
         save_timestamp_end(current_level, &timing_interp, TIMER_ID_INTERP);
         current_smooth_iter = 0;
         next_state = STATE_UP_SMOOTH_APPLY;
@@ -923,6 +954,12 @@ comptime {
     @export_symbol(ptr_timing_residual, "timing_residual");
     @export_symbol(ptr_timing_restrict, "timing_restrict");
     @export_symbol(ptr_timing_interp, "timing_interp");
+    @export_symbol(ptr_timing_interp_expand_z, "timing_interp_expand_z");
+    @export_symbol(ptr_timing_interp_bcast, "timing_interp_bcast");
+    @export_symbol(ptr_timing_bcast_configure, "timing_bcast_configure");
+    @export_symbol(ptr_timing_bcast_to_all, "timing_bcast_to_all");
+    @export_symbol(ptr_timing_bcast_state_entry, "timing_bcast_state_entry");
+    @export_symbol(ptr_timing_interp_add, "timing_interp_add");
     @export_symbol(ptr_time_total_start_end, "time_total_start_end");
     @export_symbol(ptr_timing_spmv_total, "timing_spmv_total");
     @export_symbol(ptr_timing_spmv_communication, "timing_spmv_communication");

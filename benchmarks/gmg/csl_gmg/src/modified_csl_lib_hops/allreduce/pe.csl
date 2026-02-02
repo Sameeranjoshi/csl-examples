@@ -158,6 +158,12 @@ param src1_dsr_ids: [1]u16;
 param MAX_PENCIL_DIM: u16;  // Default to 512 for backward compatibility, but can be set per problem size
 
 const timestamp = @import_module("<time>");
+const timer_bcast = @import_module("timer_modified.csl", .{ .timerCount = 3 });
+
+var bcast_level_local: i16 = 0;
+var timing_bcast_configure_local: [*]u16;
+var timing_bcast_to_all_local: [*]u16;
+var timing_bcast_state_entry_local: [*]u16;  // C_STATE_ENTRY activation + if-else branching
 
 // const math_lib = @import_module("<math>");
 const layout_mod = @import_module("<layout>");
@@ -355,9 +361,13 @@ fn reduce_row_col_top_left( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP ) void
 }
 
 // Broadcast from top-left PE to all PEs in the window
-fn broadcast_from_top_left( n: i16, in_tensor: [*]f32 ) void {
+fn broadcast_from_top_left( n: i16, in_tensor: [*]f32, level: i16, timing_bcast_configure: [*]u16, timing_bcast_to_all: [*]u16, timing_bcast_state_entry: [*]u16 ) void {    
    x = in_tensor;
 //    functor = op;
+   bcast_level_local = level;
+   timing_bcast_configure_local = timing_bcast_configure;   // reconfig the routes and colors
+   timing_bcast_to_all_local = timing_bcast_to_all;     // Communication time to send in bcast
+   timing_bcast_state_entry_local = timing_bcast_state_entry;   // STATE MACHINE TIME
 
    @assert(n > 0);
    wvlts_per_pe = @bitcast(u16, n);
@@ -529,6 +539,8 @@ const mem_buf_td_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> teardow
 //
 task f_state_entry() void {
 
+    timer_bcast.start(2);
+
     if (STATE_ROW_REDUCE == cur_state){
         // rowReduce_configure() reconfigures the pos0, pos1 and clears TIP
         rowReduce_configure();
@@ -598,11 +610,16 @@ task f_state_entry() void {
         next_state = state_seq[state_idx];
 
     }else if (STATE_BCAST_FROM_TOP_LEFT == cur_state){
-        // print level information and window details
-        const px: i16 = @as(i16, layout_mod.get_x_coord());
-        const py: i16 = @as(i16, layout_mod.get_y_coord());
+ 
+        const level: i16 = bcast_level_local;
+        const offset: i16 = level * timer_bcast.tsc_size_words;
+        // Micro-benchmark: time bcast_from_top_left_configure and broadcast_to_all_inside_window
+        timer_bcast.start(0);
         // bcast_from_top_left_configure() reconfigures pos0 and disables pos1
         bcast_from_top_left_configure();
+        timer_bcast.stop(0);
+        timer_bcast.accumulate_elapsed(0, @ptrcast(*[timer_bcast.tsc_size_words]u16, &timing_bcast_configure_local[offset]));
+        timer_bcast.start(1);
         // top-left PE broadcasts the data to others and also sends TD
         broadcast_to_all_inside_window( wvlts_per_pe );
 
@@ -642,6 +659,13 @@ task f_state_entry() void {
         // @activate(C_STATE_ENTRY);
 
     }else if (STATE_DONE == cur_state){
+        const level: i16 = bcast_level_local;
+        const offset: i16 = level * timer_bcast.tsc_size_words;
+        // timer_bcast.stop(1);
+        // timer_bcast.accumulate_elapsed(1, @ptrcast(*[timer_bcast.tsc_size_words]u16, &timing_bcast_to_all_local[offset]));
+
+        timer_bcast.stop(2);
+        timer_bcast.accumulate_elapsed(2, @ptrcast(*[timer_bcast.tsc_size_words]u16, &timing_bcast_state_entry_local[offset]));
         // state machine is done, return control back to the caller
         timestamp.get_timestamp(&tscRefBuffer);
 
@@ -886,6 +910,12 @@ task f_send_ctrl() void{
 // (*) operation is {row_reduce, col_reduce, bcast}
 //
 task f_lock() void {
+    if (STATE_BCAST_FROM_TOP_LEFT == cur_state){
+        const level: i16 = bcast_level_local;
+        const offset: i16 = level * timer_bcast.tsc_size_words;
+        timer_bcast.stop(1);
+        timer_bcast.accumulate_elapsed(1, @ptrcast(*[timer_bcast.tsc_size_words]u16, &timing_bcast_to_all_local[offset]));
+    }
     cur_state = next_state; // go to next state
     @activate(C_STATE_ENTRY);
 }
