@@ -20,7 +20,7 @@ const MAX_ITERATIONS: i16 = 60;  // Maximum iterations for storing rho history, 
 const math_lib = @import_module("<math>");
 const blas_lib = @import_module("blas.csl"); // modified reduced some code.
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
-const timer = @import_module("timer_modified.csl", .{ .timerCount = 8 });
+const timer = @import_module("timer_modified.csl", .{ .timerCount = 10 });
 const layout_mod = @import_module("<layout>");
 const simprint = @import_module("<simprint>", .{.enable = true});
 // const timestamp = @import_module("<time>");
@@ -87,6 +87,9 @@ const TIMER_ID_TOTAL: i16 = 4;
 const TIMER_ID_INTERP_EXPAND_Z: i16 = 5;
 const TIMER_ID_INTERP_BCAST: i16 = 6;
 const TIMER_ID_INTERP_ADD: i16 = 7;
+// Smoothing micro-benchmark timers (inside TIMER_ID_SMOOTH)
+const TIMER_ID_SMOOTH_APPLY: i16 = 8;   // f_apply_operator (stencil SPMV)
+const TIMER_ID_SMOOTH_UPDATE: i16 = 9;  // f_jacobi_smooth
 
 
 
@@ -132,6 +135,8 @@ var stencil_coeff = @zeros([7]f32);
 // Operations: smooth (down + up separate), apply_op, restriction, interpolation
 // For each operation we store elapsed timestamp words only (u16[tsc_size_words])
 var timing_smooth = @zeros([LEVELS * timer.tsc_size_words]u16); // pre-/post-smoothing accumulated elapsed timing
+var timing_smooth_apply = @zeros([LEVELS * timer.tsc_size_words]u16);  // smooth: f_apply_operator (SPMV)
+var timing_smooth_update = @zeros([LEVELS * timer.tsc_size_words]u16); // smooth: f_jacobi_smooth
 var timing_residual = @zeros([LEVELS * timer.tsc_size_words]u16);    // residual accumulated elapsed timing
 var timing_restrict = @zeros([LEVELS * timer.tsc_size_words]u16);    // restriction accumulated elapsed timing
 var timing_interp = @zeros([LEVELS * timer.tsc_size_words]u16);      // interpolation accumulated elapsed timing
@@ -231,6 +236,8 @@ fn f_reset() void {
     index = 0;
     while(index < LEVELS * timer.tsc_size_words) : (index +=1) {
         timing_smooth[index] = 0;
+        timing_smooth_apply[index] = 0;
+        timing_smooth_update[index] = 0;
         timing_residual[index] = 0;
         timing_restrict[index] = 0;
         timing_interp[index] = 0;
@@ -321,6 +328,8 @@ var ptr_jacobi_coeff_array: [*]f32 = &jacobi_coeff_array;
 
 // timing pointers
 var ptr_timing_smooth: [*]u16 = &timing_smooth;
+var ptr_timing_smooth_apply: [*]u16 = &timing_smooth_apply;
+var ptr_timing_smooth_update: [*]u16 = &timing_smooth_update;
 var ptr_timing_residual: [*]u16 = &timing_residual;
 var ptr_timing_restrict: [*]u16 = &timing_restrict;
 var ptr_timing_interp: [*]u16 = &timing_interp;
@@ -671,6 +680,10 @@ fn f_trigger_state_machine() void {
     if (STATE_UP_BCAST == cur_state) {
         save_timestamp_end(current_level, &timing_interp_bcast, TIMER_ID_INTERP_BCAST);
     }
+    // Smooth micro-benchmark: apply (SPMV) completes async, record when callback fires
+    if (STATE_DOWN_SMOOTH_APPLY == cur_state or STATE_UP_SMOOTH_APPLY == cur_state or STATE_COARSE_SMOOTH_APPLY == cur_state) {
+        save_timestamp_end(current_level, &timing_smooth_apply, TIMER_ID_SMOOTH_APPLY);
+    }
     cur_state = next_state;
     @activate(STATE);
 }
@@ -704,11 +717,14 @@ task f_state() void {
         if (current_smooth_iter == 0) {
             save_timestamp_start(TIMER_ID_SMOOTH);
         }
+        save_timestamp_start(TIMER_ID_SMOOTH_APPLY);
         next_state = STATE_DOWN_SMOOTH_UPDATE;
         f_apply_operator();
 
     } else if (STATE_DOWN_SMOOTH_UPDATE == cur_state) {
+        save_timestamp_start(TIMER_ID_SMOOTH_UPDATE);
         f_jacobi_smooth();
+        save_timestamp_end(current_level, &timing_smooth_update, TIMER_ID_SMOOTH_UPDATE);
         current_smooth_iter = current_smooth_iter + 1;
         next_state = STATE_DOWN_SMOOTH_CHECK;
         f_trigger_state_machine();
@@ -774,11 +790,14 @@ task f_state() void {
         if (current_smooth_iter == 0) {
             save_timestamp_start(TIMER_ID_SMOOTH);
         }
+        save_timestamp_start(TIMER_ID_SMOOTH_APPLY);
         next_state = STATE_COARSE_SMOOTH_UPDATE;
         f_apply_operator();
 
     } else if (STATE_COARSE_SMOOTH_UPDATE == cur_state) {
+        save_timestamp_start(TIMER_ID_SMOOTH_UPDATE);
         f_jacobi_smooth();
+        save_timestamp_end(current_level, &timing_smooth_update, TIMER_ID_SMOOTH_UPDATE);
         current_smooth_iter = current_smooth_iter + 1;
         next_state = STATE_COARSE_SMOOTH_CHECK;
         f_trigger_state_machine();
@@ -836,11 +855,14 @@ task f_state() void {
         if (current_smooth_iter == 0) {
             save_timestamp_start(TIMER_ID_SMOOTH);
         }
+        save_timestamp_start(TIMER_ID_SMOOTH_APPLY);
         next_state = STATE_UP_SMOOTH_UPDATE;
         f_apply_operator();
-        
+
     } else if (STATE_UP_SMOOTH_UPDATE == cur_state) {
+        save_timestamp_start(TIMER_ID_SMOOTH_UPDATE);
         f_jacobi_smooth();
+        save_timestamp_end(current_level, &timing_smooth_update, TIMER_ID_SMOOTH_UPDATE);
         current_smooth_iter = current_smooth_iter + 1;
         next_state = STATE_UP_SMOOTH_CHECK;
         f_trigger_state_machine();
@@ -951,6 +973,8 @@ comptime {
     @export_symbol(ptr_jacobi_coeff_array, "jacobi_coeff_array");
     // timing
     @export_symbol(ptr_timing_smooth, "timing_smooth");
+    @export_symbol(ptr_timing_smooth_apply, "timing_smooth_apply");
+    @export_symbol(ptr_timing_smooth_update, "timing_smooth_update");
     @export_symbol(ptr_timing_residual, "timing_residual");
     @export_symbol(ptr_timing_restrict, "timing_restrict");
     @export_symbol(ptr_timing_interp, "timing_interp");

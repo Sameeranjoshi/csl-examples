@@ -229,6 +229,7 @@ def profiling(
         counter_rho_check,
         simulator, 
         timing_smooth_data, timing_residual_data, timing_restrict_data, timing_interp_data,
+        timing_smooth_apply_data, timing_smooth_update_data,
         timing_interp_expand_z_data, timing_interp_bcast_data, timing_bcast_configure_data, timing_bcast_to_all_data, timing_bcast_state_entry_data, timing_interp_add_data,
         timing_spmv_total_data, timing_spmv_communication_data, timing_spmv_compute_data, timing_total_start_end_data
     ):
@@ -300,15 +301,21 @@ def profiling(
     total_time_cycles = grand_total_cycles
 
     # ------------------------------------------------------------
-    # Compute vs Communication Timing Summary(7-pt Stencil)
+    # 7-pt Stencil: Compute vs Communication + Smoothing Micro-Benchmark
+    # SpMV: Total / Communication / Compute and L1/L0 ratios.
+    # Smooth: smooth_apply (7-pt SPMV in smoothing) | smooth_update (Jacobi) | smooth_total.
     # ------------------------------------------------------------
-    print("\n7-pt Stencil Compute vs Communication Time per Level (us[cycles]):")
+    print("\n7-pt Stencil Compute vs Communication + Smoothing Micro-Benchmark (us[cycles]) per Level:")
     print("Note: Triangle inequality: max(x+y) <= max(x) + max(y), where x,y are 2D timings across wafer.")
-    compute_comm_header = ["level", "Total SpMV Time", "Communication Time", "Compute Time", "L1/L0(Communication)", "L1-L0(Communication)", "L1/L0(Compute)"]
+    TIMER_FIXED_COST = 30  # ~30 us (timer/fixed cost per level)
+    compute_comm_header = [
+        "level", "Total SpMV Time", "Communication Time", "Compute Time",
+        "L1/L0(Comm)", "L1-L0(Comm)", "L1/L0(Compute)",
+        "timer/fixed cost", "smooth_apply", "smooth_update", "smooth_total"
+    ]
     print(build_divider(compute_comm_header, "="))
     print("|" + "|".join(f"{name:^{col_width}}" for name in compute_comm_header) + "|")
     print(build_divider(compute_comm_header))
-
 
     sum_spmv_total_time = 0.0
     sum_spmv_communication_time = 0.0
@@ -316,11 +323,17 @@ def profiling(
     sum_spmv_total_cycles = 0
     sum_spmv_communication_cycles = 0
     sum_spmv_compute_cycles = 0
+    sum_smooth_apply = 0
+    sum_smooth_update = 0
+    sum_smooth_total = 0
 
     for level in range(args.levels):
         spmv_total_entry = timing_spmv_total_data[level]
         spmv_communication_entry = timing_spmv_communication_data[level]
         spmv_compute_entry = timing_spmv_compute_data[level]
+        smooth_apply_entry = timing_smooth_apply_data[level]
+        smooth_update_entry = timing_smooth_update_data[level]
+        smooth_total_entry = timing_smooth_data[level]
 
         spmv_total_time_level = spmv_total_entry["time_send"]
         spmv_communication_time_level = spmv_communication_entry["time_send"]
@@ -361,6 +374,10 @@ def profiling(
             ratio_str,
             diff_str,
             compute_ratio_str,
+            f"{TIMER_FIXED_COST:^{col_width}}",
+            f"{smooth_apply_entry['time_send']:6.3f}us({smooth_apply_entry['cycles_send']:7.0f})".center(col_width),
+            f"{smooth_update_entry['time_send']:6.3f}us({smooth_update_entry['cycles_send']:7.0f})".center(col_width),
+            f"{smooth_total_entry['time_send']:6.3f}us({smooth_total_entry['cycles_send']:7.0f})".center(col_width),
         ]
         print("|" + "|".join(row) + "|")
         print(build_divider(compute_comm_header))
@@ -371,7 +388,13 @@ def profiling(
         sum_spmv_total_cycles += spmv_total_cycles_level
         sum_spmv_communication_cycles += spmv_communication_cycles_level
         sum_spmv_compute_cycles += spmv_compute_cycles_level
+        sum_smooth_apply += smooth_apply_entry["cycles_send"]
+        sum_smooth_update += smooth_update_entry["cycles_send"]
+        sum_smooth_total += smooth_total_entry["cycles_send"]
 
+    sum_smooth_apply_time = sum(e["time_send"] for e in timing_smooth_apply_data)
+    sum_smooth_update_time = sum(e["time_send"] for e in timing_smooth_update_data)
+    sum_smooth_total_time = sum(e["time_send"] for e in timing_smooth_data)
     total_row = [
         f"{'total':^{col_width}}",
         f"{sum_spmv_total_time:6.3f}us({sum_spmv_total_cycles:7.0f})".center(col_width),
@@ -379,7 +402,11 @@ def profiling(
         f"{sum_spmv_compute_time:6.3f}us({sum_spmv_compute_cycles:7.0f})".center(col_width),
         f"{'N/A':^{col_width}}",
         f"{'N/A':^{col_width}}",
-        f"{'N/A':^{col_width}}"
+        f"{'N/A':^{col_width}}",
+        f"{TIMER_FIXED_COST:^{col_width}}",
+        f"{sum_smooth_apply_time:6.3f}us({sum_smooth_apply:7.0f})".center(col_width),
+        f"{sum_smooth_update_time:6.3f}us({sum_smooth_update:7.0f})".center(col_width),
+        f"{sum_smooth_total_time:6.3f}us({sum_smooth_total:7.0f})".center(col_width),
     ]
     print("|" + "|".join(total_row) + "|")
     print(build_divider(compute_comm_header, "="))
@@ -513,6 +540,8 @@ def main():
     symbol_hz_array = simulator.get_id("hz_array")
     symbol_jacobi_coeff_array = simulator.get_id("jacobi_coeff_array")
     symbol_timing_smooth = simulator.get_id("timing_smooth")
+    symbol_timing_smooth_apply = simulator.get_id("timing_smooth_apply")
+    symbol_timing_smooth_update = simulator.get_id("timing_smooth_update")
     symbol_timing_residual = simulator.get_id("timing_residual")
     symbol_timing_restrict = simulator.get_id("timing_restrict")
     symbol_timing_interp = simulator.get_id("timing_interp")
@@ -583,6 +612,8 @@ def main():
     print("8. Copying timers and counters from device...")
     ############################################################
     timing_smooth_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_smooth, WORDS_PER_TIMESTAMP, "smooth")
+    timing_smooth_apply_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_smooth_apply, WORDS_PER_TIMESTAMP, "smooth_apply")
+    timing_smooth_update_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_smooth_update, WORDS_PER_TIMESTAMP, "smooth_update")
     timing_residual_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_residual, WORDS_PER_TIMESTAMP, "residual")
     timing_restrict_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_restrict, WORDS_PER_TIMESTAMP, "restriction")
     timing_interp_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_interp, WORDS_PER_TIMESTAMP, "interpolation")
@@ -651,6 +682,7 @@ def main():
         counter_rho_check,
         simulator, 
         timing_smooth_data, timing_residual_data, timing_restrict_data, timing_interp_data,
+        timing_smooth_apply_data, timing_smooth_update_data,
         timing_interp_expand_z_data, timing_interp_bcast_data, timing_bcast_configure_data, timing_bcast_to_all_data, timing_bcast_state_entry_data, timing_interp_add_data,
         timing_spmv_total_data, timing_spmv_communication_data, timing_spmv_compute_data, timing_total_start_end_data
         )  
