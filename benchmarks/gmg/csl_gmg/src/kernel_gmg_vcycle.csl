@@ -149,6 +149,10 @@ var timing_interp_add = @zeros([LEVELS * timer.tsc_size_words]u16);       // int
 var timing_spmv_total = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv total accumulated elapsed timing
 var timing_spmv_communication = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv communication accumulated elapsed timing
 var timing_spmv_compute = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv compute accumulated elapsed timing
+var timing_spmv_send = @zeros([LEVELS * timer.tsc_size_words]u16);         // spmv send (f_send) micro-benchmark
+var timing_spmv_recv = @zeros([LEVELS * timer.tsc_size_words]u16);         // spmv recv (f_recv) micro-benchmark
+var timing_spmv_recv_into_buf = @zeros([LEVELS * timer.tsc_size_words]u16); // f_recv: receive into mem_*_buf (active path)
+var timing_spmv_recv_forward = @zeros([LEVELS * timer.tsc_size_words]u16);  // f_recv: forward path (in_ut serialization)
 var time_total_start_end_u16 = @zeros([timer.tsc_size_words]u16);   // this is also elapsed time for entire V-cycle, 1 level
 
 
@@ -250,6 +254,10 @@ fn f_reset() void {
         timing_spmv_total[index] = 0;
         timing_spmv_communication[index] = 0;
         timing_spmv_compute[index] = 0;
+        timing_spmv_send[index] = 0;
+        timing_spmv_recv[index] = 0;
+        timing_spmv_recv_into_buf[index] = 0;
+        timing_spmv_recv_forward[index] = 0;
         time_total_start_end_u16[index] = 0;
     }
 
@@ -343,6 +351,10 @@ var ptr_time_total_start_end: [*]u16 = &time_total_start_end_u16;
 var ptr_timing_spmv_total: [*]u16 = &timing_spmv_total;
 var ptr_timing_spmv_communication: [*]u16 = &timing_spmv_communication;
 var ptr_timing_spmv_compute: [*]u16 = &timing_spmv_compute;
+var ptr_timing_spmv_send: [*]u16 = &timing_spmv_send;
+var ptr_timing_spmv_recv: [*]u16 = &timing_spmv_recv;
+var ptr_timing_spmv_recv_into_buf: [*]u16 = &timing_spmv_recv_into_buf;
+var ptr_timing_spmv_recv_forward: [*]u16 = &timing_spmv_recv_forward;
 
 // counter pointers
 var ptr_counter_smooth: [*]u32 = &counter_smooth;
@@ -412,7 +424,7 @@ fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
 fn f_apply_operator() void {
     counter_apply_op[current_level] += 1;
     @fmovs(mem_Au_dsd, 0.0);
-    stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute);
+    stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute, &timing_spmv_send, &timing_spmv_recv, &timing_spmv_recv_into_buf, &timing_spmv_recv_forward);
 }
 
 // Jacobi smoothing: u = u + JACOBI_COEFF * (f - Au)
@@ -987,7 +999,11 @@ comptime {
     @export_symbol(ptr_time_total_start_end, "time_total_start_end");
     @export_symbol(ptr_timing_spmv_total, "timing_spmv_total");
     @export_symbol(ptr_timing_spmv_communication, "timing_spmv_communication");
-    @export_symbol(ptr_timing_spmv_compute, "timing_spmv_compute");    
+    @export_symbol(ptr_timing_spmv_compute, "timing_spmv_compute");
+    @export_symbol(ptr_timing_spmv_send, "timing_spmv_send");
+    @export_symbol(ptr_timing_spmv_recv, "timing_spmv_recv");
+    @export_symbol(ptr_timing_spmv_recv_into_buf, "timing_spmv_recv_into_buf");
+    @export_symbol(ptr_timing_spmv_recv_forward, "timing_spmv_recv_forward");    
 
 
     // counters
