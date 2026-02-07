@@ -50,16 +50,42 @@ echo ""
 
 # Clean previous runs
 # rm -rf out_vcycle sim.log simfab_traces
+#  (64, 6, 1, 1e-5, 6, 6, 100),   # Medium problem
+# echo "Compiling..." 
+# cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=74,67 --fabric-offsets=4,1 \
+# --params=width:64,height:64,MAX_ZDIM:64,LEVELS:6,BLOCK_SIZE:64 -o=out_vcycle_64 \
+# --memcpy --channels=10 --width-west-buf=0 --width-east-buf=0 --max-inlined-iterations=1000000
+# cs_python ./run_gmg_vcycle.py -m=64 -n=64 -k=64 --latestlink out_vcycle_64 --channels=10 \
+# --width-west-buf=0 --width-east-buf=0 --zDim=64 --run-only --levels=6 --max-ite=1 --pre-iter=6 --post-iter=6 --bottom-iter=6 --tolerance=1e-5 --blockSize=64
+# ./check_memory_usage.sh out_vcycle_64 0 0 --summary
 
+# echo "Compiling..."
+# cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=12,10 --fabric-offsets=4,1 \
+# --params=width:4,height:4,MAX_ZDIM:4,LEVELS:2,BLOCK_SIZE:4 -o=out_vcycle \
+# --memcpy --channels=4 --width-west-buf=0 --width-east-buf=0 --max-inlined-iterations=1000000
+# cs_python ./run_gmg_vcycle.py -m=4 -n=4 -k=4 --latestlink out_vcycle --channels=4 \
+# --width-west-buf=0 --width-east-buf=0 --zDim=4 --run-only --levels=2 --max-ite=100 --pre-iter=6 --post-iter=6 --bottom-iter=6 --tolerance=1e-5
+# ./check_memory_usage.sh out_vcycle 0 0 --summary
+
+# (8, 3, 1, 1e-5, 6, 6, 100),
+# echo "Compiling..."
+# cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=16,10 --fabric-offsets=4,1 \
+# --params=width:8,height:8,MAX_ZDIM:8,LEVELS:3,BLOCK_SIZE:8 -o=out_vcycle_8 \
+# --memcpy --channels=8 --width-west-buf=0 --width-east-buf=0 --max-inlined-iterations=1000000
+# cs_python ./run_gmg_vcycle.py -m=8 -n=8 -k=8 --latestlink out_vcycle_8 --channels=8 \
+# --width-west-buf=0 --width-east-buf=0 --zDim=8 --run-only --levels=3 --max-ite=100 --pre-iter=6 --post-iter=6 --bottom-iter=6 --tolerance=1e-5 --blockSize=8
+# ./check_memory_usage.sh out_vcycle_8 0 0 --summary
+# echo "============================================"
+
+# (32, 5, 1, 1e-5, 6, 6, 100)
 echo "Compiling..."
-cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=12,10 --fabric-offsets=4,1 \
---params=width:4,height:4,MAX_ZDIM:4,LEVELS:2,BLOCK_SIZE:4 -o=out_vcycle \
---memcpy --channels=4 --width-west-buf=0 --width-east-buf=0 --max-inlined-iterations=1000000
-
-cs_python ./run_gmg_vcycle.py -m=4 -n=4 -k=4 --latestlink out_vcycle --channels=4 \
---width-west-buf=0 --width-east-buf=0 --zDim=4 --run-only --levels=2 --max-ite=100 --pre-iter=6 --post-iter=6 --bottom-iter=100 --tolerance=1e-5
-
+cslc ./src/layout_gmg_vcycle.csl --arch wse3 --fabric-dims=40,34 --fabric-offsets=4,1 \
+--params=width:32,height:32,MAX_ZDIM:32,LEVELS:5,BLOCK_SIZE:32 -o=out_vcycle \
+--memcpy --channels=16 --width-west-buf=0 --width-east-buf=0 --max-inlined-iterations=1000000
+cs_python ./run_gmg_vcycle.py -m=32 -n=32 -k=32 --latestlink out_vcycle --channels=16 \
+--width-west-buf=0 --width-east-buf=0 --zDim=32 --run-only --levels=5 --max-ite=100 --pre-iter=6 --post-iter=6 --bottom-iter=6 --tolerance=1e-5 --blockSize=32
 ./check_memory_usage.sh out_vcycle 0 0 --summary
+# echo "============================================"
 
 # echo "============================================"
 # echo "Done"

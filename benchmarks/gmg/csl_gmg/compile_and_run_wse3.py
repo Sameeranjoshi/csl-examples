@@ -272,10 +272,10 @@ def main():
         #  (4, 2, 100, 1e-5, 6, 6, 6),   # Tiny problem
         #  (8, 3, 100, 1e-5, 6, 6, 6),   # Tiny problem
         #  (16, 4, 100, 1e-5, 6, 6, 6),   # Small problem
-        #  (32, 5, 100, 1e-5, 6, 6, 6),   # Small problem
-        #  (64, 6, 100, 1e-5, 6, 6, 6),   # Medium problem
-        #  (128, 7, 100, 1e-5, 6, 6, 6),   # Large problem
-         (256, 8, 100, 1e-5, 6, 6, 6),   # Very large
+        #  (32, 5, 1, 1e-5, 6, 6, 6),   # Small problem
+        #  (64, 6, 1, 1e-5, 6, 6, 6),   # Medium problem
+         (128, 7, 100, 1e-5, 6, 6, 6),   # Large problem
+        #  (256, 8, 100, 1e-5, 6, 6, 6),   # Very large
         #  (512, 9, 100, 1e-5, 6, 6, 6),   # Very large        
 
         # # # 4/4/100
