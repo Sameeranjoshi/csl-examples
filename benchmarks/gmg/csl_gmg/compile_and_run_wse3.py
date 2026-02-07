@@ -378,7 +378,13 @@ def main():
     # Test problems (size, levels, max_ite, pre_iter, post_iter, bottom_iter)
     # Format: (size, levels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter)
     # NOTE: MANUALLY DELETE FOLDER IF THERE IS SOME CHANGES IN THE SOURCE CODE AS IT WILL SKIP COMPILATION DUE TO CACHING.
+
+#  2022  ls -d out_dir_S*x*_P4_P4_B100*
+#  2023  ls -d out_dir_S*x*_P4_P4_B6*
+#  2024  ls -d out_dir_S*x*_P6_P6_B6*
     problems = [
+        # # 6/6/100
+        # ls -d out_dir_S*x*_P6_P6_B100 | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_6_6_100.txt
         #  (4, 2, 100, 1e-5, 6, 6, 100),   # Tiny problem
         #  (8, 3, 100, 1e-5, 6, 6, 100),   # Tiny problem
         #  (16, 4, 100, 1e-5, 6, 6, 100),   # Small problem
@@ -389,29 +395,8 @@ def main():
         #  (512, 9, 100, 1e-5, 6, 6, 100),   # Very large
    
 
-        # OSCAR matching problems
-        # # # 4/4/6
-        #  (4, 2, 100, 1e-5, 4, 4, 6),   # Tiny problem
-        #  (8, 3, 100, 1e-5, 4, 4, 6),   # Tiny problem
-        #  (16, 4, 100, 1e-5, 4, 4, 6),   # Small problem
-        #  (32, 5, 100, 1e-5, 4, 4, 6),   # Small problem
-        #  (64, 6, 100, 1e-5, 4, 4, 6),   # Medium problem
-        #  (128, 7, 100, 1e-5, 4, 4, 6),   # Large problem
-        #  (256, 8, 100, 1e-5, 4, 4, 6),   # Very large
-        #  (512, 9, 100, 1e-5, 4, 4, 6),   # Very large
-        # 
-
-        # 6/6/6
-         (4, 2, 100, 1e-5, 6, 6, 6),   # Tiny problem
-        #  (8, 3, 100, 1e-5, 6, 6, 6),   # Tiny problem
-        #  (16, 4, 100, 1e-5, 6, 6, 6),   # Small problem
-        #  (32, 5, 1, 1e-5, 6, 6, 6),   # Small problem
-        #  (64, 6, 1, 1e-5, 6, 6, 6),   # Medium problem
-        #  (128, 7, 100, 1e-5, 6, 6, 6),   # Large problem
-        #  (256, 8, 100, 1e-5, 6, 6, 6),   # Very large
-        #  (512, 9, 100, 1e-5, 6, 6, 6),   # Very large        
-
-        # # # 4/4/100
+        # # # # 4/4/100
+        # ls -d out_dir_S*x*_P4_P4_B100 | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_4_4_100.txt
         #  (4, 2, 100, 1e-5, 4, 4, 100),   # Tiny problem
         #  (8, 3, 100, 1e-5, 4, 4, 100),   # Tiny problem
         #  (16, 4, 100, 1e-5, 4, 4, 100),   # Small problem
@@ -421,6 +406,55 @@ def main():
         #  (256, 8, 100, 1e-5, 4, 4, 100),   # Very large
         #  (512, 9, 100, 1e-5, 4, 4, 100),   # Very large
 
+        # OSCAR matching problems
+        # # # # 4/4/6
+        # ls -d out_dir_S*x*_P4_P4_B6 | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_4_4_6.txt
+        #  (4, 2, 100, 1e-5, 4, 4, 6),   # Tiny problem
+        #  (8, 3, 100, 1e-5, 4, 4, 6),   # Tiny problem
+        #  (16, 4, 100, 1e-5, 4, 4, 6),   # Small problem
+        #  (32, 5, 100, 1e-5, 4, 4, 6),   # Small problem
+        #  (64, 6, 100, 1e-5, 4, 4, 6),   # Medium problem
+        #  (128, 7, 100, 1e-5, 4, 4, 6),   # Large problem
+        #  (256, 8, 100, 1e-5, 4, 4, 6),   # Very large
+        #  (512, 9, 100, 1e-5, 4, 4, 6),   # Very large
+        # # 
+
+        # 6/6/6
+        # ls -d out_dir_S*x*_P6_P6_B6 | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_6_6_6.txt
+        #  (4, 2, 100, 1e-5, 6, 6, 6),   # Tiny problem
+        #  (8, 3, 100, 1e-5, 6, 6, 6),   # Tiny problem
+        #  (16, 4, 100, 1e-5, 6, 6, 6),   # Small problem
+        #  (32, 5, 100, 1e-5, 6, 6, 6),   # Small problem
+        #  (64, 6, 100, 1e-5, 6, 6, 6),   # Medium problem
+        #  (128, 7, 100, 1e-5, 6, 6, 6),   # Large problem
+        #  (256, 8, 100, 1e-5, 6, 6, 6),   # Very large
+        #  (512, 9, 100, 1e-5, 6, 6, 6),   # Very large        
+
+
+        # Only 6/6/6 problems
+
+        # Deep vs shallow V cycle depth experiments
+        # ls -d shallow_* | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_6_6_6_shallow.txt
+        # Removed the smaller problems as we can't reduce the levels on these problems.
+        #  (16, 2, 100, 1e-5, 6, 6, 6),   # Small problem
+        #  (32, 3, 100, 1e-5, 6, 6, 6),   # Small problem
+        #  (64, 4, 100, 1e-5, 6, 6, 6),   # Medium problem
+        #  (128, 5, 100, 1e-5, 6, 6, 6),   # Large problem
+        #  (256, 6, 100, 1e-5, 6, 6, 6),   # Very large
+        #  (512, 7, 100, 1e-5, 6, 6, 6),   # Very large    
+        # 
+        # 
+
+        # Unoptimized 6/6/6
+        # ls -d unoptimized_* | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_6_6_6_unoptimized.txt
+         (4, 2, 100, 1e-5, 6, 6, 6),   # Tiny problem
+         (8, 3, 100, 1e-5, 6, 6, 6),   # Tiny problem
+         (16, 4, 100, 1e-5, 6, 6, 6),   # Small problem
+         (32, 5, 100, 1e-5, 6, 6, 6),   # Small problem
+         (64, 6, 100, 1e-5, 6, 6, 6),   # Medium problem
+         (128, 7, 100, 1e-5, 6, 6, 6),   # Large problem
+         (256, 8, 100, 1e-5, 6, 6, 6),   # Very large
+         (512, 9, 100, 1e-5, 6, 6, 6),   # Very large       
     ]
     verbose = False    
     results = []
@@ -475,7 +509,7 @@ def main():
                 process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter)
             except Exception as e:
                 print(f"Failed for size={size}, levels={levels}: {e}")
-            run_check_memory_for_outputs()
+        run_check_memory_for_outputs()
 
 if __name__ == "__main__":
     main()

@@ -229,10 +229,8 @@ def profiling(
         simulator, 
         timing_smooth_data, timing_residual_data, timing_restrict_data, timing_interp_data,
         timing_smooth_apply_data, timing_smooth_update_data,
-        timing_interp_expand_z_data, timing_interp_bcast_data, timing_bcast_configure_data, timing_bcast_to_all_data, timing_bcast_state_entry_data, timing_interp_add_data,
+        timing_interp_expand_z_data, timing_interp_bcast_data, timing_bcast_configure_data, timing_bcast_to_all_data, timing_interp_add_data,
         timing_spmv_total_data, timing_spmv_communication_data, timing_spmv_compute_data,
-        timing_spmv_send_data, timing_spmv_recv_data,
-        timing_spmv_recv_into_buf_data, timing_spmv_recv_forward_data,
         timing_total_start_end_data
     ):
     print("\n" + "="*60)
@@ -303,17 +301,16 @@ def profiling(
     total_time_cycles = grand_total_cycles
 
     # ------------------------------------------------------------
-    # 7-pt Stencil: Compute vs Communication + Send/Recv Micro-Benchmark + Smoothing
-    # SpMV: Total / Communication / Compute; Send/Recv (f_send, f_recv); L1/L0 ratios.
+    # 7-pt Stencil: Compute vs Communication + Smoothing
+    # SpMV: Total / Communication / Compute; L1/L0 ratios.
     # Smooth: smooth_apply | smooth_update | smooth_total.
     # ------------------------------------------------------------
-    print("\n7-pt Stencil Compute vs Communication + Send/Recv Micro-Benchmark + Smoothing (us[cycles]) per Level:")
+    print("\n7-pt Stencil Compute vs Communication + Smoothing (us[cycles]) per Level:")
     print("Note: Triangle inequality: max(x+y) <= max(x) + max(y), where x,y are 2D timings across wafer.")
     TIMER_FIXED_COST = 30  # ~30 us (timer/fixed cost per level)
     compute_comm_header = [
         "level", "Total SpMV Time", "Communication Time", "Compute Time",
         "L1/L0(Comm)", "L1-L0(Comm)", "L1/L0(Compute)",
-        "spmv_send", "spmv_recv",
         "timer/fixed cost", "smooth_apply", "smooth_update", "smooth_total"
     ]
     print(build_divider(compute_comm_header, "="))
@@ -329,15 +326,11 @@ def profiling(
     sum_smooth_apply = 0
     sum_smooth_update = 0
     sum_smooth_total = 0
-    sum_spmv_send = 0
-    sum_spmv_recv = 0
 
     for level in range(args.levels):
         spmv_total_entry = timing_spmv_total_data[level]
         spmv_communication_entry = timing_spmv_communication_data[level]
         spmv_compute_entry = timing_spmv_compute_data[level]
-        spmv_send_entry = timing_spmv_send_data[level]
-        spmv_recv_entry = timing_spmv_recv_data[level]
         smooth_apply_entry = timing_smooth_apply_data[level]
         smooth_update_entry = timing_smooth_update_data[level]
         smooth_total_entry = timing_smooth_data[level]
@@ -381,8 +374,6 @@ def profiling(
             ratio_str,
             diff_str,
             compute_ratio_str,
-            f"{spmv_send_entry['time_send']:6.3f}us({spmv_send_entry['cycles_send']:7.0f})".center(col_width),
-            f"{spmv_recv_entry['time_send']:6.3f}us({spmv_recv_entry['cycles_send']:7.0f})".center(col_width),
             f"{TIMER_FIXED_COST:^{col_width}}",
             f"{smooth_apply_entry['time_send']:6.3f}us({smooth_apply_entry['cycles_send']:7.0f})".center(col_width),
             f"{smooth_update_entry['time_send']:6.3f}us({smooth_update_entry['cycles_send']:7.0f})".center(col_width),
@@ -400,14 +391,10 @@ def profiling(
         sum_smooth_apply += smooth_apply_entry["cycles_send"]
         sum_smooth_update += smooth_update_entry["cycles_send"]
         sum_smooth_total += smooth_total_entry["cycles_send"]
-        sum_spmv_send += spmv_send_entry["cycles_send"]
-        sum_spmv_recv += spmv_recv_entry["cycles_send"]
 
     sum_smooth_apply_time = sum(e["time_send"] for e in timing_smooth_apply_data)
     sum_smooth_update_time = sum(e["time_send"] for e in timing_smooth_update_data)
     sum_smooth_total_time = sum(e["time_send"] for e in timing_smooth_data)
-    sum_spmv_send_time = sum(e["time_send"] for e in timing_spmv_send_data)
-    sum_spmv_recv_time = sum(e["time_send"] for e in timing_spmv_recv_data)
     total_row = [
         f"{'total':^{col_width}}",
         f"{sum_spmv_total_time:6.3f}us({sum_spmv_total_cycles:7.0f})".center(col_width),
@@ -416,8 +403,6 @@ def profiling(
         f"{'N/A':^{col_width}}",
         f"{'N/A':^{col_width}}",
         f"{'N/A':^{col_width}}",
-        f"{sum_spmv_send_time:6.3f}us({sum_spmv_send:7.0f})".center(col_width),
-        f"{sum_spmv_recv_time:6.3f}us({sum_spmv_recv:7.0f})".center(col_width),
         f"{TIMER_FIXED_COST:^{col_width}}",
         f"{sum_smooth_apply_time:6.3f}us({sum_smooth_apply:7.0f})".center(col_width),
         f"{sum_smooth_update_time:6.3f}us({sum_smooth_update:7.0f})".center(col_width),
@@ -427,44 +412,11 @@ def profiling(
     print(build_divider(compute_comm_header, "="))
 
     # ------------------------------------------------------------
-    # f_recv Micro-Benchmark: recv_into_buf (receiver) vs recv_forward (forwarding nodes)
-    # See docs/RECV_MICROBENCH_ANALYSIS.md. Calculation of forwarding/receiver may be changed later.
-    # ------------------------------------------------------------
-    print("\nf_recv Micro-Benchmark (us[cycles]) per Level:")
-    print("Breakdown: recv_into_buf (receive into mem_*_buf) | recv_forward (forward path)")
-    recv_micro_header = ["level", "recv_into_buf", "recv_forward", "recv_total"]
-    print(build_divider(recv_micro_header, "="))
-    print("|" + "|".join(f"{name:^{col_width}}" for name in recv_micro_header) + "|")
-    print(build_divider(recv_micro_header))
-    for level in range(args.levels):
-        into_buf = timing_spmv_recv_into_buf_data[level]
-        fwd = timing_spmv_recv_forward_data[level]
-        recv_total = timing_spmv_recv_data[level]
-        row = [
-            f"{level:^{col_width}}",
-            f"{into_buf['time_send']:6.3f}us({into_buf['cycles_send']:7.0f})".center(col_width),
-            f"{fwd['time_send']:6.3f}us({fwd['cycles_send']:7.0f})".center(col_width),
-            f"{recv_total['time_send']:6.3f}us({recv_total['cycles_send']:7.0f})".center(col_width),
-        ]
-        print("|" + "|".join(row) + "|")
-        print(build_divider(recv_micro_header))
-    sum_into_buf = sum(e["cycles_send"] for e in timing_spmv_recv_into_buf_data)
-    sum_fwd = sum(e["cycles_send"] for e in timing_spmv_recv_forward_data)
-    recv_micro_total_row = [
-        f"{'total':^{col_width}}",
-        f"{sum(e['time_send'] for e in timing_spmv_recv_into_buf_data):6.3f}us({sum_into_buf:7.0f})".center(col_width),
-        f"{sum(e['time_send'] for e in timing_spmv_recv_forward_data):6.3f}us({sum_fwd:7.0f})".center(col_width),
-        f"{sum(e['time_send'] for e in timing_spmv_recv_data):6.3f}us({sum_spmv_recv:7.0f})".center(col_width),
-    ]
-    print("|" + "|".join(recv_micro_total_row) + "|")
-    print(build_divider(recv_micro_header, "="))
-
-    # ------------------------------------------------------------
     # Interpolation Micro-Benchmark (f_interpolation_expand_z, f_bcast_from_top_left, f_interpolation_add)
-    # bcast breakdown: state_entry(activation+branching) | bcast_configure | bcast_to_all | remaining(fabric+TD)
+    # bcast breakdown: bcast_configure | bcast_to_all | remaining(fabric+TD)
     # ------------------------------------------------------------
     print("\nInterpolation Micro-Benchmark (us[cycles]) per Level:")
-    interp_micro_header = ["level", "expand_z(T1)", "bcast_total(T2)", "state_machine(T2.0)", "reset_routes(T2.1)", "send_data(T2.2)", "interp_add(T3)", "interp_total(T1+T2+T3)"]
+    interp_micro_header = ["level", "expand_z(T1)", "bcast_total(T2)", "reset_routes(T2.1)", "send_data(T2.2)", "interp_add(T3)", "interp_total(T1+T2+T3)"]
     print(build_divider(interp_micro_header, "="))
     print("|" + "|".join(f"{name:^{col_width}}" for name in interp_micro_header) + "|")
     print(build_divider(interp_micro_header))
@@ -474,7 +426,6 @@ def profiling(
         bcast_entry = timing_interp_bcast_data[level]
         bcast_configure_entry = timing_bcast_configure_data[level]
         bcast_to_all_entry = timing_bcast_to_all_data[level]
-        bcast_state_entry_entry = timing_bcast_state_entry_data[level]
         interp_add_entry = timing_interp_add_data[level]
         interp_total_entry = timing_interp_data[level]
 
@@ -482,7 +433,6 @@ def profiling(
             f"{level:^{col_width}}",
             f"{expand_z_entry['time_send']:6.3f}us({expand_z_entry['cycles_send']:7.0f})".center(col_width),
             f"{bcast_entry['time_send']:6.3f}us({bcast_entry['cycles_send']:7.0f})".center(col_width),
-            f"{bcast_state_entry_entry['time_send']:6.3f}us({bcast_state_entry_entry['cycles_send']:7.0f})".center(col_width),
             f"{bcast_configure_entry['time_send']:6.3f}us({bcast_configure_entry['cycles_send']:7.0f})".center(col_width),
             f"{bcast_to_all_entry['time_send']:6.3f}us({bcast_to_all_entry['cycles_send']:7.0f})".center(col_width),
             f"{interp_add_entry['time_send']:6.3f}us({interp_add_entry['cycles_send']:7.0f})".center(col_width),
@@ -495,14 +445,12 @@ def profiling(
     sum_bcast = sum(e["cycles_send"] for e in timing_interp_bcast_data)
     sum_bcast_configure = sum(e["cycles_send"] for e in timing_bcast_configure_data)
     sum_bcast_to_all = sum(e["cycles_send"] for e in timing_bcast_to_all_data)
-    sum_bcast_state_entry = sum(e["cycles_send"] for e in timing_bcast_state_entry_data)
     sum_interp_add_cycles = sum(e["cycles_send"] for e in timing_interp_add_data)
     sum_interp_total_cycles = sum(e["cycles_send"] for e in timing_interp_data)
     interp_micro_total_row = [
         f"{'total':^{col_width}}",
         f"{sum(e['time_send'] for e in timing_interp_expand_z_data):6.3f}us({sum_expand_z:7.0f})".center(col_width),
         f"{sum(e['time_send'] for e in timing_interp_bcast_data):6.3f}us({sum_bcast:7.0f})".center(col_width),
-        f"{sum(e['time_send'] for e in timing_bcast_state_entry_data):6.3f}us({sum_bcast_state_entry:7.0f})".center(col_width),
         f"{sum(e['time_send'] for e in timing_bcast_configure_data):6.3f}us({sum_bcast_configure:7.0f})".center(col_width),
         f"{sum(e['time_send'] for e in timing_bcast_to_all_data):6.3f}us({sum_bcast_to_all:7.0f})".center(col_width),
         f"{sum(e['time_send'] for e in timing_interp_add_data):6.3f}us({sum_interp_add_cycles:7.0f})".center(col_width),
@@ -597,16 +545,11 @@ def main():
     symbol_timing_interp_bcast = simulator.get_id("timing_interp_bcast")
     symbol_timing_bcast_configure = simulator.get_id("timing_bcast_configure")
     symbol_timing_bcast_to_all = simulator.get_id("timing_bcast_to_all")
-    symbol_timing_bcast_state_entry = simulator.get_id("timing_bcast_state_entry")
     symbol_timing_interp_add = simulator.get_id("timing_interp_add")
     symbol_time_total_start_end = simulator.get_id("time_total_start_end")
     symbol_timing_spmv_total = simulator.get_id("timing_spmv_total")
     symbol_timing_spmv_communication = simulator.get_id("timing_spmv_communication")
     symbol_timing_spmv_compute = simulator.get_id("timing_spmv_compute")
-    symbol_timing_spmv_send = simulator.get_id("timing_spmv_send")
-    symbol_timing_spmv_recv = simulator.get_id("timing_spmv_recv")
-    symbol_timing_spmv_recv_into_buf = simulator.get_id("timing_spmv_recv_into_buf")
-    symbol_timing_spmv_recv_forward = simulator.get_id("timing_spmv_recv_forward")
     symbol_counter_rho_check = simulator.get_id("counter_rho_check")
     symbol_rho_history = simulator.get_id("rho_history")
     
@@ -673,15 +616,10 @@ def main():
     timing_interp_bcast_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_interp_bcast, WORDS_PER_TIMESTAMP, "interp_bcast")
     timing_bcast_configure_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_bcast_configure, WORDS_PER_TIMESTAMP, "bcast_configure")
     timing_bcast_to_all_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_bcast_to_all, WORDS_PER_TIMESTAMP, "bcast_to_all")
-    timing_bcast_state_entry_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_bcast_state_entry, WORDS_PER_TIMESTAMP, "bcast_state_entry")
     timing_interp_add_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_interp_add, WORDS_PER_TIMESTAMP, "interp_add")
     timing_spmv_total_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_spmv_total, WORDS_PER_TIMESTAMP, "spmv_total")
     timing_spmv_communication_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_spmv_communication, WORDS_PER_TIMESTAMP, "spmv_communication")
     timing_spmv_compute_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_spmv_compute, WORDS_PER_TIMESTAMP, "spmv_compute")
-    timing_spmv_send_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_spmv_send, WORDS_PER_TIMESTAMP, "spmv_send")
-    timing_spmv_recv_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_spmv_recv, WORDS_PER_TIMESTAMP, "spmv_recv")
-    timing_spmv_recv_into_buf_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_spmv_recv_into_buf, WORDS_PER_TIMESTAMP, "spmv_recv_into_buf")
-    timing_spmv_recv_forward_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_spmv_recv_forward, WORDS_PER_TIMESTAMP, "spmv_recv_forward")
     # counter_one = np.array([1]) # Because we have only 1 level
     # ones = np.ones(args.levels, dtype=int)
     timing_total_start_end_data = copy_timing_make_48bit(height, width,1, simulator, symbol_time_total_start_end, WORDS_PER_TIMESTAMP, "total")
@@ -739,10 +677,8 @@ def main():
         simulator, 
         timing_smooth_data, timing_residual_data, timing_restrict_data, timing_interp_data,
         timing_smooth_apply_data, timing_smooth_update_data,
-        timing_interp_expand_z_data, timing_interp_bcast_data, timing_bcast_configure_data, timing_bcast_to_all_data, timing_bcast_state_entry_data, timing_interp_add_data,
+        timing_interp_expand_z_data, timing_interp_bcast_data, timing_bcast_configure_data, timing_bcast_to_all_data, timing_interp_add_data,
         timing_spmv_total_data, timing_spmv_communication_data, timing_spmv_compute_data,
-        timing_spmv_send_data, timing_spmv_recv_data,
-        timing_spmv_recv_into_buf_data, timing_spmv_recv_forward_data,
         timing_total_start_end_data
         )  
     

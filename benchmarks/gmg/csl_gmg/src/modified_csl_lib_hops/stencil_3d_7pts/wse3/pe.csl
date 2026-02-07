@@ -235,22 +235,14 @@ var inactive_vertical: bool = false;
 var is_pe_inside_grid: bool = false;
 // const simprint = @import_module("<simprint>", .{ .enable = true });
 const layout_mod = @import_module("<layout>");
-const timer_stencil = @import_module("timer_modified.csl", .{ .timerCount = 7 });
+const timer_stencil = @import_module("timer_modified.csl", .{ .timerCount = 3 });
 var current_level_local: i16 = 0;
 var timing_spmv_total_local: [*]u16;
 var timing_spmv_communication_local: [*]u16;
 var timing_spmv_compute_local: [*]u16;
-var timing_spmv_send_local: [*]u16;
-var timing_spmv_recv_local: [*]u16;
-var timing_spmv_recv_into_buf_local: [*]u16;
-var timing_spmv_recv_forward_local: [*]u16;
 var TIMER_SPMV_TOTAL: i16 = 0;
 var TIMER_SPMV_COMMUNICATION: i16 = 1;
 var TIMER_SPMV_COMPUTE: i16 = 2;
-var TIMER_SPMV_SEND: i16 = 3;
-var TIMER_SPMV_RECV: i16 = 4;
-var TIMER_SPMV_RECV_INTO_BUF: i16 = 5;
-var TIMER_SPMV_RECV_FORWARD: i16 = 6;
 // later we will calculate the compute time by subtracting the communication time from the total time
 // var timer_init_hops_local = @zeros([4 * timer.tsc_size_words]u16);
 // var timer_laplacian_xy_local = @zeros([4 * timer.tsc_size_words]u16);
@@ -287,16 +279,12 @@ fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
 //  if n = 1, we cannot set DSD length with zDim-1 = 0.
 //  so we skip z-direction, just update center in laplacian_z
 //  (n = 1 is a 2D problem)
-fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32, current_level: i16, timing_spmv_total: [*]u16, timing_spmv_communication: [*]u16, timing_spmv_compute: [*]u16, timing_spmv_send: [*]u16, timing_spmv_recv: [*]u16, timing_spmv_recv_into_buf: [*]u16, timing_spmv_recv_forward: [*]u16) void {
+fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32, current_level: i16, timing_spmv_total: [*]u16, timing_spmv_communication: [*]u16, timing_spmv_compute: [*]u16) void {
     // do some initial setup here first, save arguments to local variables
     current_level_local = current_level;
     timing_spmv_total_local = timing_spmv_total;
     timing_spmv_communication_local = timing_spmv_communication;
     timing_spmv_compute_local = timing_spmv_compute;
-    timing_spmv_send_local = timing_spmv_send;
-    timing_spmv_recv_local = timing_spmv_recv;
-    timing_spmv_recv_into_buf_local = timing_spmv_recv_into_buf;
-    timing_spmv_recv_forward_local = timing_spmv_recv_forward;
 
     @assert(2 <= n);
     save_timestamp_start(TIMER_SPMV_TOTAL);
@@ -549,7 +537,6 @@ task f_send() void {
     const py: i16 = @as(i16, layout_mod.get_y_coord());
     if (SEND_STATE_EAST == send_state){ // send to east
         save_timestamp_start(TIMER_SPMV_COMMUNICATION);
-        save_timestamp_start(TIMER_SPMV_SEND);
         // The last PE of x-dir has no east neighbor, so it does not send data to the east
         if (!is_pe_inside_grid or px == @as(i16, last_active_px)){
             @activate(SEND); // nothing to send
@@ -610,7 +597,6 @@ task f_send() void {
         }
         send_state = SEND_STATE_DONE;
     }else{
-        save_timestamp_end(current_level_local, timing_spmv_send_local, TIMER_SPMV_SEND);
         count_send_recv += 1;
         // if both SEND and RECV are done, perform
         // - compute laplacian on x-y
@@ -627,24 +613,19 @@ task f_recv() void {
     const px: i16 = @as(i16, layout_mod.get_x_coord());
     const py: i16 = @as(i16, layout_mod.get_y_coord());
     if (RECV_STATE_WEST == recv_state){ // receive from west
-        save_timestamp_start(TIMER_SPMV_RECV);
         // The first PE of x-dir has no west neighbor so it does not receive data from the west
         if (px == @as(i16, first_active_px) or !is_pe_inside_grid){   // Doesn't include last active px as it can handle receive.
             @activate(RECV); // nothing to receive
         }else{
             //@mov32(mem_west_buf_dsd, fab_recv_west_wdsd, .{.async=true, .activate = f_recv });
             if (inactive_horizontal){
-                save_timestamp_start(TIMER_SPMV_RECV_FORWARD);
                 // forward data from WEST to EAST  
                 // @load_to_dsr(dest_dsr_recv, fab_trans_east_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = out_ut }); 
                 @load_to_dsr(dest_dsr_recv, fab_trans_east_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = in_ut});
                 @load_to_dsr(src1_dsr_recv, fab_recv_west_wdsd, .{.async=true}); 
-                save_timestamp_end(current_level_local, timing_spmv_recv_forward_local, TIMER_SPMV_RECV_FORWARD);
             }else{
-                save_timestamp_start(TIMER_SPMV_RECV_INTO_BUF);
                 @load_to_dsr(dest_dsr_recv, mem_west_buf_dsd);
                 @load_to_dsr(src1_dsr_recv, fab_recv_west_wdsd, .{.async=true, .activate = f_recv });
-                save_timestamp_end(current_level_local, timing_spmv_recv_into_buf_local, TIMER_SPMV_RECV_INTO_BUF);
             }
             @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
         }
@@ -656,15 +637,11 @@ task f_recv() void {
         }else{
             //@mov32(mem_east_buf_dsd, fab_recv_east_wdsd, .{.async=true, .activate = f_recv });
             if (inactive_horizontal){
-                save_timestamp_start(TIMER_SPMV_RECV_FORWARD);
                 @load_to_dsr(dest_dsr_recv, fab_trans_west_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = in_ut});
                 @load_to_dsr(src1_dsr_recv, fab_recv_east_wdsd, .{.async=true});
-                save_timestamp_end(current_level_local, timing_spmv_recv_forward_local, TIMER_SPMV_RECV_FORWARD);
             }else{
-                save_timestamp_start(TIMER_SPMV_RECV_INTO_BUF);
                 @load_to_dsr(dest_dsr_recv, mem_east_buf_dsd);
                 @load_to_dsr(src1_dsr_recv, fab_recv_east_wdsd, .{.async=true, .activate = f_recv });
-                save_timestamp_end(current_level_local, timing_spmv_recv_into_buf_local, TIMER_SPMV_RECV_INTO_BUF);
             }
             @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
         }
@@ -676,16 +653,12 @@ task f_recv() void {
         }else{
             //@mov32(mem_south_buf_dsd, fab_recv_south_wdsd, .{.async=true, .activate = f_recv });
             if (inactive_vertical){
-                save_timestamp_start(TIMER_SPMV_RECV_FORWARD);
                 // forward data from SOUTH to NORTH
                 @load_to_dsr(dest_dsr_recv, fab_trans_north_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = in_ut});
                 @load_to_dsr(src1_dsr_recv, fab_recv_south_wdsd, .{.async=true}); 
-                save_timestamp_end(current_level_local, timing_spmv_recv_forward_local, TIMER_SPMV_RECV_FORWARD);
             }else{
-                save_timestamp_start(TIMER_SPMV_RECV_INTO_BUF);
                 @load_to_dsr(dest_dsr_recv, mem_south_buf_dsd);
                 @load_to_dsr(src1_dsr_recv, fab_recv_south_wdsd, .{.async=true, .activate = f_recv });
-                save_timestamp_end(current_level_local, timing_spmv_recv_into_buf_local, TIMER_SPMV_RECV_INTO_BUF);
             }
             @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
         }
@@ -697,23 +670,18 @@ task f_recv() void {
         }else{
             //@mov32(mem_north_buf_dsd, fab_recv_north_wdsd, .{.async=true, .activate = f_recv });
             if (inactive_vertical){
-                save_timestamp_start(TIMER_SPMV_RECV_FORWARD);
                 // forward data from NORTH to SOUTH
                 // @load_to_dsr(dest_dsr_recv, fab_trans_south_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = out_ut });
                 @load_to_dsr(dest_dsr_recv, fab_trans_south_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = in_ut});
                 @load_to_dsr(src1_dsr_recv, fab_recv_north_wdsd, .{.async=true});
-                save_timestamp_end(current_level_local, timing_spmv_recv_forward_local, TIMER_SPMV_RECV_FORWARD);
             }else{
-                save_timestamp_start(TIMER_SPMV_RECV_INTO_BUF);
                 @load_to_dsr(dest_dsr_recv, mem_north_buf_dsd);
                 @load_to_dsr(src1_dsr_recv, fab_recv_north_wdsd, .{.async=true, .activate = f_recv });
-                save_timestamp_end(current_level_local, timing_spmv_recv_into_buf_local, TIMER_SPMV_RECV_INTO_BUF);
             }
             @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
         }
         recv_state = RECV_STATE_DONE;
     }else{
-        save_timestamp_end(current_level_local, timing_spmv_recv_local, TIMER_SPMV_RECV);
         count_send_recv += 1;
         // if both SEND and RECV are done, perform
         // - compute laplacian on x-y

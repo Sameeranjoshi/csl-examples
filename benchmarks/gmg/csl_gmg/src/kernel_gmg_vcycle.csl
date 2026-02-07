@@ -144,15 +144,10 @@ var timing_interp_expand_z = @zeros([LEVELS * timer.tsc_size_words]u16);  // int
 var timing_interp_bcast = @zeros([LEVELS * timer.tsc_size_words]u16);     // interpolation bcast micro
 var timing_bcast_configure = @zeros([LEVELS * timer.tsc_size_words]u16);  // bcast_from_top_left_configure
 var timing_bcast_to_all = @zeros([LEVELS * timer.tsc_size_words]u16);     // broadcast_to_all_inside_window
-var timing_bcast_state_entry = @zeros([LEVELS * timer.tsc_size_words]u16); // C_STATE_ENTRY activation + if-else branching
 var timing_interp_add = @zeros([LEVELS * timer.tsc_size_words]u16);       // interpolation add micro
 var timing_spmv_total = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv total accumulated elapsed timing
 var timing_spmv_communication = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv communication accumulated elapsed timing
 var timing_spmv_compute = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv compute accumulated elapsed timing
-var timing_spmv_send = @zeros([LEVELS * timer.tsc_size_words]u16);         // spmv send (f_send) micro-benchmark
-var timing_spmv_recv = @zeros([LEVELS * timer.tsc_size_words]u16);         // spmv recv (f_recv) micro-benchmark
-var timing_spmv_recv_into_buf = @zeros([LEVELS * timer.tsc_size_words]u16); // f_recv: receive into mem_*_buf (active path)
-var timing_spmv_recv_forward = @zeros([LEVELS * timer.tsc_size_words]u16);  // f_recv: forward path (in_ut serialization)
 var time_total_start_end_u16 = @zeros([timer.tsc_size_words]u16);   // this is also elapsed time for entire V-cycle, 1 level
 
 
@@ -249,15 +244,10 @@ fn f_reset() void {
         timing_interp_bcast[index] = 0;
         timing_bcast_configure[index] = 0;
         timing_bcast_to_all[index] = 0;
-        timing_bcast_state_entry[index] = 0;
         timing_interp_add[index] = 0;
         timing_spmv_total[index] = 0;
         timing_spmv_communication[index] = 0;
         timing_spmv_compute[index] = 0;
-        timing_spmv_send[index] = 0;
-        timing_spmv_recv[index] = 0;
-        timing_spmv_recv_into_buf[index] = 0;
-        timing_spmv_recv_forward[index] = 0;
         time_total_start_end_u16[index] = 0;
     }
 
@@ -345,16 +335,11 @@ var ptr_timing_interp_expand_z: [*]u16 = &timing_interp_expand_z;
 var ptr_timing_interp_bcast: [*]u16 = &timing_interp_bcast;
 var ptr_timing_bcast_configure: [*]u16 = &timing_bcast_configure;
 var ptr_timing_bcast_to_all: [*]u16 = &timing_bcast_to_all;
-var ptr_timing_bcast_state_entry: [*]u16 = &timing_bcast_state_entry;
 var ptr_timing_interp_add: [*]u16 = &timing_interp_add;
 var ptr_time_total_start_end: [*]u16 = &time_total_start_end_u16;
 var ptr_timing_spmv_total: [*]u16 = &timing_spmv_total;
 var ptr_timing_spmv_communication: [*]u16 = &timing_spmv_communication;
 var ptr_timing_spmv_compute: [*]u16 = &timing_spmv_compute;
-var ptr_timing_spmv_send: [*]u16 = &timing_spmv_send;
-var ptr_timing_spmv_recv: [*]u16 = &timing_spmv_recv;
-var ptr_timing_spmv_recv_into_buf: [*]u16 = &timing_spmv_recv_into_buf;
-var ptr_timing_spmv_recv_forward: [*]u16 = &timing_spmv_recv_forward;
 
 // counter pointers
 var ptr_counter_smooth: [*]u32 = &counter_smooth;
@@ -424,7 +409,7 @@ fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
 fn f_apply_operator() void {
     counter_apply_op[current_level] += 1;
     @fmovs(mem_Au_dsd, 0.0);
-    stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute, &timing_spmv_send, &timing_spmv_recv, &timing_spmv_recv_into_buf, &timing_spmv_recv_forward);
+    stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute);
 }
 
 // Jacobi smoothing: u = u + JACOBI_COEFF * (f - Au)
@@ -561,9 +546,8 @@ fn f_interpolation_add() void {
 }
 
 // Broadcast the coarse solution to all fine points in the window.
-// Pass current_level and timing buffers for micro-benchmark (reduce_mod saves to locals, used by tasks).
 fn f_bcast_from_top_left() void {
-    reduce_mod.broadcast_from_top_left(n, &u, current_level, &timing_bcast_configure, &timing_bcast_to_all, &timing_bcast_state_entry);
+    reduce_mod.broadcast_from_top_left(n, &u, current_level, &timing_bcast_configure, &timing_bcast_to_all);
 }
 
 // Setup the hops based spmv and restriction parameters.
@@ -994,16 +978,11 @@ comptime {
     @export_symbol(ptr_timing_interp_bcast, "timing_interp_bcast");
     @export_symbol(ptr_timing_bcast_configure, "timing_bcast_configure");
     @export_symbol(ptr_timing_bcast_to_all, "timing_bcast_to_all");
-    @export_symbol(ptr_timing_bcast_state_entry, "timing_bcast_state_entry");
     @export_symbol(ptr_timing_interp_add, "timing_interp_add");
     @export_symbol(ptr_time_total_start_end, "time_total_start_end");
     @export_symbol(ptr_timing_spmv_total, "timing_spmv_total");
     @export_symbol(ptr_timing_spmv_communication, "timing_spmv_communication");
     @export_symbol(ptr_timing_spmv_compute, "timing_spmv_compute");
-    @export_symbol(ptr_timing_spmv_send, "timing_spmv_send");
-    @export_symbol(ptr_timing_spmv_recv, "timing_spmv_recv");
-    @export_symbol(ptr_timing_spmv_recv_into_buf, "timing_spmv_recv_into_buf");
-    @export_symbol(ptr_timing_spmv_recv_forward, "timing_spmv_recv_forward");    
 
 
     // counters

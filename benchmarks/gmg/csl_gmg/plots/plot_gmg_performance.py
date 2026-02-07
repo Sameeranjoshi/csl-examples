@@ -243,16 +243,16 @@ def parse_spmv_per_level(text: str) -> List[Dict]:
 def parse_interpolation_totals(text: str) -> List[Dict]:
     """
     Parse Interpolation Micro-Benchmark table total row from each run block.
-    Returns list of dicts with grid_size, expand_z_T1, state_machine_T20, reset_routes_T21,
+    Returns list of dicts with grid_size, expand_z_T1, reset_routes_T21,
     send_data_T22, interp_add_T3, interp_total (us).
+    Note: state_machine (T2.0) was removed to save timer memory.
     """
     results = []
     blocks = split_into_run_blocks(text)
-    # Total row: | total | expand_z(T1) | bcast_total(T2) | state_machine(T2.0) | reset_routes(T2.1) | send_data(T2.2) | interp_add(T3) | interp_total |
+    # Total row: | total | expand_z(T1) | bcast_total(T2) | reset_routes(T2.1) | send_data(T2.2) | interp_add(T3) | interp_total |
     total_row_re = re.compile(
         r'\|\s*total\s*\|\s*([\d.]+)us\s*\([^)]+\)\s*\|'   # T1 expand_z
-        r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'                 # T2 bcast_total (skip in plot)
-        r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'                 # T2.0 state_machine
+        r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'                 # T2 bcast_total
         r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'                 # T2.1 reset_routes
         r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'                 # T2.2 send_data
         r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'                 # T3 interp_add
@@ -267,11 +267,10 @@ def parse_interpolation_totals(text: str) -> List[Dict]:
             results.append({
                 'grid_size': grid_size,
                 'expand_z_T1': float(match.group(1)),
-                'state_machine_T20': float(match.group(3)),
-                'reset_routes_T21': float(match.group(4)),
-                'send_data_T22': float(match.group(5)),
-                'interp_add_T3': float(match.group(6)),
-                'interp_total': float(match.group(7)),
+                'reset_routes_T21': float(match.group(3)),
+                'send_data_T22': float(match.group(4)),
+                'interp_add_T3': float(match.group(5)),
+                'interp_total': float(match.group(6)),
             })
     return results
 
@@ -279,17 +278,17 @@ def parse_interpolation_totals(text: str) -> List[Dict]:
 def parse_interpolation_per_level(text: str) -> List[Dict]:
     """
     Parse full Interpolation Micro-Benchmark table (all level rows) per run block.
-    Returns list of {grid_size, levels: [ {level, expand_z_T1, bcast_T2, state_machine_T20,
+    Returns list of {grid_size, levels: [ {level, expand_z_T1, bcast_T2,
     reset_routes_T21, send_data_T22, interp_add_T3, interp_total}, ... ] }.
+    Note: state_machine (T2.0) was removed to save timer memory.
     """
     results = []
     blocks = split_into_run_blocks(text)
-    # Data row: | level | T1 | T2 | T2.0 | T2.1 | T2.2 | T3 | interp_total |
+    # Data row: | level | T1 | T2 | T2.1 | T2.2 | T3 | interp_total |
     row_re = re.compile(
         r'\|\s*(\d+)\s*\|'  # level
         r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'  # T1 expand_z
         r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'  # T2 bcast_total
-        r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'  # T2.0 state_machine
         r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'  # T2.1 reset_routes
         r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'  # T2.2 send_data
         r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'  # T3 interp_add
@@ -310,14 +309,36 @@ def parse_interpolation_per_level(text: str) -> List[Dict]:
                     'level': level,
                     'expand_z_T1': float(match.group(2)),
                     'bcast_T2': float(match.group(3)),
-                    'state_machine_T20': float(match.group(4)),
-                    'reset_routes_T21': float(match.group(5)),
-                    'send_data_T22': float(match.group(6)),
-                    'interp_add_T3': float(match.group(7)),
-                    'interp_total': float(match.group(8)),
+                    'reset_routes_T21': float(match.group(4)),
+                    'send_data_T22': float(match.group(5)),
+                    'interp_add_T3': float(match.group(6)),
+                    'interp_total': float(match.group(7)),
                 })
         if levels:
             results.append({'grid_size': grid_size, 'levels': levels})
+    return results
+
+
+def parse_memory_usage(text: str) -> List[Dict]:
+    """
+    Parse Memory usage check section from the output file (one per run block).
+    Extracts Code (FUNC symbols) and Data (OBJECT symbols) sizes in bytes.
+    Uses the last occurrence in each block when multiple memory check sections exist.
+    """
+    results = []
+    blocks = split_into_run_blocks(text)
+    code_re = re.compile(r'Code \(FUNC symbols\):\s*(\d+)\s*bytes')
+    data_re = re.compile(r'Data \(OBJECT symbols\):\s*(\d+)\s*bytes')
+    for grid_size, block_text in blocks:
+        code_matches = code_re.findall(block_text)
+        data_matches = data_re.findall(block_text)
+        code_bytes = int(code_matches[-1]) if code_matches else None
+        data_bytes = int(data_matches[-1]) if data_matches else None
+        results.append({
+            'grid_size': grid_size,
+            'code_bytes': code_bytes,
+            'data_bytes': data_bytes,
+        })
     return results
 
 
@@ -350,6 +371,7 @@ def parse_all_data(text: str) -> List[Dict]:
     spmv_data = parse_spmv_totals(text)
     vcycle_data = parse_vcycle_times(text)
     config_data = parse_configuration_summary(text)
+    memory_data = parse_memory_usage(text)
     
     # Step 2: Combine data by grid size
     combined = {}
@@ -401,6 +423,20 @@ def parse_all_data(text: str) -> List[Dict]:
                 'converged': item.get('converged', None),
                 'compile_time_s': item.get('compile_time_s', None),
                 'run_time_s': item.get('run_time_s', None)
+            }
+
+    # Add memory usage data (code/data size per PE from ELF)
+    for item in memory_data:
+        grid = item['grid_size']
+        if grid in combined:
+            combined[grid]['code_bytes'] = item.get('code_bytes')
+            combined[grid]['data_bytes'] = item.get('data_bytes')
+        else:
+            combined[grid] = {
+                'pe_tiles': grid,
+                'grid_size': grid,
+                'code_bytes': item.get('code_bytes'),
+                'data_bytes': item.get('data_bytes'),
             }
     
     # Step 3: Convert to sorted list (by total_grid_size)
@@ -552,7 +588,7 @@ def plot_interpolation_internal(interp_per_level_data: List[Dict], output_file: 
     """
     Plot Interpolation Micro-Benchmark table per level for 3 problem sizes (128³, 256³, 512³).
     One subplot per problem size. Each subplot shows level vs time (µs) for T1, T2.1,
-    T2.2, T3 (solid) and interpolation_total (dotted; data from bcast_total), skipping T2.0 (state_machine).
+    T2.2, T3 (solid) and interpolation_total (dotted; data from bcast_total).
     Y-axis in log scale. All 3 in a single PNG.
     """
     if not HAS_MATPLOTLIB or not interp_per_level_data:
@@ -851,12 +887,12 @@ def print_interpolation_per_level_tables(interp_per_level_data: List[Dict]):
         print(f"\n{'='*120}")
         print(f"Interpolation Micro-Benchmark per Level: Grid {grid_size}")
         print(f"{'='*120}")
-        print(f"{'Level':<6} {'Sub':<6} {'expand_z(T1)':<14} {'interpolation_total_time':<22} {'state_m(T2.0)':<14} {'reset(T2.1)':<12} {'send(T2.2)':<12} {'interp(T3)':<12}")
-        print("-"*120)
+        print(f"{'Level':<6} {'Sub':<6} {'expand_z(T1)':<14} {'interpolation_total_time':<22} {'reset(T2.1)':<12} {'send(T2.2)':<12} {'interp(T3)':<12}")
+        print("-"*100)
         for r in levels_data:
             level = r['level']
             subdomain = grid_dim // (2 ** level)
-            print(f"{level:<6} {subdomain}³{'':<3} {r['expand_z_T1']:<14.2f} {r['bcast_T2']:<22.2f} {r['state_machine_T20']:<14.2f} "
+            print(f"{level:<6} {subdomain}³{'':<3} {r['expand_z_T1']:<14.2f} {r['bcast_T2']:<22.2f} "
                   f"{r['reset_routes_T21']:<12.2f} {r['send_data_T22']:<12.2f} {r['interp_add_T3']:<12.2f}")
         print(f"{'='*120}\n")
 
@@ -920,15 +956,15 @@ def print_summary_table(data: List[Dict]):
     """
     Print a summary table of the parsed data with updated column names and units.
     """
-    print("\n" + "="*150)
+    print("\n" + "="*180)
     print("Performance Data Summary")
-    print("="*150)
+    print("="*180)
     header = (f"{'PE tiles':<15} {'Total Grid size':<18} {'Comm Time(spmv) (us)':<25} "
               f"{'Compute Time(spmv) (us)':<28} {'V-cycle Time (us)':<20} "
               f"{'Iterations':<12} {'1-V cycle time(Average) (us)':<30} {'|rho|_inf':<15} {'Converged':<10} "
-              f"{'Compile Time (s)':<18} {'Run Time (s)':<15}")
+              f"{'Compile Time (s)':<18} {'Run Time (s)':<15} {'Code (bytes)':<14} {'Data (bytes)':<14}")
     print(header)
-    print("-"*150)
+    print("-"*180)
     
     for d in data:
         pe_tiles = d.get('pe_tiles', 'N/A')
@@ -942,6 +978,8 @@ def print_summary_table(data: List[Dict]):
         converged = d.get('converged', None)
         compile_time = d.get('compile_time_s', None)
         run_time = d.get('run_time_s', None)
+        code_bytes = d.get('code_bytes', None)
+        data_bytes = d.get('data_bytes', None)
         
         iter_str = str(iterations) if iterations is not None else 'N/A'
         vcycle_avg_str = f"{vcycle_avg:.3f}" if vcycle_avg is not None else 'N/A'
@@ -949,12 +987,14 @@ def print_summary_table(data: List[Dict]):
         conv_str = 'Yes' if converged else 'No' if converged is False else 'N/A'
         compile_str = f"{compile_time:.3f}" if compile_time is not None else 'N/A'
         run_str = f"{run_time:.3f}" if run_time is not None else 'N/A'
+        code_str = f"{code_bytes:,}" if code_bytes is not None else 'N/A'
+        data_str = f"{data_bytes:,}" if data_bytes is not None else 'N/A'
         
         print(f"{pe_tiles:<15} {total_grid:<18,} {comm:<25.2f} {comp:<28.2f} "
               f"{vcycle:<20.2f} {iter_str:<12} {vcycle_avg_str:<30} {rho_str:<15} {conv_str:<10} "
-              f"{compile_str:<18} {run_str:<15}")
+              f"{compile_str:<18} {run_str:<15} {code_str:<14} {data_str:<14}")
     
-    print("="*150 + "\n")
+    print("="*180 + "\n")
 
 
 def main():
