@@ -527,7 +527,7 @@ def plot_spmv_internal(spmv_per_level_data: List[Dict], output_file: str = 'spmv
         ax.set_xticks(levels)
         ax.legend(loc='best', framealpha=0.9, fontsize=9)
         ax.grid(True, which='major', linestyle='-', alpha=0.2)
-    fig.suptitle('7-pt Stencil: Communication vs Compute vs Total SpMV Time per Level', fontsize=14, fontweight='bold', y=1.02)
+    fig.suptitle('7-pt Stencil: Communication vs Compute vs Total Time (config: 6/6/6)', fontsize=14, fontweight='bold', y=1.02)
     plt.tight_layout()
     plt.savefig(output_file, dpi=150, bbox_inches='tight')
     print(f"Saved: {output_file}")
