@@ -85,6 +85,10 @@ const oq_send_south = @get_output_queue(output_queues[3]);
 // ../csl-libs/stencil_3d_7pts_wse3/pe.csl:415:106: error: DSD op setting must be comptime
 const out_ut: ut_id = @get_ut_id(output_ut_id);
 
+// --- FIFO SETUP FOR CUT-THROUGH FORWARDING ---
+// Buffer for the hardware FIFO (size must be >= BLOCK_SIZE to be safe)
+var fifo_buffer = @zeros([256]f32); 
+const fifo = @allocate_fifo(fifo_buffer);
 ////////////////////////////////////////////////////////////////////////////////
 // Main memory (48KB)
 ////////////////////////////////////////////////////////////////////////////////
@@ -518,135 +522,138 @@ fn compute_and_next_send_recv() void {
     }
 }
 
-// Send data to four neighbors sequentially
-// The corresponding recv sequence is in f_recv()
-//
-// SEND_STATE_EAST -> send to east
-// SEND_STATE_WEST -> send to west
-// SEND_STATE_NORTH --> send to north
-// SEND_STATE_SOUTH --> send to south
+// --- CUT-THROUGH OPTIMIZED TASKS ---
+
 task f_send() void {
     if (SEND_STATE_EAST == send_state){ // send to east
         if (can_communicate_east){
             @load_to_dsr(dest_dsr_send, fab_trans_east_wdsd, .{.async=true, .activate = f_send, .ut_id = out_ut });
+            
             if (is_active_pe){
-                // Active PE: Send data, Inactive PEs forward the ghost zones
+                // Active: Send my own data from memory
                 @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
+                @mov32(dest_dsr_send, src1_dsr_send, .{.async=true, .ut_id = out_ut} );
             } else {
-                @load_to_dsr(src1_dsr_send, mem_west_buf_dsd);
+                // Inactive: Forward from FIFO (Cut-Through)
+                // This instruction will stall in HW until f_recv pushes data into the FIFO
+                @mov32(dest_dsr_send, fifo, .{.async=true, .ut_id = out_ut} );
             }
-            @mov32(dest_dsr_send, src1_dsr_send, .{.async=true, .ut_id = out_ut} );
         } else {
-            @activate(SEND);    //Nothing to send
+            @activate(SEND);
         }
-        send_state = SEND_STATE_WEST;// goto next state
+        send_state = SEND_STATE_WEST;
+
     }else if (SEND_STATE_WEST == send_state){ // send to west
         if (can_communicate_west){
             @load_to_dsr(dest_dsr_send, fab_trans_west_wdsd, .{.async=true, .activate = f_send, .ut_id = out_ut });
             if (is_active_pe){
-                // Active PE: send own data
                 @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
+                @mov32(dest_dsr_send, src1_dsr_send, .{.async=true, .ut_id = out_ut} );
             }else{
-                @load_to_dsr(src1_dsr_send, mem_east_buf_dsd);
+                @mov32(dest_dsr_send, fifo, .{.async=true, .ut_id = out_ut} );
             }
-            @mov32(dest_dsr_send, src1_dsr_send, .{.async=true, .ut_id = out_ut} );
         } else {
             @activate(SEND);
         }
         send_state = SEND_STATE_NORTH;
+
     }else if (SEND_STATE_NORTH == send_state){ // send to north
         if (can_communicate_north){
             @load_to_dsr(dest_dsr_send, fab_trans_north_wdsd, .{.async=true, .activate = f_send, .ut_id = out_ut });
             if (is_active_pe){
                 @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
+                @mov32(dest_dsr_send, src1_dsr_send, .{.async=true, .ut_id = out_ut} );
             }else{
-                @load_to_dsr(src1_dsr_send, mem_south_buf_dsd);
+                @mov32(dest_dsr_send, fifo, .{.async=true, .ut_id = out_ut} );
             }
-            @mov32(dest_dsr_send, src1_dsr_send, .{.async=true, .ut_id = out_ut} );
         } else {
             @activate(SEND);
         }
         send_state = SEND_STATE_SOUTH;
+
     }else if (SEND_STATE_SOUTH == send_state) { // send to south
         if (can_communicate_south){
             @load_to_dsr(dest_dsr_send, fab_trans_south_wdsd, .{.async=true, .activate = f_send, .ut_id = out_ut });
             if (is_active_pe){
                 @load_to_dsr(src1_dsr_send, mem_center_buf_dsd);
-            }else{  // Forward
-                @load_to_dsr(src1_dsr_send, mem_north_buf_dsd);
+                @mov32(dest_dsr_send, src1_dsr_send, .{.async=true, .ut_id = out_ut} );
+            }else{  
+                @mov32(dest_dsr_send, fifo, .{.async=true, .ut_id = out_ut} );
             }
-            @mov32(dest_dsr_send, src1_dsr_send, .{.async=true, .ut_id = out_ut} );
         } else {
-            @activate(SEND); // nothing to send
+            @activate(SEND);
         }
         send_state = SEND_STATE_DONE;
     }else{
         count_send_recv += 1;
-        // if both SEND and RECV are done, perform
-        // - compute laplacian on x-y
-        // - update the DSD of pointer x and y
-        // - activate COMM
         compute_and_next_send_recv();
-        // reset send_state for next block SEND
         send_state = SEND_STATE_EAST;
     }
 }
 
-// Receive data from four neighbors sequentially
-// The corresponding send sequence is in f_send()
-//
-// RECV_STATE_WEST -> receive from west
-// RECV_STATE_EAST -> receive from east
-// RECV_STATE_SOUTH -> receive from south
-// RECV_STATE_NORTH -> receive from north
-//
 task f_recv() void {
     if (RECV_STATE_WEST == recv_state){ // receive from west
         if (can_communicate_west){
-            // simprint.fmt_with_coords("RECV WEST: Receiving data, is_active_pe={d}", .{@as(u32, is_active_pe)});
-            @load_to_dsr(dest_dsr_recv, mem_west_buf_dsd);
-            @load_to_dsr(src1_dsr_recv, fab_recv_west_wdsd, .{.async=true, .activate = f_recv });
-            @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
+            if (is_active_pe) {
+                // Active: Store to memory (needed for Laplacian)
+                @load_to_dsr(dest_dsr_recv, mem_west_buf_dsd);
+                @load_to_dsr(src1_dsr_recv, fab_recv_west_wdsd, .{.async=true, .activate = f_recv });
+                @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
+            } else {
+                // Inactive: Push to FIFO (for f_send to consume)
+                // We must use a callback to advance state, but we don't need a DSR for FIFO dest
+                @mov32(fifo, fab_recv_west_wdsd, .{.async=true, .activate = f_recv} );
+            }
         } else {
-            @activate(RECV); // nothing to receive
+            @activate(RECV);
         }
-        recv_state = RECV_STATE_EAST; // goto next state
+        recv_state = RECV_STATE_EAST;
+
     }else if (RECV_STATE_EAST == recv_state){ // receive from east
         if (can_communicate_east){
-            @load_to_dsr(dest_dsr_recv, mem_east_buf_dsd);
-            @load_to_dsr(src1_dsr_recv, fab_recv_east_wdsd, .{.async=true, .activate = f_recv });
-            @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
+            if (is_active_pe) {
+                @load_to_dsr(dest_dsr_recv, mem_east_buf_dsd);
+                @load_to_dsr(src1_dsr_recv, fab_recv_east_wdsd, .{.async=true, .activate = f_recv });
+                @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
+            } else {
+                @mov32(fifo, fab_recv_east_wdsd, .{.async=true, .activate = f_recv} );
+            }
         } else {
-            @activate(RECV); // nothing to receive
+            @activate(RECV);
         }
         recv_state = RECV_STATE_SOUTH;
+
     }else if (RECV_STATE_SOUTH == recv_state){ // receive from south
         if (can_communicate_south){
-            @load_to_dsr(dest_dsr_recv, mem_south_buf_dsd);
-            @load_to_dsr(src1_dsr_recv, fab_recv_south_wdsd, .{.async=true, .activate = f_recv });
-            @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
+            if (is_active_pe) {
+                @load_to_dsr(dest_dsr_recv, mem_south_buf_dsd);
+                @load_to_dsr(src1_dsr_recv, fab_recv_south_wdsd, .{.async=true, .activate = f_recv });
+                @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
+            } else {
+                 @mov32(fifo, fab_recv_south_wdsd, .{.async=true, .activate = f_recv} );
+            }
         } else {
-            @activate(RECV); // nothing to receive
+            @activate(RECV);
         }
         recv_state = RECV_STATE_NORTH;
+
     }else if (RECV_STATE_NORTH == recv_state){ // receive from north
         if (can_communicate_north){
-            @load_to_dsr(dest_dsr_recv, mem_north_buf_dsd);
-            @load_to_dsr(src1_dsr_recv, fab_recv_north_wdsd, .{.async=true, .activate = f_recv });
-            @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
+            if (is_active_pe) {
+                @load_to_dsr(dest_dsr_recv, mem_north_buf_dsd);
+                @load_to_dsr(src1_dsr_recv, fab_recv_north_wdsd, .{.async=true, .activate = f_recv });
+                @mov32(dest_dsr_recv, src1_dsr_recv, .{.async=true} );
+            } else {
+                @mov32(fifo, fab_recv_north_wdsd, .{.async=true, .activate = f_recv} );
+            }
         } else {
             @activate(RECV);
         }
         recv_state = RECV_STATE_DONE;
+
     }else{
         count_send_recv += 1;
-        // simprint.fmt_with_coords("RECV DONE: count_send_recv={d}", .{@as(u32, count_send_recv)});
-        // if both SEND and RECV are done, perform
-        // - compute laplacian on x-y
-        // - update the DSD of pointer x and y
-        // - activate COMM
         compute_and_next_send_recv();
-        // reset recv_state for next block RECV
         recv_state = RECV_STATE_WEST;
     }
 }

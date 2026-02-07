@@ -24,8 +24,8 @@ const timer = @import_module("timer_modified.csl", .{ .timerCount = 10 });
 const layout_mod = @import_module("<layout>");
 const simprint = @import_module("<simprint>", .{.enable = true});
 // const timestamp = @import_module("<time>");
-const reduce_mod = @import_module("./modified_csl_lib_hops/allreduce/pe.csl", @concat_structs(reduceParams, .{
-// const reduce_mod = @import_module("./modified_csl_lib/allreduce/pe.csl", @concat_structs(reduceParams, .{
+// const reduce_mod = @import_module("./modified_csl_lib_hops/allreduce/pe.csl", @concat_structs(reduceParams, .{
+const reduce_mod = @import_module("./modified_csl_lib/allreduce/pe.csl", @concat_structs(reduceParams, .{
      .f_callback = f_trigger_state_machine,
      .queues = [1]u16{2},
      .dest_dsr_ids = [1]u16{1},
@@ -33,8 +33,8 @@ const reduce_mod = @import_module("./modified_csl_lib_hops/allreduce/pe.csl", @c
      .src1_dsr_ids = [1]u16{1},
      .MAX_PENCIL_DIM = MAX_ZDIM  // OPTIMIZATION: Pass MAX_ZDIM to size zero_buf dynamically, saves ~1KB for 256 problem
      }));
-const stencil_mod = @import_module("./modified_csl_lib_hops/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
-// const stencil_mod = @import_module("./modified_csl_lib/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
+// const stencil_mod = @import_module("./modified_csl_lib_hops/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
+const stencil_mod = @import_module("./modified_csl_lib/stencil_3d_7pts/pe.csl", @concat_structs(stencilParams, .{
      .f_callback = f_trigger_state_machine,
      .input_queues = [4]u16{4, 5, 6, 7},
      .output_queues = if (@is_arch("wse3")) [4]u16{4, 5, 6, 7} else [1]u16{3},
@@ -424,7 +424,8 @@ fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
 fn f_apply_operator() void {
     counter_apply_op[current_level] += 1;
     @fmovs(mem_Au_dsd, 0.0);
-    stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute, &timing_spmv_send, &timing_spmv_recv, &timing_spmv_recv_into_buf, &timing_spmv_recv_forward);
+    // stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute, &timing_spmv_send, &timing_spmv_recv, &timing_spmv_recv_into_buf, &timing_spmv_recv_forward);
+    stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute);
 }
 
 // Jacobi smoothing: u = u + JACOBI_COEFF * (f - Au)
@@ -563,7 +564,8 @@ fn f_interpolation_add() void {
 // Broadcast the coarse solution to all fine points in the window.
 // Pass current_level and timing buffers for micro-benchmark (reduce_mod saves to locals, used by tasks).
 fn f_bcast_from_top_left() void {
-    reduce_mod.broadcast_from_top_left(n, &u, current_level, &timing_bcast_configure, &timing_bcast_to_all, &timing_bcast_state_entry);
+    // reduce_mod.broadcast_from_top_left(n, &u, current_level, &timing_bcast_configure, &timing_bcast_to_all, &timing_bcast_state_entry);
+    reduce_mod.broadcast_from_top_left(n, &u);
 }
 
 // Setup the hops based spmv and restriction parameters.
