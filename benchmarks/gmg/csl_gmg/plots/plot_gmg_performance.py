@@ -537,8 +537,9 @@ def plot_spmv_internal(spmv_per_level_data: List[Dict], output_file: str = 'spmv
 def plot_interpolation_internal(interp_per_level_data: List[Dict], output_file: str = 'interpolation_internal.png'):
     """
     Plot Interpolation Micro-Benchmark table per level for 3 problem sizes (128³, 256³, 512³).
-    One subplot per problem size; each subplot shows level vs time (µs) for T1, T2, T2.0, T2.1,
-    T2.2, T3 (solid) and interp_total (dotted). Y-axis in log scale. All 3 in a single PNG.
+    One subplot per problem size. Each subplot shows level vs time (µs) for T1, T2.1,
+    T2.2, T3 (solid) and interpolation_total (dotted; data from bcast_total), skipping T2.0 (state_machine).
+    Y-axis in log scale. All 3 in a single PNG.
     """
     if not HAS_MATPLOTLIB or not interp_per_level_data:
         return None
@@ -554,26 +555,27 @@ def plot_interpolation_internal(interp_per_level_data: List[Dict], output_file: 
         ax = axes.flat[idx]
         grid_size = block['grid_size']
         levels_data = sorted(block['levels'], key=lambda x: x['level'])
-        levels = [r['level'] for r in levels_data]
-        # Skip level rows where all components are 0 (e.g. bottom level) for cleaner plot
+        # Only use expand_z_T1, reset_routes_T21, send_data_T22, interp_add_T3, bcast_T2 (labeled as interpolation_total)
         def has_positive(row):
-            return (row['expand_z_T1'] or row['bcast_T2'] or row['state_machine_T20'] or
-                    row['reset_routes_T21'] or row['send_data_T22'] or row['interp_add_T3'] or row['interp_total']) > 0
+            return (
+                row['expand_z_T1'] or
+                row['reset_routes_T21'] or
+                row['send_data_T22'] or
+                row['interp_add_T3'] or
+                row['bcast_T2']
+            ) > 0
         plot_data = [r for r in levels_data if has_positive(r)]
         if not plot_data:
             plot_data = levels_data
         levels = [r['level'] for r in plot_data]
-        # For log scale, avoid 0 (use small epsilon so line is visible)
         eps = 1e-3
         def _y(v):
             return v if v > 0 else eps
         ax.plot(levels, [_y(r['expand_z_T1']) for r in plot_data], 'o-', label='expand_z (T1)', linewidth=1.5, markersize=4)
-        ax.plot(levels, [_y(r['bcast_T2']) for r in plot_data], 's-', label='bcast_total (T2)', linewidth=1.5, markersize=4)
-        ax.plot(levels, [_y(r['state_machine_T20']) for r in plot_data], 'v-', label='state_machine (T2.0)', linewidth=1.5, markersize=4)
         ax.plot(levels, [_y(r['reset_routes_T21']) for r in plot_data], '^-', label='reset_routes (T2.1)', linewidth=1.5, markersize=4)
         ax.plot(levels, [_y(r['send_data_T22']) for r in plot_data], 'd-', label='send_data (T2.2)', linewidth=1.5, markersize=4)
         ax.plot(levels, [_y(r['interp_add_T3']) for r in plot_data], 'p-', label='interp_add (T3)', linewidth=1.5, markersize=4)
-        ax.plot(levels, [_y(r['interp_total']) for r in plot_data], '*-', label='interp_total', linewidth=2, markersize=5, linestyle='--')
+        ax.plot(levels, [_y(r['bcast_T2']) for r in plot_data], '*-', label='interpolation_total', linewidth=2, markersize=5, linestyle='--')
         dim = grid_size.split('x')[0]
         ax.set_title(f'Grid {dim}³', fontsize=12, fontweight='bold')
         ax.set_xlabel('Level', fontsize=10)
@@ -583,7 +585,7 @@ def plot_interpolation_internal(interp_per_level_data: List[Dict], output_file: 
         ax.legend(loc='best', framealpha=0.9, fontsize=7)
         ax.grid(True, which='major', linestyle='-', alpha=0.2)
         ax.grid(True, which='minor', linestyle=':', alpha=0.15)
-    fig.suptitle('Interpolation Micro-Benchmark per Level (T1, T2, T2.0, T2.1, T2.2, T3, interp_total)', fontsize=14, fontweight='bold', y=1.02)
+    fig.suptitle('Interpolation Micro-Benchmark per Level(config: 6/6/6)', fontsize=14, fontweight='bold', y=1.02)
     plt.tight_layout()
     plt.savefig(output_file, dpi=150, bbox_inches='tight')
     print(f"Saved: {output_file}")
@@ -836,13 +838,13 @@ def print_interpolation_per_level_tables(interp_per_level_data: List[Dict]):
         print(f"\n{'='*120}")
         print(f"Interpolation Micro-Benchmark per Level: Grid {grid_size}")
         print(f"{'='*120}")
-        print(f"{'Level':<6} {'Sub':<6} {'expand_z(T1)':<14} {'bcast(T2)':<12} {'state_m(T2.0)':<14} {'reset(T2.1)':<12} {'send(T2.2)':<12} {'interp(T3)':<12} {'interp_total':<12}")
+        print(f"{'Level':<6} {'Sub':<6} {'expand_z(T1)':<14} {'interpolation_total_time':<22} {'state_m(T2.0)':<14} {'reset(T2.1)':<12} {'send(T2.2)':<12} {'interp(T3)':<12}")
         print("-"*120)
         for r in levels_data:
             level = r['level']
             subdomain = grid_dim // (2 ** level)
-            print(f"{level:<6} {subdomain}³{'':<3} {r['expand_z_T1']:<14.2f} {r['bcast_T2']:<12.2f} {r['state_machine_T20']:<14.2f} "
-                  f"{r['reset_routes_T21']:<12.2f} {r['send_data_T22']:<12.2f} {r['interp_add_T3']:<12.2f} {r['interp_total']:<12.2f}")
+            print(f"{level:<6} {subdomain}³{'':<3} {r['expand_z_T1']:<14.2f} {r['bcast_T2']:<22.2f} {r['state_machine_T20']:<14.2f} "
+                  f"{r['reset_routes_T21']:<12.2f} {r['send_data_T22']:<12.2f} {r['interp_add_T3']:<12.2f}")
         print(f"{'='*120}\n")
 
 
