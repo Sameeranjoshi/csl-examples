@@ -13,8 +13,19 @@ try:
     import matplotlib.pyplot as plt
     import numpy as np
     HAS_MATPLOTLIB = True
+    # Publication-quality defaults for paper figures (readable when scaled)
+    plt.rcParams.update({
+        'font.size': 12,
+        'axes.labelsize': 14,
+        'axes.titlesize': 16,
+        'legend.fontsize': 12,
+        'xtick.labelsize': 12,
+        'ytick.labelsize': 12,
+    })
+    PAPER_DPI = 300
 except ImportError:
     HAS_MATPLOTLIB = False
+    PAPER_DPI = 150
     print("Warning: matplotlib/numpy not found. Install with: pip install matplotlib numpy")
 
 
@@ -429,16 +440,16 @@ def plot_comm_vs_compute(data: List[Dict], output_file: str = 'comm_vs_compute_t
     x_pos = np.arange(len(grid_sizes))
     
     # Create figure with two subplots: ratio plot and normalized stacked bars
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 12))
     
     # Top plot: Communication/Compute Ratio
     bars = ax1.bar(x_pos, ratios, color='#D62728', alpha=0.8, edgecolor='black', linewidth=1.5)
-    ax1.set_xlabel('Grid Size (Subdomain Dimension)', fontsize=12)
-    ax1.set_ylabel('Communication / Compute Ratio', fontsize=12)
+    ax1.set_xlabel('Grid Size (Subdomain Dimension)', fontsize=16)
+    ax1.set_ylabel('Communication / Compute Ratio', fontsize=16)
     ax1.set_title('Laplacian Communication Overhead Relative to Compute (Comm/Compute Ratio)', 
-                  fontsize=14, fontweight='bold')
+                  fontsize=18, fontweight='bold')
     ax1.set_xticks(x_pos)
-    ax1.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=10)
+    ax1.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=14)
     # ax1.grid(axis='y', alpha=0.3, linestyle='--', which='both')
     ax1.grid(False)
     ax1.axhline(y=1, color='gray', linestyle='--', linewidth=1, alpha=0.5, label='1:1 ratio')
@@ -447,9 +458,10 @@ def plot_comm_vs_compute(data: List[Dict], output_file: str = 'comm_vs_compute_t
     for i, (bar, ratio) in enumerate(zip(bars, ratios)):
         height = bar.get_height()
         ax1.text(bar.get_x() + bar.get_width()/2., height,
-                f'{ratio:.1f}x', ha='center', va='bottom', fontsize=10, fontweight='bold')
+                f'{ratio:.1f}x', ha='center', va='bottom', fontsize=13, fontweight='bold')
     
-    ax1.legend(fontsize=10)
+    ax1.legend(fontsize=13)
+    ax1.tick_params(axis='both', labelsize=13)
     
     # Bottom plot: Normalized stacked bars (each bar normalized to 100%)
     # This shows the relative proportion without absolute time differences
@@ -473,25 +485,26 @@ def plot_comm_vs_compute(data: List[Dict], output_file: str = 'comm_vs_compute_t
         # Label communication percentage in the middle of its segment
         if comm_pct > 5:  # Only label if segment is large enough
             ax2.text(i, comm_pct / 2, f'{comm_pct:.0f}%', ha='center', va='center',
-                    fontsize=9, fontweight='bold', color='white')
+                    fontsize=12, fontweight='bold', color='white')
         # Label compute percentage at the top of the bar (100% line) - like the sample image
         if comp_pct > 0:
             ax2.text(i, 100, f'{int(comp_pct)}%', ha='center', va='bottom',
-                    fontsize=10, fontweight='bold', color='black')
+                    fontsize=13, fontweight='bold', color='black')
     
-    ax2.set_xlabel('Grid Size (Subdomain Dimension)', fontsize=12)
-    ax2.set_ylabel('Relative Proportion (%)', fontsize=12)
+    ax2.set_xlabel('Grid Size (Subdomain Dimension)', fontsize=16)
+    ax2.set_ylabel('Relative Proportion (%)', fontsize=16)
     ax2.set_title('Laplacian Normalized Time Distribution', 
-                  fontsize=14, fontweight='bold')
+                  fontsize=18, fontweight='bold')
     ax2.set_xticks(x_pos)
-    ax2.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=10)
+    ax2.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=14)
     ax2.set_ylim(0, 130)  # Add extra space at top for labels
-    ax2.legend(loc='upper right', framealpha=0.9, fontsize=11)
+    ax2.legend(loc='upper right', framealpha=0.9, fontsize=13)
+    ax2.tick_params(axis='both', labelsize=13)
     # ax2.grid(axis='y', alpha=0.3, linestyle='--')
     ax2.grid(False)
     
     plt.tight_layout()
-    plt.savefig(output_file, dpi=150, bbox_inches='tight')
+    plt.savefig(output_file, dpi=PAPER_DPI, bbox_inches='tight')
     print(f"Saved: {output_file}")
     return fig
 
@@ -510,26 +523,27 @@ def plot_spmv_internal(spmv_per_level_data: List[Dict], output_file: str = 'spmv
     if not spmv_per_level_data:
         return None
     n_plots = len(spmv_per_level_data)
-    fig, axes = plt.subplots(1, n_plots, figsize=(6 * n_plots, 5))
+    fig, axes = plt.subplots(1, n_plots, figsize=(7 * n_plots, 6))
     axes = np.atleast_1d(axes)
     for idx, block in enumerate(spmv_per_level_data):
         ax = axes.flat[idx]
         grid_size = block['grid_size']
         levels_data = sorted(block['levels'], key=lambda x: x['level'])
         levels = [r['level'] for r in levels_data]
-        ax.plot(levels, [r['comm_time_us'] for r in levels_data], 'o-', label='Communication Time', linewidth=1.5, markersize=4)
-        ax.plot(levels, [r['compute_time_us'] for r in levels_data], 's-', label='Compute Time', linewidth=1.5, markersize=4)
-        ax.plot(levels, [r['total_spmv_us'] for r in levels_data], '^--', label='Total SpMV Time', linewidth=2, markersize=5)
+        ax.plot(levels, [r['comm_time_us'] for r in levels_data], 'o-', label='Communication Time', linewidth=2, markersize=6)
+        ax.plot(levels, [r['compute_time_us'] for r in levels_data], 's-', label='Compute Time', linewidth=2, markersize=6)
+        ax.plot(levels, [r['total_spmv_us'] for r in levels_data], '^--', label='Total SpMV Time', linewidth=2.5, markersize=7)
         dim = grid_size.split('x')[0]
-        ax.set_title(f'Grid {dim}³', fontsize=12, fontweight='bold')
-        ax.set_xlabel('Level', fontsize=10)
-        ax.set_ylabel('Time (µs)', fontsize=10)
+        ax.set_title(f'Grid {dim}³', fontsize=16, fontweight='bold')
+        ax.set_xlabel('Level', fontsize=14)
+        ax.set_ylabel('Time (µs)', fontsize=14)
         ax.set_xticks(levels)
-        ax.legend(loc='best', framealpha=0.9, fontsize=9)
+        ax.legend(loc='best', framealpha=0.9, fontsize=12)
+        ax.tick_params(axis='both', labelsize=12)
         ax.grid(True, which='major', linestyle='-', alpha=0.2)
-    fig.suptitle('7-pt Stencil: Communication vs Compute vs Total Time (config: 6/6/6)', fontsize=14, fontweight='bold', y=1.02)
+    fig.suptitle('7-pt Stencil: Communication vs Compute vs Total Time (config: 6/6/6)', fontsize=18, fontweight='bold', y=1.02)
     plt.tight_layout()
-    plt.savefig(output_file, dpi=150, bbox_inches='tight')
+    plt.savefig(output_file, dpi=PAPER_DPI, bbox_inches='tight')
     print(f"Saved: {output_file}")
     return fig
 
@@ -549,7 +563,7 @@ def plot_interpolation_internal(interp_per_level_data: List[Dict], output_file: 
     if not interp_per_level_data:
         return None
     n_plots = len(interp_per_level_data)
-    fig, axes = plt.subplots(1, n_plots, figsize=(6 * n_plots, 5))
+    fig, axes = plt.subplots(1, n_plots, figsize=(7 * n_plots, 6))
     axes = np.atleast_1d(axes)  # shape (3,) or (1,) so axes.flat[i] is the i-th Axes
     for idx, block in enumerate(interp_per_level_data):
         ax = axes.flat[idx]
@@ -571,23 +585,24 @@ def plot_interpolation_internal(interp_per_level_data: List[Dict], output_file: 
         eps = 1e-3
         def _y(v):
             return v if v > 0 else eps
-        ax.plot(levels, [_y(r['expand_z_T1']) for r in plot_data], 'o-', label='expand_z (T1)', linewidth=1.5, markersize=4)
-        ax.plot(levels, [_y(r['reset_routes_T21']) for r in plot_data], '^-', label='reset_routes (T2.1)', linewidth=1.5, markersize=4)
-        ax.plot(levels, [_y(r['send_data_T22']) for r in plot_data], 'd-', label='send_data (T2.2)', linewidth=1.5, markersize=4)
-        ax.plot(levels, [_y(r['interp_add_T3']) for r in plot_data], 'p-', label='interp_add (T3)', linewidth=1.5, markersize=4)
-        ax.plot(levels, [_y(r['bcast_T2']) for r in plot_data], '*-', label='interpolation_total', linewidth=2, markersize=5, linestyle='--')
+        ax.plot(levels, [_y(r['expand_z_T1']) for r in plot_data], 'o-', label='expand_z (T1)', linewidth=2, markersize=6)
+        ax.plot(levels, [_y(r['reset_routes_T21']) for r in plot_data], '^-', label='reset_routes (T2.1)', linewidth=2, markersize=6)
+        ax.plot(levels, [_y(r['send_data_T22']) for r in plot_data], 'd-', label='send_data (T2.2)', linewidth=2, markersize=6)
+        ax.plot(levels, [_y(r['interp_add_T3']) for r in plot_data], 'p-', label='interp_add (T3)', linewidth=2, markersize=6)
+        ax.plot(levels, [_y(r['bcast_T2']) for r in plot_data], '*-', label='interpolation_total', linewidth=2.5, markersize=7, linestyle='--')
         dim = grid_size.split('x')[0]
-        ax.set_title(f'Grid {dim}³', fontsize=12, fontweight='bold')
-        ax.set_xlabel('Level', fontsize=10)
-        ax.set_ylabel('Time (µs, log)', fontsize=10)
+        ax.set_title(f'Grid {dim}³', fontsize=16, fontweight='bold')
+        ax.set_xlabel('Level', fontsize=14)
+        ax.set_ylabel('Time (µs, log)', fontsize=14)
         ax.set_yscale('log')
         ax.set_xticks(levels)
-        ax.legend(loc='best', framealpha=0.9, fontsize=7)
+        ax.legend(loc='best', framealpha=0.9, fontsize=11)
+        ax.tick_params(axis='both', labelsize=12)
         ax.grid(True, which='major', linestyle='-', alpha=0.2)
         ax.grid(True, which='minor', linestyle=':', alpha=0.15)
-    fig.suptitle('Interpolation Micro-Benchmark per Level(config: 6/6/6)', fontsize=14, fontweight='bold', y=1.02)
+    fig.suptitle('Interpolation Micro-Benchmark per Level(config: 6/6/6)', fontsize=18, fontweight='bold', y=1.02)
     plt.tight_layout()
-    plt.savefig(output_file, dpi=150, bbox_inches='tight')
+    plt.savefig(output_file, dpi=PAPER_DPI, bbox_inches='tight')
     print(f"Saved: {output_file}")
     return fig
 
@@ -674,7 +689,6 @@ def plot_per_operation_timing(timing_data: Dict, output_file: str = None):
     residual = [d['residual'] for d in levels_data]
     restriction = [d['restriction'] for d in levels_data]
     interpolation = [d['interpolation'] for d in levels_data]
-    setup_init = [d['setup_init'] for d in levels_data]
     
     # Find last non-zero index for residual, restriction, and interpolation
     # (they have 0 at the last level, we don't want to plot those)
@@ -690,34 +704,33 @@ def plot_per_operation_timing(timing_data: Dict, output_file: str = None):
     interpolation_end = find_last_nonzero_index(interpolation)
     
     # Create figure
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(12, 7))
     
     # Plot each operator - truncate residual, restriction, interpolation at last non-zero
     # Add markers to show exact data points
-    ax.plot(levels, smooth, 'o-', label='smooth', linewidth=2, markersize=6)
-    ax.plot(levels, setup_init, 's-', label='setup_init', linewidth=2, markersize=6)
-    
+    ax.plot(levels, smooth, 'o-', label='smooth', linewidth=2.5, markersize=8)
     if residual_end >= 0:
-        ax.plot(levels[:residual_end+1], residual[:residual_end+1], '^-', label='residual', linewidth=2, markersize=6)
+        ax.plot(levels[:residual_end+1], residual[:residual_end+1], '^-', label='residual', linewidth=2.5, markersize=8)
     if restriction_end >= 0:
-        ax.plot(levels[:restriction_end+1], restriction[:restriction_end+1], 'v-', label='restriction', linewidth=2, markersize=6)
+        ax.plot(levels[:restriction_end+1], restriction[:restriction_end+1], 'v-', label='restriction', linewidth=2.5, markersize=8)
     if interpolation_end >= 0:
-        ax.plot(levels[:interpolation_end+1], interpolation[:interpolation_end+1], 'd-', label='interpolation', linewidth=2, markersize=6)
+        ax.plot(levels[:interpolation_end+1], interpolation[:interpolation_end+1], 'd-', label='interpolation', linewidth=2.5, markersize=8)
     
     # Simple labels
-    ax.set_xlabel('Level', fontsize=12)
-    ax.set_ylabel('Time (µs, log scale)', fontsize=12)
-    ax.set_title(f'Timing Breakdown per Level - Grid: {grid_size}', fontsize=14, fontweight='bold')
+    ax.set_xlabel('Level', fontsize=14)
+    ax.set_ylabel('Time (µs, log scale)', fontsize=14)
+    ax.set_title(f'Timing Breakdown per Level - Grid: {grid_size}', fontsize=18, fontweight='bold')
     ax.set_yscale('log')  # Log scale to handle wide range of values
     ax.set_xticks(levels)  # Set x-axis ticks to integer levels only
-    ax.legend(loc='best', framealpha=0.9, fontsize=10)
+    ax.legend(loc='best', framealpha=0.9, fontsize=13)
+    ax.tick_params(axis='both', labelsize=12)
     ax.grid(True, which='major', linestyle='-', alpha=0.15)
     ax.grid(False, which='minor')
     
     plt.tight_layout()
     
     if output_file:
-        plt.savefig(output_file, dpi=150, bbox_inches='tight')
+        plt.savefig(output_file, dpi=PAPER_DPI, bbox_inches='tight')
         print(f"Saved: {output_file}")
     
     return fig
@@ -997,7 +1010,7 @@ def main():
     # Step 7: Generate plots if matplotlib is available
     if HAS_MATPLOTLIB:
         print("\nGenerating plots...")
-        plot_comm_vs_compute(data, 'comm_vs_compute_time.png')
+        # plot_comm_vs_compute(data, 'comm_vs_compute_time.png')
         if spmv_per_level:
             plot_spmv_internal(spmv_per_level, 'spmv_internal.png')
         if interp_per_level:

@@ -8,6 +8,13 @@ def parse_summary_table(file_path):
     with open(file_path, 'r') as f:
         content = f.read()
 
+    # Restrict to Performance Data Summary section (from plot_gmg_performance output)
+    if 'Performance Data Summary' in content:
+        section = content.split('Performance Data Summary', 1)[-1]
+        if 'Per-Operation Timing' in section:
+            section = section.split('Per-Operation Timing', 1)[0]
+        content = section
+
     # Regex to capture the summary table rows accurately
     pattern = re.compile(
         r"(\d+x\d+x\d+)\s+[\d,]+\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+\d+\s+([\d.]+)\s+[\d.e+-]+\s+\w+\s+([\d.]+|N/A)\s+([\d.]+)"
@@ -30,6 +37,23 @@ def parse_summary_table(file_path):
 def generate_plots(opt_file, unopt_file):
     df_opt = parse_summary_table(opt_file)
     df_unopt = parse_summary_table(unopt_file)
+
+    if df_opt.empty or 'Size' not in df_opt.columns:
+        raise ValueError(
+            "Could not parse Performance Data Summary from input files. "
+            "Ensure inputs are plot_gmg_performance output (e.g. out_3_3_6.txt) "
+            "containing the 'Performance Data Summary' table."
+        )
+    if df_unopt.empty or 'Size' not in df_unopt.columns:
+        raise ValueError("Could not parse unoptimized file. Check it contains the Performance Data Summary table.")
+
+    # Filter to 16³ to 512³ problem sizes only
+    def keep_size(s):
+        dim = int(s.split('x')[0])
+        return 16 <= dim <= 512
+    mask = df_opt['Size'].apply(keep_size)
+    df_opt = df_opt[mask].reset_index(drop=True)
+    df_unopt = df_unopt[mask].reset_index(drop=True)
     
     # Calculate speedup for the speedup scaling plot
     speedup = df_unopt['AvgVcycle'] / df_opt['AvgVcycle']
@@ -53,7 +77,10 @@ def generate_plots(opt_file, unopt_file):
             # Use same color scheme as bar charts (light blue for optimized performance)
             axes[i].plot(x, speedup, marker='o', linewidth=2.5, color='#66b3ff', label='Speedup Factor', alpha=0.8)
             axes[i].axhline(y=1, color='gray', linestyle='--', alpha=0.6, label='Baseline (1.0x)')
-            axes[i].legend(loc='upper left')
+            if col == "CompileTime":
+                axes[i].legend(loc='top center', bbox_to_anchor=(0, 1))
+            else:
+                axes[i].legend(loc='upper left', bbox_to_anchor=(0, 1))
             
             
             # Add speedup factor labels on each point
@@ -68,7 +95,7 @@ def generate_plots(opt_file, unopt_file):
             # Adjust y-axis limits to accommodate labels
             y_min, y_max = axes[i].get_ylim()
             axes[i].set_ylim(y_min, y_max * 1.12)
-            axes[i].set_xlabel('Grid Size ($N^3$)', fontsize=11)
+            # axes[i].set_xlabel('Grid Size ($N^3$)', fontsize=11)
             axes[i].set_ylabel('Speedup Factor', fontsize=11)
             axes[i].grid(True, linestyle=':', alpha=0.7)
         else:
@@ -97,7 +124,7 @@ def generate_plots(opt_file, unopt_file):
         axes[i].set_title(title, fontsize=13, fontweight='bold')
         if plot_type != 'speedup':
             axes[i].set_yscale(scale)
-        axes[i].legend()
+        axes[i].legend(loc="upper left")
         if plot_type != 'speedup':
             axes[i].grid(axis='y', linestyle='--', alpha=0.5)
 
