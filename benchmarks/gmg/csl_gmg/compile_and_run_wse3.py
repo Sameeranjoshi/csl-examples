@@ -4,16 +4,28 @@ Simple port of commands_vcycle_wse3.sh with flag support
 Supports multiple problem sizes with artifact caching
 """
 
+import argparse
 import json
 import os
+import re
+import subprocess
+import sys
+import tarfile
 import time
-from cerebras.sdk.client import SdkCompiler
-from cerebras.sdk.client import SdkLauncher
 import glob
 import shutil
 import logging
-import argparse
-from cerebras.appliance import logger
+
+# Cerebras SDK imports - only needed for compile/run, not for --check-memory
+try:
+    from cerebras.sdk.client import SdkCompiler
+    from cerebras.sdk.client import SdkLauncher
+    from cerebras.appliance import logger
+    HAS_CEREBRAS = True
+except ImportError:
+    HAS_CEREBRAS = False
+    SdkCompiler = SdkLauncher = None
+    logger = None
 # logging.basicConfig(level=logging.INFO)
 
 # Cache file for storing artifact paths
@@ -76,6 +88,126 @@ def add_artifact_to_cache(out_path, artifact_path):
     if artifact_path not in cache[out_path]:
         cache[out_path].append(artifact_path)
     save_artifact_cache(cache)
+
+
+def run_check_memory_for_outputs(script_dir=None):
+    """
+    For each output folder (out_dir_*), find .tar.gz files, extract them, run
+    ./check_memory_usage.sh <extracted_dir>/<artifact_name>, and append output to response.txt.
+    """
+    if script_dir is None:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+    orig_cwd = os.getcwd()
+    check_script = os.path.join(script_dir, "check_memory_usage.sh")
+    if not os.path.exists(check_script):
+        print(f"Warning: {check_script} not found, skipping memory checks")
+        return
+
+    try:
+        os.chdir(script_dir)
+    except OSError as e:
+        print(f"Warning: could not chdir to {script_dir}: {e}")
+        return
+
+    try:
+        out_dirs = sorted(glob.glob("out_dir_*"))
+        if not out_dirs:
+            print("No out_dir_* folders found for memory check")
+            return
+
+        for out_path in out_dirs:
+            if not os.path.isdir(out_path):
+                continue
+            # Parse size from out_path: out_dir_S4x_L2_... -> 4
+            size_match = re.search(r"out_dir_S(\d+)x_", out_path)
+            size = int(size_match.group(1)) if size_match else None
+            artifact_name = f"out_vcycle{size}" if size is not None else "out_vcycle"
+
+            tar_files = glob.glob(os.path.join(out_path, "*.tar.gz"))
+            if not tar_files:
+                print(f"  {out_path}: no .tar.gz found, skip")
+                continue
+
+            response_file = os.path.join(out_path, "response.txt")
+            for tar_path in tar_files:
+                tar_basename = os.path.basename(tar_path)
+                extract_base = os.path.splitext(os.path.splitext(tar_basename)[0])[0]
+                extract_dir = None
+                if os.path.exists(os.path.join(out_path, extract_base)):
+                    extract_dir = os.path.join(out_path, extract_base)
+                    print(f"  {out_path}: already extracted {extract_base}, reusing")
+                else:
+                    try:
+                        with tarfile.open(tar_path, "r:gz") as tf:
+                            tf.extractall(out_path)
+                            names = tf.getnames()
+                        # Determine extracted top-level dir (tar may create one)
+                        top_dirs = {n.split("/")[0] for n in names if "/" in n} | {n for n in names if not os.path.dirname(n)}
+                        if len(top_dirs) == 1 and "/" not in list(top_dirs)[0]:
+                            extract_dir = os.path.join(out_path, list(top_dirs)[0])
+                        else:
+                            extract_dir = out_path
+                    except Exception as e:
+                        print(f"  {out_path}: failed to extract {tar_path}: {e}")
+                        continue
+
+                # Find the dir that has bin/ with .elf files (elf_dir for check_memory_usage.sh)
+                elf_dir_candidates = [
+                    extract_dir,
+                    os.path.join(extract_dir, artifact_name),
+                ]
+                elf_dir = None
+                for cand in elf_dir_candidates:
+                    bin_dir = os.path.join(cand, "bin")
+                    if os.path.isdir(bin_dir) and glob.glob(os.path.join(bin_dir, "*.elf")):
+                        elf_dir = cand
+                        break
+                if elf_dir is None:
+                    # Search recursively for bin/ with .elf
+                    for root, dirs, _ in os.walk(extract_dir):
+                        if "bin" in dirs:
+                            b = os.path.join(root, "bin")
+                            if glob.glob(os.path.join(b, "*.elf")):
+                                elf_dir = root
+                                break
+                        if elf_dir:
+                            break
+                if elf_dir is None:
+                    print(f"  {out_path}: no bin/*.elf found in extracted contents, skip")
+                    continue
+
+                print(f"  {out_path}: running check_memory_usage.sh {elf_dir}")
+                try:
+                    result = subprocess.run(
+                        [check_script, elf_dir],
+                        capture_output=True,
+                        text=True,
+                        cwd=script_dir,
+                        timeout=60,
+                    )
+                    output = result.stdout or ""
+                    if result.stderr:
+                        output += f"\n{result.stderr}"
+                    if result.returncode != 0:
+                        output += f"\n(script exited with code {result.returncode})"
+                except subprocess.TimeoutExpired:
+                    output = "\n(check_memory_usage.sh timed out)\n"
+                except Exception as e:
+                    output = f"\n(check_memory_usage.sh failed: {e})\n"
+
+                with open(response_file, "a") as f:
+                    f.write(f"\n{'='*70}\n")
+                    f.write("Memory usage check:\n")
+                    f.write(f"{'='*70}\n")
+                    f.write(output)
+                    f.write("\n")
+                print(f"  {out_path}: appended memory check to response.txt")
+    finally:
+        try:
+            os.chdir(orig_cwd)
+        except OSError:
+            pass
+
 
 def write_run_info(out_path, size, levels, channels, max_ite, pre_iter, post_iter, bottom_iter, Compile_command, Run_command):
     """
@@ -214,13 +346,12 @@ def process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, 
 
 
 import argparse
-# from gmg import SimpleGMG
-from python_gmg.gmgoscar import SimpleGMG as SimpleGMGOSCAR
 import time
 
 
 def process_on_host(size, num_levels, verbose, max_iterations, abs_tolerance, pre_iter, post_iter, bottom_iter):
     """Benchmark a single problem size"""
+    from python_gmg.gmgoscar import SimpleGMG as SimpleGMGOSCAR
     print(f"\nProcessing on host {size}x{size}x{size} grid with {num_levels} levels...")
     solver = SimpleGMGOSCAR(size, size, size, num_levels, verbose, abs_tolerance, pre_iter, post_iter, bottom_iter)
     start_time = time.time()
@@ -230,11 +361,13 @@ def process_on_host(size, num_levels, verbose, max_iterations, abs_tolerance, pr
     return rho_max, iterations, total_time, reltol
 
 def main():
-    # add a cmd line option called --only-host, --only-device, --host-and-device
+    # add a cmd line option called --only-host, --only-device, --host-and-device, --check-memory
     parser = argparse.ArgumentParser(description='Geometric Multigrid Solver')
     parser.add_argument('--only-host', action='store_true', default=False, help='Process on host')
     parser.add_argument('--only-device', action='store_true', default=False, help='Process on device')
     parser.add_argument('--host-and-device', action='store_true', default=False, help='Process on host and device')
+    parser.add_argument('--check-memory', action='store_true', default=False,
+                        help='Post-process: for each out_dir_*, extract .tar.gz, run check_memory_usage.sh, append to response.txt')
     args = parser.parse_args()
 
     # Require at least one of the options, otherwise print help and exit
@@ -269,12 +402,12 @@ def main():
         # 
 
         # 6/6/6
-        #  (4, 2, 100, 1e-5, 6, 6, 6),   # Tiny problem
+         (4, 2, 100, 1e-5, 6, 6, 6),   # Tiny problem
         #  (8, 3, 100, 1e-5, 6, 6, 6),   # Tiny problem
         #  (16, 4, 100, 1e-5, 6, 6, 6),   # Small problem
         #  (32, 5, 1, 1e-5, 6, 6, 6),   # Small problem
         #  (64, 6, 1, 1e-5, 6, 6, 6),   # Medium problem
-         (128, 7, 100, 1e-5, 6, 6, 6),   # Large problem
+        #  (128, 7, 100, 1e-5, 6, 6, 6),   # Large problem
         #  (256, 8, 100, 1e-5, 6, 6, 6),   # Very large
         #  (512, 9, 100, 1e-5, 6, 6, 6),   # Very large        
 
@@ -342,7 +475,7 @@ def main():
                 process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter)
             except Exception as e:
                 print(f"Failed for size={size}, levels={levels}: {e}")
-
+            run_check_memory_for_outputs()
 
 if __name__ == "__main__":
     main()

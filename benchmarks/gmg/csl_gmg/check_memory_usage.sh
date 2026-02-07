@@ -8,7 +8,7 @@
 ELF_DIR=${1:-"out_vcycle"}
 TILE_X=${2:-"0"}
 TILE_Y=${3:-"0"}
-SUMMARY=${4:-"false"}
+SUMMARY=${4:-"true"}
 if [ "$SUMMARY" = "true" ]; then
     echo "Summary mode enabled"
     SUMMARY_MODE="--summary"
