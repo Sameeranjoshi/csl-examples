@@ -15,22 +15,47 @@ def parse_summary_table(file_path):
             section = section.split('Per-Operation Timing', 1)[0]
         content = section
 
-    # Regex to capture the summary table rows accurately
-    pattern = re.compile(
+    # Regex: full (with Code/Data) and short (without)
+    pattern_full = re.compile(
+        r"(\d+x\d+x\d+)\s+[\d,]+\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+\d+\s+([\d.]+)\s+[\d.e+-]+\s+\w+\s+([\d.]+|N/A)\s+([\d.]+)\s+([\d,]+|N/A)\s+([\d,]+|N/A)"
+    )
+    pattern_short = re.compile(
         r"(\d+x\d+x\d+)\s+[\d,]+\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+\d+\s+([\d.]+)\s+[\d.e+-]+\s+\w+\s+([\d.]+|N/A)\s+([\d.]+)"
     )
-    
-    matches = pattern.findall(content)
+
+    def parse_bytes(s):
+        s = str(s).strip()
+        if not s or s == 'N/A':
+            return None
+        return int(s.replace(',', ''))
+
     data = []
-    for m in matches:
-        data.append({
-            'Size': m[0],
-            'CommTime': float(m[1]),
-            'ComputeTime': float(m[2]),
-            'VcycleTotal': float(m[3]),
-            'AvgVcycle': float(m[4]),
-            'CompileTime': 0.0 if m[5] == 'N/A' else float(m[5])
-        })
+    for line in content.splitlines():
+        m = pattern_full.search(line)
+        if m:
+            data.append({
+                'Size': m.group(1),
+                'CommTime': float(m.group(2)),
+                'ComputeTime': float(m.group(3)),
+                'VcycleTotal': float(m.group(4)),
+                'AvgVcycle': float(m.group(5)),
+                'CompileTime': 0.0 if m.group(6) == 'N/A' else float(m.group(6)),
+                'Code_bytes': parse_bytes(m.group(8)),
+                'Data_bytes': parse_bytes(m.group(9)),
+            })
+        else:
+            m = pattern_short.search(line)
+            if m:
+                data.append({
+                    'Size': m.group(1),
+                    'CommTime': float(m.group(2)),
+                    'ComputeTime': float(m.group(3)),
+                    'VcycleTotal': float(m.group(4)),
+                    'AvgVcycle': float(m.group(5)),
+                    'CompileTime': 0.0 if m.group(6) == 'N/A' else float(m.group(6)),
+                    'Code_bytes': None,
+                    'Data_bytes': None,
+                })
     
     return pd.DataFrame(data)
 
@@ -58,12 +83,17 @@ def generate_plots(opt_file, unopt_file):
     # Calculate speedup for the speedup scaling plot
     speedup = df_unopt['AvgVcycle'] / df_opt['AvgVcycle']
     
+    # Code/Data stacked bar from opt_file only (rows with valid Code and Data)
+    REF_48KB = 49152
+    mask_codedata = df_opt['Code_bytes'].notna() & df_opt['Data_bytes'].notna()
+    df_codedata = df_opt[mask_codedata].reset_index(drop=True)
+
     # --- metrics_comparison.png ---
     metrics = [
         ('CommTime', 'Comm Time (spmv) [us]', 'linear', 'bar'),
         ('ComputeTime', 'Compute Time (spmv) [us]', 'linear', 'bar'),
         ('Speedup', 'V-Cycle Speedup Scaling (Unoptimized / Optimized)', 'linear', 'speedup'),
-        ('CompileTime', 'Compile Time [s]', 'linear', 'bar')
+        ('CodeData', 'Sizeof(ELF file)@PE(0,0) vs Memory per PE (48KB)', 'linear', 'stacked')
     ]
     
     fig, axes = plt.subplots(2, 2, figsize=(16, 10))
@@ -73,60 +103,67 @@ def generate_plots(opt_file, unopt_file):
 
     for i, (col, title, scale, plot_type) in enumerate(metrics):
         if plot_type == 'speedup':
-            # Speedup scaling plot - use numeric x positions like bar charts
-            # Use same color scheme as bar charts (light blue for optimized performance)
+            # Speedup scaling plot
             axes[i].plot(x, speedup, marker='o', linewidth=2.5, color='#66b3ff', label='Speedup Factor', alpha=0.8)
             axes[i].axhline(y=1, color='gray', linestyle='--', alpha=0.6, label='Baseline (1.0x)')
-            if col == "CompileTime":
-                axes[i].legend(loc='top center', bbox_to_anchor=(0, 1))
-            else:
-                axes[i].legend(loc='upper left', bbox_to_anchor=(0, 1))
-            
-            
-            # Add speedup factor labels on each point
+            axes[i].legend(loc='upper left', bbox_to_anchor=(0, 1))
             for j, (size, sp) in enumerate(zip(df_opt['Size'], speedup)):
-                axes[i].annotate(f'{sp:.2f}x', (x[j], sp), textcoords="offset points", 
-                                xytext=(0,10), ha='center', fontsize=10, color='black')
-            
-            # Set x-axis ticks and labels to match other plots
+                axes[i].annotate(f'{sp:.2f}x', (x[j], sp), textcoords="offset points",
+                                xytext=(0, 10), ha='center', fontsize=10, color='black')
             axes[i].set_xticks(x)
             axes[i].set_xticklabels(df_opt['Size'], rotation=30)
-            
-            # Adjust y-axis limits to accommodate labels
             y_min, y_max = axes[i].get_ylim()
             axes[i].set_ylim(y_min, y_max * 1.12)
-            # axes[i].set_xlabel('Grid Size ($N^3$)', fontsize=11)
             axes[i].set_ylabel('Speedup Factor', fontsize=11)
             axes[i].grid(True, linestyle=':', alpha=0.7)
+        elif plot_type == 'stacked':
+            # Code + Data stacked bar from opt_file, 48KB line, % inside bars
+            if df_codedata.empty:
+                axes[i].text(0.5, 0.5, 'No Code/Data', ha='center', va='center', transform=axes[i].transAxes)
+                axes[i].set_xticks([])
+            else:
+                x_cd = np.arange(len(df_codedata['Size']))
+                code = df_codedata['Code_bytes'].values
+                data = df_codedata['Data_bytes'].values
+                axes[i].bar(x_cd, code, width=0.6, label='Code Section', color='#ff9999', alpha=0.9, bottom=0)
+                axes[i].bar(x_cd, data, width=0.6, label='Data Section', color='#66b3ff', alpha=0.9, bottom=code)
+                axes[i].axhline(y=REF_48KB, color='#e74c3c', linestyle='--', linewidth=1.5, alpha=0.8, label='48 KB')
+                # % of 48KB inside each segment
+                for j in range(len(df_codedata)):
+                    code_pct = (code[j] / REF_48KB) * 100
+                    data_pct = (data[j] / REF_48KB) * 100
+                    if code[j] > 800:
+                        axes[i].text(x_cd[j], code[j] / 2, f'{code_pct:.0f}%', ha='center', va='center', fontsize=9, color='#333')
+                    if data[j] > 400:
+                        axes[i].text(x_cd[j], code[j] + data[j] / 2, f'{data_pct:.0f}%', ha='center', va='center', fontsize=9, color='#333')
+                axes[i].set_xticks(x_cd)
+                axes[i].set_xticklabels(df_codedata['Size'], rotation=30)
+                axes[i].set_ylabel('Bytes', fontsize=11)
+                axes[i].set_ylim(0, max(REF_48KB * 1.1, (code + data).max() * 1.1))
+                axes[i].grid(axis='y', linestyle='--', alpha=0.5)
         else:
-            # Use bar chart for other metrics
+            # Bar chart for CommTime, ComputeTime
             bars_unopt = axes[i].bar(x - width/2, df_unopt[col], width, label='Unoptimized', color='#ff9999', alpha=0.8)
             bars_opt = axes[i].bar(x + width/2, df_opt[col], width, label='Optimized', color='#66b3ff', alpha=0.8)
             axes[i].set_xticks(x)
             axes[i].set_xticklabels(df_opt['Size'], rotation=30)
-            
-            # Add speedup factor labels for CommTime and ComputeTime
             if col in ['CommTime', 'ComputeTime']:
                 speedup_factors = df_unopt[col] / df_opt[col]
                 for j, (bar_unopt, bar_opt, sp_factor) in enumerate(zip(bars_unopt, bars_opt, speedup_factors)):
-                    # Find the maximum height of the two bars to position label above
                     max_height = max(bar_unopt.get_height(), bar_opt.get_height())
-                    axes[i].annotate(f'{sp_factor:.2f}x', 
-                                    xy=(x[j], max_height), 
-                                    xytext=(0, 3), 
-                                    textcoords="offset points",
-                                    ha='center', va='bottom', 
-                                    fontsize=10, color='black')
-                # Adjust y-axis limits to accommodate labels
+                    axes[i].annotate(f'{sp_factor:.2f}x', xy=(x[j], max_height), xytext=(0, 3),
+                                    textcoords="offset points", ha='center', va='bottom', fontsize=10, color='black')
                 y_min, y_max = axes[i].get_ylim()
                 axes[i].set_ylim(y_min, y_max * 1.08)
-        
+
         axes[i].set_title(title, fontsize=13, fontweight='bold')
-        if plot_type != 'speedup':
+        if plot_type not in ('speedup', 'stacked'):
             axes[i].set_yscale(scale)
         axes[i].legend(loc="upper left")
-        if plot_type != 'speedup':
+        if plot_type not in ('speedup', 'stacked'):
             axes[i].grid(axis='y', linestyle='--', alpha=0.5)
+        elif plot_type == 'stacked' and not df_codedata.empty:
+            axes[i].legend(loc="upper left")
 
     plt.suptitle('Performance Metric Comparison: Optimized vs. Unoptimized', fontsize=16)
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
