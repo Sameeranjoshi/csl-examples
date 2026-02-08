@@ -90,10 +90,17 @@ def add_artifact_to_cache(out_path, artifact_path):
     save_artifact_cache(cache)
 
 
-def run_check_memory_for_outputs(script_dir=None):
+def get_out_path(size, levels, max_ite, pre_iter, post_iter, bottom_iter, suffix="_unoptimized"):
+    """Return the output directory name used for this problem (must match process_on_device)."""
+    return f"out_dir_S{size}x_L{levels}_M{max_ite}_P{pre_iter}_P{post_iter}_B{bottom_iter}{suffix}"
+
+
+def run_check_memory_for_outputs(script_dir=None, out_paths=None):
     """
-    For each output folder (out_dir_*), find .tar.gz files, extract them, run
-    ./check_memory_usage.sh <extracted_dir>/<artifact_name>, and append output to response.txt.
+    For each output folder in out_paths (or all out_dir_* if out_paths is None), find .tar.gz
+    files, extract them, run ./check_memory_usage.sh on the extracted dir, and append output
+    to response.txt. When running from this script after device jobs, pass the exact list of
+    out_paths that were used so only those folders are processed.
     """
     if script_dir is None:
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -110,10 +117,16 @@ def run_check_memory_for_outputs(script_dir=None):
         return
 
     try:
-        out_dirs = sorted(glob.glob("out_dir_*"))
-        if not out_dirs:
-            print("No out_dir_* folders found for memory check")
-            return
+        if out_paths is not None:
+            out_dirs = [p for p in out_paths if os.path.isdir(p)]
+            if not out_dirs:
+                print("None of the run output folders exist yet for memory check (jobs may still be running)")
+                return
+        else:
+            out_dirs = sorted(glob.glob("out_dir_*"))
+            if not out_dirs:
+                print("No out_dir_* folders found for memory check")
+                return
 
         for out_path in out_dirs:
             if not os.path.isdir(out_path):
@@ -304,7 +317,7 @@ def process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, 
         512: 256, # seems heuristically better when tested with different block sizes
     }
     BSIZE  = bsizemap[size]
-    out_path = f"out_dir_S{size}x_L{levels}_M{max_ite}_P{pre_iter}_P{post_iter}_B{bottom_iter}"
+    out_path = get_out_path(size, levels, max_ite, pre_iter, post_iter, bottom_iter)
     os.makedirs(out_path, exist_ok=True)
 
     INLINE_THRESHOLD = 256    # inline always good for speed, # code segment
@@ -500,8 +513,12 @@ def main():
     
     # Process device runs
     if args.only_device or args.host_and_device:
+        run_out_paths = [
+            get_out_path(size, levels, max_ite, pre_iter, post_iter, bottom_iter)
+            for (size, levels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter) in problems
+        ]
         for size, levels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter in problems:
-            if size > 16: 
+            if size > 16:
                 channels = 16
             else:
                 channels = size
@@ -509,7 +526,7 @@ def main():
                 process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter)
             except Exception as e:
                 print(f"Failed for size={size}, levels={levels}: {e}")
-        run_check_memory_for_outputs()
+        run_check_memory_for_outputs(out_paths=run_out_paths)
 
 if __name__ == "__main__":
     main()

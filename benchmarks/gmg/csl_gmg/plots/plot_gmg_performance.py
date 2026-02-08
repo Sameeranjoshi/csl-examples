@@ -169,6 +169,19 @@ def split_into_run_blocks(text: str) -> List[tuple]:
     return blocks
 
 
+# SPMV table header strings (output format may vary: old "Time per Level" vs new "+ Smoothing (us[cycles]) per Level")
+SPMV_HEADER_OLD = '7-pt Stencil Compute vs Communication Time per Level'
+SPMV_HEADER_NEW = '7-pt Stencil Compute vs Communication + Smoothing (us[cycles]) per Level'
+
+
+def _find_spmv_section(block_text: str):
+    """Return section after SPMV header, or None if not found."""
+    for header in (SPMV_HEADER_NEW, SPMV_HEADER_OLD):
+        if header in block_text:
+            return block_text.split(header, 1)[-1]
+    return None
+
+
 def parse_spmv_totals(text: str) -> List[Dict]:
     """
     Parse SPMV Compute vs Communication Time tables from the output file.
@@ -178,10 +191,9 @@ def parse_spmv_totals(text: str) -> List[Dict]:
     results = []
     blocks = split_into_run_blocks(text)
     for grid_size, block_text in blocks:
-        # Find SPMV table in this block only
-        if '7-pt Stencil Compute vs Communication Time per Level' not in block_text:
+        section = _find_spmv_section(block_text)
+        if section is None:
             continue
-        section = block_text.split('7-pt Stencil Compute vs Communication Time per Level', 1)[-1]
         # Extract total row: | total | TotalSpMV | Comm | Compute | ...
         total_match = re.search(
             r'\|\s*total\s*\|\s*([\d.]+)us.*?\|\s*([\d.]+)us.*?\|\s*([\d.]+)us',
@@ -216,9 +228,9 @@ def parse_spmv_per_level(text: str) -> List[Dict]:
         r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'   # Compute
     )
     for grid_size, block_text in blocks:
-        if '7-pt Stencil Compute vs Communication Time per Level' not in block_text:
+        section = _find_spmv_section(block_text)
+        if section is None:
             continue
-        section = block_text.split('7-pt Stencil Compute vs Communication Time per Level', 1)[-1]
         # Only parse the 7-pt Stencil table; stop at Interpolation Micro-Benchmark (same regex would match its rows)
         if 'Interpolation Micro-Benchmark' in section:
             section = section.split('Interpolation Micro-Benchmark', 1)[0]
@@ -1048,6 +1060,8 @@ def main():
         print_interpolation_per_level_tables(interp_per_level)
 
     # Step 7: Generate plots if matplotlib is available
+    # Per-operation timing: only plot 128³, 256³, 512³ (same as spmv/interpolation internal)
+    PLOT_GRID_SIZES = ['512x512x512']   # add more if needed.
     if HAS_MATPLOTLIB:
         print("\nGenerating plots...")
         # plot_comm_vs_compute(data, 'comm_vs_compute_time.png')
@@ -1055,8 +1069,9 @@ def main():
             plot_spmv_internal(spmv_per_level, 'spmv_internal.png')
         if interp_per_level:
             plot_interpolation_internal(interp_per_level, 'interpolation_internal.png')
-        if all_timing_data:
-            plot_all_per_operation_timing(all_timing_data)
+        timing_to_plot = [d for d in (all_timing_data or []) if d['grid_size'] in PLOT_GRID_SIZES]
+        if timing_to_plot:
+            plot_all_per_operation_timing(timing_to_plot)
         print("\n✓ All plots generated successfully!")
     else:
         print("\n⚠ Plots not generated. Install matplotlib and numpy to create visualizations:")

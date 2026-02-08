@@ -32,11 +32,12 @@ def parse_csv(csv_path: str):
     """
     Parse HPGMG benchmark CSV.
     Returns (grid_sizes, data_dict) where data_dict maps config name -> list of speedups.
+    Parses WSE3(6/6/6)(SHALLOW) as 6/6/6(Shallow). Does not parse Unoptimized.
     """
-    # Display order in legend and bars
-    configs = ['6/6/100', '4/4/100', '4/4/6', '6/6/6']
-    # CSV column order (last 4 columns): over(6/6/100), over(4/4/6), 6/6/6, 4/4/100
-    csv_col_order = ['6/6/100', '4/4/6', '6/6/6', '4/4/100']
+    # Display order in legend and bars (includes 6/6/6(Shallow))
+    configs = ['6/6/100', '4/4/100', '4/4/6', '6/6/6', '6/6/6(Shallow)']
+    # CSV column order (last 5 speedup columns): over(6/6/100), over(4/4/6), 6/6/6, 4/4/100, 6/6/6(shallow)
+    csv_col_order = ['6/6/100', '4/4/6', '6/6/6', '4/4/100', '6/6/6(Shallow)']
     grid_sizes = []
     values = {c: [] for c in configs}
 
@@ -44,30 +45,34 @@ def parse_csv(csv_path: str):
         reader = csv.reader(f)
         rows = list(reader)
 
-    # Find header row containing speedup column names
+    # Find header row containing speedup column names (check for 5 cols including shallow)
     header_row_idx = None
+    N_SPEEDUP = 5
     for i, row in enumerate(rows):
-        if len(row) >= 4:
-            # Check last columns for config-like headers
+        if len(row) >= N_SPEEDUP:
+            tail = [c.strip().lower() for c in row[-N_SPEEDUP:] if c]
+            if '6/6/100' in str(tail) and ('6/6/6(shallow)' in str(tail) or 'shallow' in str(tail)):
+                header_row_idx = i
+                break
+        if len(row) >= 4 and header_row_idx is None:
             tail = [c.strip().lower() for c in row[-4:] if c]
             if '6/6/100' in str(tail) or '4/4/6' in str(tail):
                 header_row_idx = i
+                N_SPEEDUP = 4
+                csv_col_order = ['6/6/100', '4/4/6', '6/6/6', '4/4/100']
+                configs = ['6/6/100', '4/4/100', '4/4/6', '6/6/6']
                 break
 
-    # Grid size is in column 0 (A)
     GRID_COL = 0
-    # Speedup columns are the last 4
-    N_SPEEDUP = 4
 
     for i in range((header_row_idx or 0) + 1, len(rows)):
         row = rows[i]
         if len(row) <= GRID_COL:
             continue
         gs = str(row[GRID_COL]).strip()
-        # Match grid size pattern: NxN or NxxN (typo)
         if not re.match(r'^\d+x+\d+$', gs):
             continue
-        gs = re.sub(r'x+', 'x', gs)  # normalize 64xx64 -> 64x64
+        gs = re.sub(r'x+', 'x', gs)
         if len(row) < N_SPEEDUP:
             continue
         speedups = []
@@ -92,13 +97,14 @@ def plot_hpgmg_speedup_bar(csv_path: str, out_path: str = 'hpgmg_speedup_barplot
         raise ValueError(f"No valid speedup data found in {csv_path}")
 
     x = np.arange(len(grid_sizes))
-    width = 0.2
+    bar_configs = ['6/6/100', '4/4/100', '4/4/6', '6/6/6', '6/6/6(Shallow)']
+    n_bars = sum(1 for c in bar_configs if data.get(c))
+    width = 0.2 if n_bars <= 4 else 0.14  # narrower when 5 configs
+    offset_span = 1.5 if n_bars <= 4 else 2.0  # wider spread when 5 so bars don't overlap
     fig, ax = plt.subplots(figsize=(8, 5))
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']  # 5th color for Shallow
+    offsets = np.linspace(-offset_span * width, offset_span * width, len(bar_configs))
 
-    # Only assign colors/offsets to configs that actually plot bars
-    bar_configs = ['6/6/100', '4/4/100', '4/4/6', '6/6/6']
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
-    offsets = np.linspace(-1.5 * width, 1.5 * width, len(bar_configs))
 
     from matplotlib.patches import Patch
     from matplotlib.lines import Line2D
@@ -116,6 +122,18 @@ def plot_hpgmg_speedup_bar(csv_path: str, out_path: str = 'hpgmg_speedup_barplot
             # Color patch without box (edgecolor='none') for legend
             handles.append(Patch(facecolor=colors[i], edgecolor='none', alpha=0.85))
             labels.append(config)
+
+    # % increase over 6/6/6 on top of 6/6/6(Shallow) bar for all grids
+    if data.get('6/6/6') and data.get('6/6/6(Shallow)'):
+        idx_shallow = bar_configs.index('6/6/6(Shallow)')
+        for i in range(len(grid_sizes)):
+            v_666 = data['6/6/6'][i]
+            v_shallow = data['6/6/6(Shallow)'][i]
+            if v_666 > 0:
+                pct = ((v_shallow - v_666) / v_666) * 100
+                x_shallow = i + offsets[idx_shallow]
+                ax.text(x_shallow, v_shallow + 0.3, f'+{pct:.0f}%',
+                        ha='center', va='bottom', fontsize=9, color='#232323')
 
     # Add GH200 baseline and --- line for legend
     ax.axhline(y=1, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
