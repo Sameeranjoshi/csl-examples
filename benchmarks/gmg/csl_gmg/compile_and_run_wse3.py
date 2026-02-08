@@ -90,7 +90,7 @@ def add_artifact_to_cache(out_path, artifact_path):
     save_artifact_cache(cache)
 
 
-def get_out_path(size, levels, max_ite, pre_iter, post_iter, bottom_iter, suffix="_unoptimized"):
+def get_out_path(size, levels, max_ite, pre_iter, post_iter, bottom_iter, suffix=""):
     """Return the output directory name used for this problem (must match process_on_device)."""
     return f"out_dir_S{size}x_L{levels}_M{max_ite}_P{pre_iter}_P{post_iter}_B{bottom_iter}{suffix}"
 
@@ -459,15 +459,16 @@ def main():
         # 
 
         # Unoptimized 6/6/6
-        # ls -d unoptimized_* | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_6_6_6_unoptimized.txt
-         (4, 2, 100, 1e-5, 6, 6, 6),   # Tiny problem
-         (8, 3, 100, 1e-5, 6, 6, 6),   # Tiny problem
-         (16, 4, 100, 1e-5, 6, 6, 6),   # Small problem
-         (32, 5, 100, 1e-5, 6, 6, 6),   # Small problem
-         (64, 6, 100, 1e-5, 6, 6, 6),   # Medium problem
-         (128, 7, 100, 1e-5, 6, 6, 6),   # Large problem
-         (256, 8, 100, 1e-5, 6, 6, 6),   # Very large
-         (512, 9, 100, 1e-5, 6, 6, 6),   # Very large       
+        # Add "_unoptimized" suffix
+        # ls -d out_dir_S*unoptimized* | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_6_6_6_unoptimized.txt
+        #  (4, 2, 100, 1e-5, 6, 6, 6),   # Tiny problem
+        #  (8, 3, 100, 1e-5, 6, 6, 6),   # Tiny problem
+        #  (16, 4, 100, 1e-5, 6, 6, 6),   # Small problem
+        #  (32, 5, 100, 1e-5, 6, 6, 6),   # Small problem
+        #  (64, 6, 100, 1e-5, 6, 6, 6),   # Medium problem
+        #  (128, 7, 100, 1e-5, 6, 6, 6),   # Large problem
+        #  (256, 8, 100, 1e-5, 6, 6, 6),   # Very large
+        #  (512, 9, 100, 1e-5, 6, 6, 6),   # Very large       
     ]
     verbose = False    
     results = []

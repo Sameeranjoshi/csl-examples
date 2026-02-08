@@ -88,16 +88,24 @@ def generate_plots(opt_file, unopt_file):
     mask_codedata = df_opt['Code_bytes'].notna() & df_opt['Data_bytes'].notna()
     df_codedata = df_opt[mask_codedata].reset_index(drop=True)
 
-    # --- metrics_comparison.png ---
+    # --- metrics_comparison.png --- (paper-sized: larger figure, fonts, 300 DPI)
+    plt.rcParams.update({
+        'font.size': 14,
+        'axes.labelsize': 16,
+        'axes.titlesize': 18,
+        'legend.fontsize': 13,
+        'xtick.labelsize': 13,
+        'ytick.labelsize': 13,
+    })
     metrics = [
-        ('CommTime', 'Comm Time (spmv) [us]', 'linear', 'bar'),
-        ('ComputeTime', 'Compute Time (spmv) [us]', 'linear', 'bar'),
-        ('Speedup', 'V-Cycle Speedup Scaling (Unoptimized / Optimized)', 'linear', 'speedup'),
-        ('CodeData', 'Sizeof(ELF file)@PE(0,0) vs Memory per PE (48KB)', 'linear', 'stacked')
+        ('CommTime', 'Comm Time (spmv) [µs]', 'linear', 'bar'),
+        ('ComputeTime', 'Compute Time (spmv) [µs]', 'linear', 'bar'),
+        ('Speedup', 'V-Cycle Speedup', 'linear', 'speedup'),
+        ('CodeData', 'Code+Data vs 48KB', 'linear', 'stacked')
     ]
     
-    fig, axes = plt.subplots(2, 2, figsize=(16, 10))
-    axes = axes.flatten()
+    fig, axes = plt.subplots(1, 4, figsize=(20, 5.5))
+    axes = np.array(axes).flatten()  # ensure 1D array of 4 axes for side-by-side
     x = np.arange(len(df_opt['Size']))
     width = 0.35
 
@@ -109,12 +117,12 @@ def generate_plots(opt_file, unopt_file):
             axes[i].legend(loc='upper left', bbox_to_anchor=(0, 1))
             for j, (size, sp) in enumerate(zip(df_opt['Size'], speedup)):
                 axes[i].annotate(f'{sp:.2f}x', (x[j], sp), textcoords="offset points",
-                                xytext=(0, 10), ha='center', fontsize=10, color='black')
+                                xytext=(0, 10), ha='center', fontsize=13, color='black')
             axes[i].set_xticks(x)
             axes[i].set_xticklabels(df_opt['Size'], rotation=30)
             y_min, y_max = axes[i].get_ylim()
             axes[i].set_ylim(y_min, y_max * 1.12)
-            axes[i].set_ylabel('Speedup Factor', fontsize=11)
+            axes[i].set_ylabel('Speedup Factor', fontsize=15)
             axes[i].grid(True, linestyle=':', alpha=0.7)
         elif plot_type == 'stacked':
             # Code + Data stacked bar from opt_file, 48KB line, % inside bars
@@ -133,12 +141,12 @@ def generate_plots(opt_file, unopt_file):
                     code_pct = (code[j] / REF_48KB) * 100
                     data_pct = (data[j] / REF_48KB) * 100
                     if code[j] > 800:
-                        axes[i].text(x_cd[j], code[j] / 2, f'{code_pct:.0f}%', ha='center', va='center', fontsize=9, color='#333')
+                        axes[i].text(x_cd[j], code[j] / 2, f'{code_pct:.0f}%', ha='center', va='center', fontsize=12, color='#333')
                     if data[j] > 400:
-                        axes[i].text(x_cd[j], code[j] + data[j] / 2, f'{data_pct:.0f}%', ha='center', va='center', fontsize=9, color='#333')
+                        axes[i].text(x_cd[j], code[j] + data[j] / 2, f'{data_pct:.0f}%', ha='center', va='center', fontsize=12, color='#333')
                 axes[i].set_xticks(x_cd)
                 axes[i].set_xticklabels(df_codedata['Size'], rotation=30)
-                axes[i].set_ylabel('Bytes', fontsize=11)
+                axes[i].set_ylabel('Bytes', fontsize=15)
                 axes[i].set_ylim(0, max(REF_48KB * 1.1, (code + data).max() * 1.1))
                 axes[i].grid(axis='y', linestyle='--', alpha=0.5)
         else:
@@ -152,11 +160,11 @@ def generate_plots(opt_file, unopt_file):
                 for j, (bar_unopt, bar_opt, sp_factor) in enumerate(zip(bars_unopt, bars_opt, speedup_factors)):
                     max_height = max(bar_unopt.get_height(), bar_opt.get_height())
                     axes[i].annotate(f'{sp_factor:.2f}x', xy=(x[j], max_height), xytext=(0, 3),
-                                    textcoords="offset points", ha='center', va='bottom', fontsize=10, color='black')
+                                    textcoords="offset points", ha='center', va='bottom', fontsize=12, color='black')
                 y_min, y_max = axes[i].get_ylim()
                 axes[i].set_ylim(y_min, y_max * 1.08)
 
-        axes[i].set_title(title, fontsize=13, fontweight='bold')
+        axes[i].set_title(title, fontsize=17, fontweight='bold')
         if plot_type not in ('speedup', 'stacked'):
             axes[i].set_yscale(scale)
         axes[i].legend(loc="upper left")
@@ -165,9 +173,9 @@ def generate_plots(opt_file, unopt_file):
         elif plot_type == 'stacked' and not df_codedata.empty:
             axes[i].legend(loc="upper left")
 
-    plt.suptitle('Performance Metric Comparison: Optimized vs. Unoptimized', fontsize=16)
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    plt.savefig('metrics_comparison.png', bbox_inches='tight', dpi=100)
+    plt.suptitle('Performance Metric Comparison: Optimized vs. Unoptimized', fontsize=20, fontweight='bold')
+    plt.tight_layout(rect=[0, 0.02, 1, 0.93])
+    plt.savefig('metrics_comparison.png', bbox_inches='tight', dpi=300)
     plt.close(fig)
     print("Generated: metrics_comparison.png")
 

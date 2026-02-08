@@ -15,14 +15,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-# Publication-quality parameters
+# Publication-quality parameters (larger scale/text for paper readability)
 plt.rcParams['font.family'] = 'serif'
-plt.rcParams['font.size'] = 12
-plt.rcParams['axes.labelsize'] = 14
-plt.rcParams['axes.titlesize'] = 16
-plt.rcParams['legend.fontsize'] = 11
-plt.rcParams['xtick.labelsize'] = 12
-plt.rcParams['ytick.labelsize'] = 12
+plt.rcParams['font.size'] = 14
+plt.rcParams['axes.labelsize'] = 18
+plt.rcParams['axes.titlesize'] = 20
+plt.rcParams['legend.fontsize'] = 14
+plt.rcParams['xtick.labelsize'] = 14
+plt.rcParams['ytick.labelsize'] = 14
 plt.rcParams['figure.dpi'] = 150
 plt.rcParams['savefig.dpi'] = 300
 plt.rcParams['savefig.bbox'] = 'tight'
@@ -101,7 +101,7 @@ def plot_hpgmg_speedup_bar(csv_path: str, out_path: str = 'hpgmg_speedup_barplot
     n_bars = sum(1 for c in bar_configs if data.get(c))
     width = 0.2 if n_bars <= 4 else 0.14  # narrower when 5 configs
     offset_span = 1.5 if n_bars <= 4 else 2.0  # wider spread when 5 so bars don't overlap
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=(7, 5))
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']  # 5th color for Shallow
     offsets = np.linspace(-offset_span * width, offset_span * width, len(bar_configs))
 
@@ -123,8 +123,9 @@ def plot_hpgmg_speedup_bar(csv_path: str, out_path: str = 'hpgmg_speedup_barplot
             handles.append(Patch(facecolor=colors[i], edgecolor='none', alpha=0.85))
             labels.append(config)
 
-    # % increase over 6/6/6 on top of 6/6/6(Shallow) bar for all grids
+    # Vertical arrow from red (6/6/6) to purple (6/6/6 Shallow); keep % text on top of purple bar
     if data.get('6/6/6') and data.get('6/6/6(Shallow)'):
+        idx_666 = bar_configs.index('6/6/6')
         idx_shallow = bar_configs.index('6/6/6(Shallow)')
         for i in range(len(grid_sizes)):
             v_666 = data['6/6/6'][i]
@@ -132,19 +133,38 @@ def plot_hpgmg_speedup_bar(csv_path: str, out_path: str = 'hpgmg_speedup_barplot
             if v_666 > 0:
                 pct = ((v_shallow - v_666) / v_666) * 100
                 x_shallow = i + offsets[idx_shallow]
+                # Text on top of purple bar
                 ax.text(x_shallow, v_shallow + 0.3, f'+{pct:.0f}%',
-                        ha='center', va='bottom', fontsize=9, color='#232323')
+                        ha='center', va='bottom', fontsize=12, color='#232323')
+            if v_666 > 0 and v_shallow > v_666:
+                pct = ((v_shallow - v_666) / v_666) * 100
+                xi = i + 0.5 * (offsets[idx_666] + offsets[idx_shallow])
+                y_from = v_666
+                y_to = v_shallow
+                # Vertical arrow from red bar top to purple bar top
+                ax.annotate(
+                    '',
+                    xy=(xi, y_to),
+                    xytext=(xi, y_from),
+                    arrowprops=dict(
+                        arrowstyle='->',
+                        color='#333',
+                        lw=1.5,
+                        shrinkA=0,
+                        shrinkB=0,
+                    ),
+                )
 
     # Add GH200 baseline and --- line for legend
     ax.axhline(y=1, color='black', linestyle='--', linewidth=1.5, alpha=0.7)
     handles.append(Line2D([0], [0], color= "black", linestyle='--', linewidth=1))
     labels.append('Baseline (1.0×)')
 
-    ax.set_xlabel('Grid sizes')
-    ax.set_ylabel('Relative speedup over GH200')
-    ax.set_title('GLOW VS HPGMG')
+    ax.set_xlabel('Grid sizes', fontsize=18)
+    ax.set_ylabel('Relative speedup over GH200', fontsize=18)
+    ax.set_title('GLOW VS HPGMG', fontsize=20, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels(grid_sizes)
+    ax.set_xticklabels(grid_sizes, fontsize=14)
     ax.legend(
         handles=handles,
         labels=labels,
