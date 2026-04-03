@@ -179,17 +179,17 @@ def copy_rho_history(height, width, memcpy_dtype, memcpy_order, simulator, symbo
 def print_configuration_summary(
     args,
     device_solver,
-    # host_iterations,
-    # host_residual,
     device_rho,
     counter_rho_check,
     timing_total_start_end_data,
+    first_vcycle_time_us=0,
     ):
     dtype_name = DTYPE.__name__ if hasattr(DTYPE, "__name__") else str(DTYPE)
     # counter_rho_check has shape (1, levels), so access [0, 0] for first level's count
     # device_iterations = int(counter_rho_check[0, 0]) if np.ndim(counter_rho_check) > 0 and counter_rho_check.size > 0 else 0
     # print("ndim", np.ndim(counter_rho_check))
-    device_iterations = int(counter_rho_check[0])
+    device_iterations = max(int(counter_rho_check[0]), 1)
+    t_wall = timing_total_start_end_data[0]
 
     print("\n" + "=" * 60)
     print("Configuration Summary")
@@ -209,11 +209,9 @@ def print_configuration_summary(
         ("Channels", args.channels),
         ("Block size", args.blockSize),
         ("West/East buffer width", f"{args.width_west_buf}/{args.width_east_buf}"),
-        # ("Host iterations", host_iterations),
-        # ("Host final rho", f"{host_residual:.3e}"),
-        ("Total Solver time (us[cycles])", f"{timing_total_start_end_data['time_send']:10.3f}us({timing_total_start_end_data['cycles_send']:10.0f})"),
-        ("Device iterations", device_iterations),
-        ("1-V cycle time(Average) (us[cycles])", f"{timing_total_start_end_data['time_send']/device_iterations:10.3f}us({timing_total_start_end_data['cycles_send']/device_iterations:10.0f}cycles)"),
+        ("Total solver wall time (us[cycles])", f"{t_wall['time_send']:10.3f}us({t_wall['cycles_send']:10.0f})"),
+        ("Device iterations", int(counter_rho_check[0])),
+        ("1st V-cycle time (measured)", f"{first_vcycle_time_us:10.3f}us"),
         ("Device final |rho|_inf", f"{device_rho:.3e}"),
     ]
 
@@ -226,29 +224,34 @@ def profiling(
         WORDS_PER_TIMESTAMP,
         device_solver, device_rh,
         counter_rho_check,
-        simulator, 
+        simulator,
         timing_smooth_data, timing_residual_data, timing_restrict_data, timing_interp_data,
         timing_smooth_apply_data, timing_smooth_update_data,
         timing_interp_expand_z_data, timing_interp_bcast_data, timing_bcast_configure_data, timing_bcast_to_all_data, timing_interp_add_data,
         timing_spmv_total_data, timing_spmv_communication_data, timing_spmv_compute_data,
+        timing_setup_data, timing_convergence_data,
         timing_total_start_end_data
     ):
     print("\n" + "="*60)
     print("Performance Timing")
     print("="*60)
+    print(
+        "PE(0,0) only. Phase timers (smooth, residual, …) accumulate during the first V-cycle only.\n"
+        "Convergence is a separate column in the table below."
+    )
 
     ############################################################
     # Time per operation and level (us[cycles]):
     ############################################################
     
-    print("\nTime per operation and level (us[cycles]):")
+    print("\nTime per operation and level (us[cycles]), first V-cycle:")
     operators = [
         ("smooth", timing_smooth_data),
         ("residual", timing_residual_data),
         ("restriction", timing_restrict_data),
         ("interpolation", timing_interp_data),
-        # ("setup_init", timing_setup_init_data, counter_setup_init),
-        # ("rho_check", timing_rho_check_data, counter_rho_check)
+        ("setup", timing_setup_data),
+        ("convergence", timing_convergence_data),
     ]
 
     header_cols = ["level"] + [op[0] for op in operators] + ["total"]
@@ -301,17 +304,20 @@ def profiling(
     total_time_cycles = grand_total_cycles
 
     # ------------------------------------------------------------
-    # 7-pt Stencil: Compute vs Communication + Smoothing
-    # SpMV: Total / Communication / Compute; L1/L0 ratios.
-    # Smooth: smooth_apply | smooth_update | smooth_total.
+    # 7-pt Stencil: SpMV vs smoothing (PE 0,0)
+    # Stencil SpMV timers are *not* gated by roofline_measure and accumulate over
+    # every V-cycle; scale by device_iterations so columns match one V-cycle.
+    # Smooth sub-timers use save_timestamp_* and match the first V-cycle only.
     # ------------------------------------------------------------
-    print("\n7-pt Stencil Compute vs Communication + Smoothing (us[cycles]) per Level:")
-    print("Note: Triangle inequality: max(x+y) <= max(x) + max(y), where x,y are 2D timings across wafer.")
-    TIMER_FIXED_COST = 30  # ~30 us (timer/fixed cost per level)
+    device_iterations = max(int(counter_rho_check[0]), 1)
+    print("\n7-pt Stencil: SpMV vs smoothing (us[cycles]), per level, scaled to one V-cycle:")
+    print(
+        f"  SpMV Total / Communication / Compute ÷ {device_iterations} (iterations); "
+        "smooth_* from first V-cycle only."
+    )
     compute_comm_header = [
         "level", "Total SpMV Time", "Communication Time", "Compute Time",
-        "L1/L0(Comm)", "L1-L0(Comm)", "L1/L0(Compute)",
-        "timer/fixed cost", "smooth_apply", "smooth_update", "smooth_total"
+        "smooth_apply", "smooth_update", "smooth_total", "smooth_overhead"
     ]
     print(build_divider(compute_comm_header, "="))
     print("|" + "|".join(f"{name:^{col_width}}" for name in compute_comm_header) + "|")
@@ -335,54 +341,33 @@ def profiling(
         smooth_update_entry = timing_smooth_update_data[level]
         smooth_total_entry = timing_smooth_data[level]
 
-        spmv_total_time_level = spmv_total_entry["time_send"]
-        spmv_communication_time_level = spmv_communication_entry["time_send"]
-        spmv_compute_time_level = spmv_compute_entry["time_send"]
+        # SpMV micro-timers are inside the stencil module (NOT gated by roofline_measure)
+        # They accumulate across all iterations, so divide by iterations to get per-1V values
+        spmv_total_time_level = spmv_total_entry["time_send"] / device_iterations
+        spmv_communication_time_level = spmv_communication_entry["time_send"] / device_iterations
+        spmv_compute_time_level = spmv_compute_entry["time_send"] / device_iterations
 
-        spmv_total_cycles_level = spmv_total_entry["cycles_send"]
-        spmv_communication_cycles_level = spmv_communication_entry["cycles_send"]
-        spmv_compute_cycles_level = spmv_compute_entry["cycles_send"]
+        spmv_total_cycles_level = spmv_total_entry["cycles_send"] / device_iterations
+        spmv_communication_cycles_level = spmv_communication_entry["cycles_send"] / device_iterations
+        spmv_compute_cycles_level = spmv_compute_entry["cycles_send"] / device_iterations
 
-        # Calculate ratio: level(i+1)/level(i)
-        if level + 1 < args.levels:
-            next_comm_time = timing_spmv_communication_data[level + 1]["time_send"]
-            if spmv_communication_time_level > 0:
-                comm_ratio = next_comm_time / spmv_communication_time_level
-                ratio_str = f"{comm_ratio:6.3f}".center(col_width)
-            else:
-                ratio_str = f"{'N/A':^{col_width}}"
-            # Calculate difference: L(i+1) - L(i)
-            comm_diff = next_comm_time - spmv_communication_time_level
-            diff_str = f"{comm_diff:6.3f}us".center(col_width)
-            # Compute ratio: compute[i+1]/compute[i]
-            next_compute_time = timing_spmv_compute_data[level + 1]["time_send"]
-            if spmv_compute_time_level > 0:
-                compute_ratio = next_compute_time / spmv_compute_time_level
-                compute_ratio_str = f"{compute_ratio:6.3f}".center(col_width)
-            else:
-                compute_ratio_str = f"{'N/A':^{col_width}}"
-        else:
-            ratio_str = f"{'N/A':^{col_width}}"
-            diff_str = f"{'N/A':^{col_width}}"
-            compute_ratio_str = f"{'N/A':^{col_width}}"
-
+        # smooth_overhead = smooth_total - (smooth_apply + smooth_update)
+        smooth_overhead_us = smooth_total_entry['time_send'] - (smooth_apply_entry['time_send'] + smooth_update_entry['time_send'])
+        smooth_overhead_cyc = smooth_total_entry['cycles_send'] - (smooth_apply_entry['cycles_send'] + smooth_update_entry['cycles_send'])
         row = [
             f"{level:^{col_width}}",
             f"{spmv_total_time_level:6.3f}us({spmv_total_cycles_level:7.0f})".center(col_width),
             f"{spmv_communication_time_level:6.3f}us({spmv_communication_cycles_level:7.0f})".center(col_width),
             f"{spmv_compute_time_level:6.3f}us({spmv_compute_cycles_level:7.0f})".center(col_width),
-            ratio_str,
-            diff_str,
-            compute_ratio_str,
-            f"{TIMER_FIXED_COST:^{col_width}}",
             f"{smooth_apply_entry['time_send']:6.3f}us({smooth_apply_entry['cycles_send']:7.0f})".center(col_width),
             f"{smooth_update_entry['time_send']:6.3f}us({smooth_update_entry['cycles_send']:7.0f})".center(col_width),
             f"{smooth_total_entry['time_send']:6.3f}us({smooth_total_entry['cycles_send']:7.0f})".center(col_width),
+            f"{smooth_overhead_us:6.3f}us({smooth_overhead_cyc:7.0f})".center(col_width),
         ]
         print("|" + "|".join(row) + "|")
         print(build_divider(compute_comm_header))
 
-        sum_spmv_total_time += spmv_total_time_level
+        sum_spmv_total_time += spmv_total_time_level  # already per one V-cycle
         sum_spmv_communication_time += spmv_communication_time_level
         sum_spmv_compute_time += spmv_compute_time_level
         sum_spmv_total_cycles += spmv_total_cycles_level
@@ -395,18 +380,17 @@ def profiling(
     sum_smooth_apply_time = sum(e["time_send"] for e in timing_smooth_apply_data)
     sum_smooth_update_time = sum(e["time_send"] for e in timing_smooth_update_data)
     sum_smooth_total_time = sum(e["time_send"] for e in timing_smooth_data)
+    sum_smooth_overhead_time = sum_smooth_total_time - (sum_smooth_apply_time + sum_smooth_update_time)
+    sum_smooth_overhead_cyc = sum_smooth_total - (sum_smooth_apply + sum_smooth_update)
     total_row = [
         f"{'total':^{col_width}}",
         f"{sum_spmv_total_time:6.3f}us({sum_spmv_total_cycles:7.0f})".center(col_width),
         f"{sum_spmv_communication_time:6.3f}us({sum_spmv_communication_cycles:7.0f})".center(col_width),
         f"{sum_spmv_compute_time:6.3f}us({sum_spmv_compute_cycles:7.0f})".center(col_width),
-        f"{'N/A':^{col_width}}",
-        f"{'N/A':^{col_width}}",
-        f"{'N/A':^{col_width}}",
-        f"{TIMER_FIXED_COST:^{col_width}}",
         f"{sum_smooth_apply_time:6.3f}us({sum_smooth_apply:7.0f})".center(col_width),
         f"{sum_smooth_update_time:6.3f}us({sum_smooth_update:7.0f})".center(col_width),
         f"{sum_smooth_total_time:6.3f}us({sum_smooth_total:7.0f})".center(col_width),
+        f"{sum_smooth_overhead_time:6.3f}us({sum_smooth_overhead_cyc:7.0f})".center(col_width),
     ]
     print("|" + "|".join(total_row) + "|")
     print(build_divider(compute_comm_header, "="))
@@ -415,7 +399,7 @@ def profiling(
     # Interpolation Micro-Benchmark (f_interpolation_expand_z, f_bcast_from_top_left, f_interpolation_add)
     # bcast breakdown: bcast_configure | bcast_to_all | remaining(fabric+TD)
     # ------------------------------------------------------------
-    print("\nInterpolation Micro-Benchmark (us[cycles]) per Level:")
+    print("\nInterpolation micro-benchmark (us[cycles]), PE(0,0), first V-cycle only:")
     interp_micro_header = ["level", "expand_z(T1)", "bcast_total(T2)", "reset_routes(T2.1)", "send_data(T2.2)", "interp_add(T3)", "interp_total(T1+T2+T3)"]
     print(build_divider(interp_micro_header, "="))
     print("|" + "|".join(f"{name:^{col_width}}" for name in interp_micro_header) + "|")
@@ -460,23 +444,22 @@ def profiling(
     print(build_divider(interp_micro_header, "="))
 
     ############################################################
-    # Total time and bandwidth:
+    # V-cycle time cross-check
     ############################################################
+    di = max(int(counter_rho_check[0]), 1)
+    wall_total = timing_total_start_end_data[0]["time_send"]
     print("=" * 100)
-    print(f"Total Upper bound V-cycle time (sum of operations): {total_time_us:10.3f} us ({total_time_cycles:10.0f} cycles)")
-    print(f"Total V-cycle time (Kernel Launch + V-cycle time): {timing_total_start_end_data[0]['time_send']:10.3f} us ({timing_total_start_end_data[0]['cycles_send']:10.0f} cycles)")
-    print(f"Choose max")
-    print("=" * 100)
-
-    print_configuration_summary(
-        args,
-        device_solver,
-        # host_iterations,
-        # host_residual,
-        device_rh,
-        counter_rho_check,
-        timing_total_start_end_data[0]
+    print(
+        f"1st V-cycle time (sum of per-level timers, directly measured): "
+        f"{total_time_us:10.3f} us ({total_time_cycles:10.0f} cycles)"
     )
+    print(
+        f"Total solver wall time (all {di} V-cycles): "
+        f"{wall_total:10.3f} us ({timing_total_start_end_data[0]['cycles_send']:10.0f} cycles)"
+    )
+    print("=" * 100)
+    return total_time_us  # 1st V-cycle time (sum of per-level timers)
+
 
 def main():
     """Main function"""
@@ -550,8 +533,20 @@ def main():
     symbol_timing_spmv_total = simulator.get_id("timing_spmv_total")
     symbol_timing_spmv_communication = simulator.get_id("timing_spmv_communication")
     symbol_timing_spmv_compute = simulator.get_id("timing_spmv_compute")
+    symbol_timing_setup = simulator.get_id("timing_setup")
+    symbol_timing_convergence = simulator.get_id("timing_convergence")
     symbol_counter_rho_check = simulator.get_id("counter_rho_check")
+    symbol_count_fmov32 = simulator.get_id("count_fmov32")
     symbol_rho_history = simulator.get_id("rho_history")
+    # Roofline FLOP counter symbols
+    symbol_count_fsub = simulator.get_id("count_fsub")
+    symbol_count_fmac = simulator.get_id("count_fmac")
+    symbol_count_fmul = simulator.get_id("count_fmul")
+    symbol_count_fadd = simulator.get_id("count_fadd")
+    symbol_count_fneg = simulator.get_id("count_fneg")
+    symbol_count_fmov_mem = simulator.get_id("count_fmov_mem")
+    symbol_count_fmov_zero = simulator.get_id("count_fmov_zero")
+    symbol_count_fmax = simulator.get_id("count_fmax")
     
     simulator.load()
     simulator.run()
@@ -620,12 +615,35 @@ def main():
     timing_spmv_total_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_spmv_total, WORDS_PER_TIMESTAMP, "spmv_total")
     timing_spmv_communication_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_spmv_communication, WORDS_PER_TIMESTAMP, "spmv_communication")
     timing_spmv_compute_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_spmv_compute, WORDS_PER_TIMESTAMP, "spmv_compute")
+    timing_setup_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_setup, WORDS_PER_TIMESTAMP, "setup")
+    timing_convergence_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_convergence, WORDS_PER_TIMESTAMP, "convergence")
     # counter_one = np.array([1]) # Because we have only 1 level
     # ones = np.ones(args.levels, dtype=int)
     timing_total_start_end_data = copy_timing_make_48bit(height, width,1, simulator, symbol_time_total_start_end, WORDS_PER_TIMESTAMP, "total")
 
-    counter_rho_check = copy_counters(height, width, args.levels, simulator, symbol_counter_rho_check)  # This line breaks!
-    
+    counter_rho_check = copy_counters(height, width, args.levels, simulator, symbol_counter_rho_check)
+    # FMOV32 counter (u32) — @mov32 fabric receives: data received from other PEs
+    count_fmov32_1d = np.zeros(1*1*args.levels, dtype=np.uint32)
+    simulator.memcpy_d2h(count_fmov32_1d, symbol_count_fmov32, 0, 0, 1, 1, args.levels,
+                        streaming=False, data_type=MemcpyDataType.MEMCPY_32BIT,
+                        order=MemcpyOrder.COL_MAJOR, nonblock=False)
+
+    # Roofline FLOP counters (use u32 path — values can exceed 65535)
+    roofline_counters = {}
+    for name, sym in [('fsub', symbol_count_fsub), ('fmac', symbol_count_fmac),
+                      ('fmul', symbol_count_fmul), ('fadd', symbol_count_fadd),
+                      ('fneg', symbol_count_fneg), ('fmov_mem', symbol_count_fmov_mem),
+                      ('fmov_zero', symbol_count_fmov_zero),
+                      ('fmax', symbol_count_fmax)]:
+        counter_1d = np.zeros(1*1*args.levels, dtype=np.uint32)
+        simulator.memcpy_d2h(counter_1d, sym, 0, 0, 1, 1, args.levels,
+                            streaming=False, data_type=MemcpyDataType.MEMCPY_32BIT,
+                            order=MemcpyOrder.COL_MAJOR, nonblock=False)
+        # Keep as u32 — don't use oned_to_hwl_colmajor which truncates to u16
+        # For 1x1 PE region, column-major is just the array itself
+        roofline_counters[name] = counter_1d
+    roofline_counters['fmov32'] = count_fmov32_1d
+
     ###########################################################
     # Convergence
     print("9. Checking convergence...")
@@ -670,21 +688,65 @@ def main():
 
     # counter_rho_check = 0
     # device_rh = 0.0
-    profiling(args,
+    first_vcycle_time_us = profiling(args,
         WORDS_PER_TIMESTAMP,
         device_solver, device_rh,
         counter_rho_check,
-        simulator, 
+        simulator,
         timing_smooth_data, timing_residual_data, timing_restrict_data, timing_interp_data,
         timing_smooth_apply_data, timing_smooth_update_data,
         timing_interp_expand_z_data, timing_interp_bcast_data, timing_bcast_configure_data, timing_bcast_to_all_data, timing_interp_add_data,
         timing_spmv_total_data, timing_spmv_communication_data, timing_spmv_compute_data,
+        timing_setup_data, timing_convergence_data,
         timing_total_start_end_data
         )  
     
     ###########################################################
+    # Roofline — PE(0,0) op/traffic counts, first V-cycle only (roofline_measure)
+    ###########################################################
+    print("\n" + "=" * 120)
+    print("ROOFLINE — PE(0,0) only; first V-cycle (kernel counters gated by roofline_measure)")
+    print("  Per-level 'active PEs' is the 2D PE count used at that multigrid level (for scaling).")
+    print("  FLOP/Mem/Fab rows below are not summed over the wafer — they are one PE's counts.")
+    print("=" * 120)
+
+    # Raw counter dump — roofline computation is done by plots/roofline_analysis.py
+    all_ops = ['fsub', 'fmac', 'fmul', 'fadd', 'fneg', 'fmov_mem', 'fmov_zero', 'fmax']
+    size = args.zDim
+    device_iterations = max(int(counter_rho_check[0]), 1)
+    vcycle_time_us = timing_total_start_end_data[0]['time_send'] if timing_total_start_end_data else 0
+
+    for level in range(args.levels):
+        n_z = size >> level
+        active_pes = (size // (2 ** level)) ** 2
+        print(f"\nLevel {level} (nz={n_z}, active PEs: {active_pes:,}, stride: {2**level}):")
+        print(f"{'Operation':<12} {'Count':>10}")
+        print("-" * 25)
+        for op in all_ops:
+            count = int(roofline_counters[op][level])
+            if count > 0:
+                print(f"{op.upper():<12} {count:>10,}")
+        fab_load = int(roofline_counters['fmov32'][level])
+        if fab_load > 0:
+            print(f"{'FMOV32':<12} {fab_load:>10,}")
+
+    print(f"\nDevice iterations to converge: {device_iterations}")
+    print(f"Total solver time (all iters): {vcycle_time_us:.3f} us")
+    print(f"\nRun: python plots/roofline_analysis.py <response.txt> for full roofline analysis and plots.")
+    print("=" * 120)
+
+    print_configuration_summary(
+        args,
+        device_solver,
+        device_rh,
+        counter_rho_check,
+        timing_total_start_end_data,
+        first_vcycle_time_us=first_vcycle_time_us,
+    )
+
+    ###########################################################
     # Clean up
-    print("10. Stopping simulator...")
+    print("11. Stopping simulator...")
     ###########################################################
     simulator.stop()
     if args.cmaddr is None:

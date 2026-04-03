@@ -240,6 +240,15 @@ var current_level_local: i16 = 0;
 var timing_spmv_total_local: [*]u16;
 var timing_spmv_communication_local: [*]u16;
 var timing_spmv_compute_local: [*]u16;
+// Roofline FLOP counters (local to stencil, flushed to caller at callback)
+var counter_fmac: u32 = 0;
+var counter_fneg: u32 = 0;
+var counter_fmov: u32 = 0;
+var counter_fmov32: u32 = 0;  // fabric loads: data received from neighbor PEs via router
+var local_count_fneg_ptr: *u32;
+var local_count_fmac_ptr: *u32;
+var local_count_fmov_ptr: *u32;
+var local_count_fmov32_ptr: *u32;
 var TIMER_SPMV_TOTAL: i16 = 0;
 var TIMER_SPMV_COMMUNICATION: i16 = 1;
 var TIMER_SPMV_COMPUTE: i16 = 2;
@@ -279,12 +288,20 @@ fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
 //  if n = 1, we cannot set DSD length with zDim-1 = 0.
 //  so we skip z-direction, just update center in laplacian_z
 //  (n = 1 is a 2D problem)
-fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32, current_level: i16, timing_spmv_total: [*]u16, timing_spmv_communication: [*]u16, timing_spmv_compute: [*]u16) void {
+fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32, current_level: i16, timing_spmv_total: [*]u16, timing_spmv_communication: [*]u16, timing_spmv_compute: [*]u16, count_fneg_ptr: *u32, count_fmac_ptr: *u32, count_fmov_ptr: *u32, count_fmov32_ptr: *u32) void {
     // do some initial setup here first, save arguments to local variables
     current_level_local = current_level;
     timing_spmv_total_local = timing_spmv_total;
     timing_spmv_communication_local = timing_spmv_communication;
     timing_spmv_compute_local = timing_spmv_compute;
+    local_count_fneg_ptr = count_fneg_ptr;
+    local_count_fmac_ptr = count_fmac_ptr;
+    local_count_fmov_ptr = count_fmov_ptr;
+    local_count_fmov32_ptr = count_fmov32_ptr;
+    counter_fmac = 0;
+    counter_fneg = 0;
+    counter_fmov = 0;
+    counter_fmov32 = 0;
 
     @assert(2 <= n);
     save_timestamp_start(TIMER_SPMV_TOTAL);
@@ -374,6 +391,7 @@ fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32, current_level: i16, timing
     // @fmovs(mem_y_z_buf_dsd, zero);
     @load_to_dsr(dest_dsr_send, mem_y_z_buf_dsd);
     @fmovs(dest_dsr_send, @as(f32,0));
+    counter_fmov += @as(u32, zDim);
 
     // start first block of spmv
     // COMM is called multiple times to finish the spmv
@@ -405,19 +423,23 @@ fn laplacian_xy() void {
     if (px == @as(i16, first_active_px)) {
         // west  = - center
         @fnegs(mem_west_buf_dsd, mem_center_buf_dsd);
+        counter_fneg += @as(u32, cur_length);
     }
     if (px == @as(i16, last_active_px)) {
         // east = - center
         @fnegs(mem_east_buf_dsd, mem_center_buf_dsd);
+        counter_fneg += @as(u32, cur_length);
     }
     if (py == @as(i16, first_active_py)) {
         // north = - center
         @fnegs(mem_north_buf_dsd, mem_center_buf_dsd);
+        counter_fneg += @as(u32, cur_length);
     }
     if (py == @as(i16, last_active_py)) {
         // south = - center
         @fnegs(mem_south_buf_dsd, mem_center_buf_dsd);
-    }    
+        counter_fneg += @as(u32, cur_length);
+    }
     // @fmacs(mem_y_buf_dsd, mem_y_buf_dsd, mem_west_buf_dsd, c_west);
     @load_to_dsr(dest_dsr_send, mem_y_buf_dsd);
     @load_to_dsr(src0_dsr, mem_y_buf_dsd);
@@ -444,6 +466,8 @@ fn laplacian_xy() void {
 
     // save_timestamp_end(current_level_local, &timer_laplacian_xy_local, TIMER_LAPLACIAN_XY);
     save_timestamp_end(current_level_local, timing_spmv_compute_local, TIMER_SPMV_COMPUTE);
+    // Roofline: fnegs counted per-boundary above, 4 fmacs (neighbors) always
+    counter_fmac += @as(u32, cur_length) * 4;
 }
 
 
@@ -497,6 +521,8 @@ fn laplacian_z() void {
     @fmacs(dest_dsr_send, src0_dsr, src1_dsr_send, -c_top);
 
     save_timestamp_end(current_level_local, timing_spmv_compute_local, TIMER_SPMV_COMPUTE);
+    // Roofline: bottom(zDim-1) + top(zDim-1) + center(zDim) + 2 boundary(1 each) = 3*zDim
+    counter_fmac += @as(u32, zDim) * 3;
 }
 
 // If both SEND and RECV are done, perform
@@ -619,11 +645,12 @@ task f_recv() void {
         }else{
             //@mov32(mem_west_buf_dsd, fab_recv_west_wdsd, .{.async=true, .activate = f_recv });
             if (inactive_horizontal){
-                // forward data from WEST to EAST  
-                // @load_to_dsr(dest_dsr_recv, fab_trans_east_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = out_ut }); 
+                // forward data from WEST to EAST (router→router, no CE involvement)
                 @load_to_dsr(dest_dsr_recv, fab_trans_east_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = in_ut});
-                @load_to_dsr(src1_dsr_recv, fab_recv_west_wdsd, .{.async=true}); 
+                @load_to_dsr(src1_dsr_recv, fab_recv_west_wdsd, .{.async=true});
             }else{
+                // Active PE: fabric load (router→CE→SRAM) — count BEFORE async mov32
+                counter_fmov32 += @as(u32, cur_length);
                 @load_to_dsr(dest_dsr_recv, mem_west_buf_dsd);
                 @load_to_dsr(src1_dsr_recv, fab_recv_west_wdsd, .{.async=true, .activate = f_recv });
             }
@@ -635,11 +662,12 @@ task f_recv() void {
         if (!is_pe_inside_grid or px == @as(i16, last_active_px)){
             @activate(RECV); // nothing to receive
         }else{
-            //@mov32(mem_east_buf_dsd, fab_recv_east_wdsd, .{.async=true, .activate = f_recv });
             if (inactive_horizontal){
                 @load_to_dsr(dest_dsr_recv, fab_trans_west_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = in_ut});
                 @load_to_dsr(src1_dsr_recv, fab_recv_east_wdsd, .{.async=true});
             }else{
+                // Active PE: fabric load (router→CE→SRAM)
+                counter_fmov32 += @as(u32, cur_length);
                 @load_to_dsr(dest_dsr_recv, mem_east_buf_dsd);
                 @load_to_dsr(src1_dsr_recv, fab_recv_east_wdsd, .{.async=true, .activate = f_recv });
             }
@@ -651,12 +679,13 @@ task f_recv() void {
         if (py == @as(i16, last_active_py) or !is_pe_inside_grid){
             @activate(RECV); // nothing to receive
         }else{
-            //@mov32(mem_south_buf_dsd, fab_recv_south_wdsd, .{.async=true, .activate = f_recv });
             if (inactive_vertical){
-                // forward data from SOUTH to NORTH
+                // forward data from SOUTH to NORTH (router→router, no CE involvement)
                 @load_to_dsr(dest_dsr_recv, fab_trans_north_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = in_ut});
-                @load_to_dsr(src1_dsr_recv, fab_recv_south_wdsd, .{.async=true}); 
+                @load_to_dsr(src1_dsr_recv, fab_recv_south_wdsd, .{.async=true});
             }else{
+                // Active PE: fabric load (router→CE→SRAM)
+                counter_fmov32 += @as(u32, cur_length);
                 @load_to_dsr(dest_dsr_recv, mem_south_buf_dsd);
                 @load_to_dsr(src1_dsr_recv, fab_recv_south_wdsd, .{.async=true, .activate = f_recv });
             }
@@ -665,16 +694,16 @@ task f_recv() void {
         recv_state = RECV_STATE_NORTH;
     }else if (RECV_STATE_NORTH == recv_state){ // receive from north
         // The first PE of y-dir has no north neighbor so it does not receive data from the north
-        if (py == @as(i16, first_active_py) or !is_pe_inside_grid){   // Doesn't include last active py as it can handle receive.
+        if (py == @as(i16, first_active_py) or !is_pe_inside_grid){
             @activate(RECV); // nothing to receive
         }else{
-            //@mov32(mem_north_buf_dsd, fab_recv_north_wdsd, .{.async=true, .activate = f_recv });
             if (inactive_vertical){
-                // forward data from NORTH to SOUTH
-                // @load_to_dsr(dest_dsr_recv, fab_trans_south_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = out_ut });
+                // forward data from NORTH to SOUTH (router→router, no CE involvement)
                 @load_to_dsr(dest_dsr_recv, fab_trans_south_wdsd, .{.async=true, .activate = f_actv_send_recv, .ut_id = in_ut});
                 @load_to_dsr(src1_dsr_recv, fab_recv_north_wdsd, .{.async=true});
             }else{
+                // Active PE: fabric load (router→CE→SRAM)
+                counter_fmov32 += @as(u32, cur_length);
                 @load_to_dsr(dest_dsr_recv, mem_north_buf_dsd);
                 @load_to_dsr(src1_dsr_recv, fab_recv_north_wdsd, .{.async=true, .activate = f_recv });
             }
@@ -797,11 +826,12 @@ task f_comm() void {
         
         save_timestamp_end(current_level_local, timing_spmv_total_local, TIMER_SPMV_TOTAL);   // compute + communication
 
-        // const offset: i16 = current_level_local * timer_stencil.tsc_size_words;
-        // timer_stencil.subtract_timestamps(@ptrcast(*[timer_stencil.tsc_size_words]u16, &timing_spmv_total_local[offset]), 
-        //                     @ptrcast(*[timer_stencil.tsc_size_words]u16, &timing_spmv_communication_local[offset]), 
-        //                     @ptrcast(*[timer_stencil.tsc_size_words]u16, &timing_spmv_compute_local[offset]));  // result = a - b , therefore compute = total - communication
-        
+        // Flush roofline counters to caller
+        local_count_fneg_ptr.* += counter_fneg;
+        local_count_fmac_ptr.* += counter_fmac;
+        local_count_fmov_ptr.* += counter_fmov;
+        local_count_fmov32_ptr.* += counter_fmov32;
+
         //sys_mod.unblock_cmd_stream();
         f_callback();
     }

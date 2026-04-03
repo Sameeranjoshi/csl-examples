@@ -79,7 +79,10 @@ def parse_wse3_responses(filepath):
         iterations = int(m_iter.group(1))
 
         # Extract average V-cycle time in microseconds
-        m_avg = re.search(r'1-V cycle time\(Average\)\s*\(us\[cycles\]\)\s*:\s*([\d.]+)us', block)
+        m_avg = re.search(
+            r'(?:Wall time per V-cycle \(total / iterations\)|1-V cycle time\(Average\)\s*\(us\[cycles\]\))\s*:\s*([\d.]+)\s*us',
+            block,
+        )
         if not m_avg:
             continue
         avg_vcycle_us = float(m_avg.group(1))

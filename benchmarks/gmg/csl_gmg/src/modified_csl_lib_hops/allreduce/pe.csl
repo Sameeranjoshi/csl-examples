@@ -301,6 +301,20 @@ const src1_dsr = @get_dsr(dsr_src1, src1_dsr_ids[0]);
 const iq_route = @get_input_queue(queues[0]);
 const oq_route = @get_output_queue(queues[0]);
 
+// Roofline counter pointers (set by caller via setCounterPtrs before each allreduce call)
+var dummy_counter: u32 = 0;
+var local_count_fadd_ptr: *u32 = &dummy_counter;
+var local_count_fmax_ptr: *u32 = &dummy_counter;
+var local_count_fmov_ptr: *u32 = &dummy_counter;
+var local_count_fmov32_ptr: *u32 = &dummy_counter;
+
+fn setCounterPtrs(count_fadd: *u32, count_fmax: *u32, count_fmov: *u32, count_fmov32: *u32) void {
+    local_count_fadd_ptr = count_fadd;
+    local_count_fmax_ptr = count_fmax;
+    local_count_fmov_ptr = count_fmov;
+    local_count_fmov32_ptr = count_fmov32;
+}
+
 // The portal function of allreduce(ADD/MAX)
 //
 // How to use:
@@ -722,6 +736,7 @@ fn broadcast_to_all( n: u16 ) void {
     if ( last_px and last_py ){
         // Pw-1,h-1 sends data and then f_send_ctrl sends a TD
         // f_send_ctrl() will unblock LOCK
+        // @mov32 fabric send — not counted (receive-side only convention)
         //@mov32(fab_trans_x_wdsd, mem_x_buf_dsd, .{.async=true, .activate=f_send_ctrl} );
         @load_to_dsr(dest_dsr, fab_trans_x_wdsd, .{.async=true, .activate=f_send_ctrl} );
         @load_to_dsr(src1_dsr, mem_x_buf_dsd);
@@ -729,6 +744,8 @@ fn broadcast_to_all( n: u16 ) void {
     }else{
         // other PEs receive data and wait for TD
         // unblock LOCK after data is received, T29 will activate LOCK
+        // @mov32 fabric receive — count as fabric load only (not fmov)
+        local_count_fmov32_ptr.* += @as(u32, wvlts_per_pe);
         //@mov32(mem_x_buf_dsd, fab_recv_wdsd, .{.async=true, .unblock=C_LOCK} );
         @load_to_dsr(dest_dsr, mem_x_buf_dsd);
         @load_to_dsr(src1_dsr, fab_recv_wdsd, .{.async=true, .unblock=C_LOCK} );
@@ -765,12 +782,15 @@ fn broadcast_to_all_inside_window( n: u16 ) void {
     if (is_sender) {
         // Top-left PE of window sends data and then f_send_ctrl sends a TD
         // f_send_ctrl() will unblock LOCK
+        // @mov32 fabric send — not counted (receive-side only convention)
         @load_to_dsr(dest_dsr, fab_trans_x_wdsd, .{.async=true, .activate=f_send_ctrl} );
         @load_to_dsr(src1_dsr, mem_x_buf_dsd);
         @mov32(dest_dsr, src1_dsr, .{.async=true} );
     } else if (in_window) {
         // Other PEs in window receive data and wait for TD
         // unblock LOCK after data is received, T29 will activate LOCK
+        // @mov32 fabric receive — count as fabric load only (not fmov)
+        local_count_fmov32_ptr.* += @as(u32, wvlts_per_pe);
         @load_to_dsr(dest_dsr, mem_x_buf_dsd);
         @load_to_dsr(src1_dsr, fab_recv_wdsd, .{.async=true, .unblock=C_LOCK} );
         @mov32(dest_dsr, src1_dsr, .{.async=true} );
@@ -827,6 +847,13 @@ task f_send_data() void {
         // reduce_pes is set to (active_pes_x - 1) or (active_pes_y - 1)
         // So we only receive from active PEs
         if (count_recv_or_send < reduce_pes){
+            // Roofline: count fabric receive and compute op
+            local_count_fmov32_ptr.* += @as(u32, wvlts_per_pe);
+            if (TYPE_BINARY_OP.ADD == functor){
+                local_count_fadd_ptr.* += @as(u32, wvlts_per_pe);
+            } else {
+                local_count_fmax_ptr.* += @as(u32, wvlts_per_pe);
+            }
             //@fadds(mem_x_buf_dsd, mem_x_buf_dsd, fab_recv_wdsd, .{.async=true, .activate=f_send_data} );
             @load_to_dsr(src1_dsr, fab_recv_wdsd, .{.async=true, .activate=f_send_data} );
             @load_to_dsr(src0_dsr, mem_x_buf_dsd);
@@ -846,6 +873,7 @@ task f_send_data() void {
     }else{
         // other PE (not last PE): ALL PEs must send/forward to keep chain alive
         if (count_recv_or_send < 1){
+            // @mov32 fabric send — not counted (receive-side only convention)
             //@mov32(fab_trans_x_wdsd, mem_x_buf_dsd, .{.async=true, .activate=f_send_ctrl} );
             @load_to_dsr(dest_dsr, fab_trans_x_wdsd, .{.async=true, .activate=f_send_ctrl} );
             @load_to_dsr(src1_dsr, mem_x_buf_dsd);

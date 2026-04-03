@@ -104,8 +104,10 @@ def parse_configuration_summary(text: str) -> List[Dict]:
         if iter_match:
             data['device_iterations'] = int(iter_match.group(1))
         
-        # Extract 1-V cycle time(Average)
-        vcycle_avg_match = re.search(r'1-V cycle time\(Average\)\s*\(us\[cycles\]\):\s*([\d.]+)\s*us', section)
+        vcycle_avg_match = re.search(
+            r'(?:Wall time per V-cycle \(total / iterations\)|1-V cycle time\(Average\)\s*\(us\[cycles\]\))\s*:\s*([\d.]+)\s*us',
+            section,
+        )
         if vcycle_avg_match:
             data['vcycle_avg_time_us'] = float(vcycle_avg_match.group(1))
         else:

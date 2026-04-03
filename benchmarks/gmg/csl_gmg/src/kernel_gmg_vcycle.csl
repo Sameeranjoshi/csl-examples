@@ -20,7 +20,7 @@ const MAX_ITERATIONS: i16 = 60;  // Maximum iterations for storing rho history, 
 const math_lib = @import_module("<math>");
 const blas_lib = @import_module("blas.csl"); // modified reduced some code.
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
-const timer = @import_module("timer_modified.csl", .{ .timerCount = 10 });
+const timer = @import_module("timer_modified.csl", .{ .timerCount = 12 });
 const layout_mod = @import_module("<layout>");
 const simprint = @import_module("<simprint>", .{.enable = true});
 // const timestamp = @import_module("<time>");
@@ -90,6 +90,9 @@ const TIMER_ID_INTERP_ADD: i16 = 7;
 // Smoothing micro-benchmark timers (inside TIMER_ID_SMOOTH)
 const TIMER_ID_SMOOTH_APPLY: i16 = 8;   // f_apply_operator (stencil SPMV)
 const TIMER_ID_SMOOTH_UPDATE: i16 = 9;  // f_jacobi_smooth
+// Setup and convergence timers (to close the timing gap)
+const TIMER_ID_SETUP: i16 = 10;         // f_setup_level overhead
+const TIMER_ID_CONVERGENCE: i16 = 11;   // convergence check (SpMV + residual + allreduce at L0)
 
 
 
@@ -148,6 +151,8 @@ var timing_interp_add = @zeros([LEVELS * timer.tsc_size_words]u16);       // int
 var timing_spmv_total = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv total accumulated elapsed timing
 var timing_spmv_communication = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv communication accumulated elapsed timing
 var timing_spmv_compute = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv compute accumulated elapsed timing
+var timing_setup = @zeros([LEVELS * timer.tsc_size_words]u16);           // f_setup_level overhead per level
+var timing_convergence = @zeros([LEVELS * timer.tsc_size_words]u16);     // convergence check (SpMV+residual+allreduce at L0)
 var time_total_start_end_u16 = @zeros([timer.tsc_size_words]u16);   // this is also elapsed time for entire V-cycle, 1 level
 
 
@@ -160,9 +165,24 @@ var counter_restrict = @zeros([LEVELS]u32);     // Number of restriction operati
 var counter_interp = @zeros([LEVELS]u32);       // Number of interpolation operations per level
 var counter_setup_init = @zeros([LEVELS]u32);   // Number of setup initialization operations per level
 
+// Roofline FLOP counters per level (like Table V in Ruichisai et al.)
+// Count each builtin operation type * vector length at each level
+// Memory cost: 7 arrays * LEVELS * 4 bytes = ~252 bytes for 9 levels
+var count_fsub = @zeros([LEVELS]u32);    // @fsubs: 1 FLOP, 2 loads, 1 store
+var count_fmac = @zeros([LEVELS]u32);    // @fmacs: 2 FLOPs (mul+add), 3 loads, 1 store
+var count_fmul = @zeros([LEVELS]u32);    // @fmuls: 1 FLOP, 2 loads, 1 store
+var count_fadd = @zeros([LEVELS]u32);    // @fadds: 1 FLOP, 2 loads, 1 store
+var count_fneg = @zeros([LEVELS]u32);    // @fnegs: 1 FLOP, 1 load, 1 store
+var count_fmov_mem = @zeros([LEVELS]u32);  // @fmovs mem→mem: 0 FLOPs, 1 load, 1 store = 8 B
+var count_fmov_zero = @zeros([LEVELS]u32); // @fmovs zero-fill: 0 FLOPs, 0 loads, 1 store = 4 B
+var count_fmax = @zeros([LEVELS]u32);    // @fmaxs: 1 FLOP, 1 load, 1 store
+var count_fmov32 = @zeros([LEVELS]u32);  // fabric loads: wavelets received from neighbors (router→CE)
+
 
 // State machine parameters
 var dot = @zeros([1]f32); // dummy variable for f_sync
+var dummy_u32: u32 = 0;  // dummy counter for sync (not counted in roofline)
+var roofline_measure: bool = true;  // Only measure first V-cycle (k==0) -- TODO: re-enable gating after simulator stall is fixed
 var n: i16 = 0;  // zDim
 var num_levels: i16 = 0;
 var pre_smooth_iter: i16 = 0;
@@ -199,8 +219,8 @@ var next_state: i16 = 0;
 
 
 fn f_reset() void {
+    roofline_measure = true;  // Re-enable measurement for the next run
 
-        
     // GMG data structures
     var index: i16 = 0;
     while(index < MAX_ZDIM) : (index +=1) {
@@ -248,6 +268,8 @@ fn f_reset() void {
         timing_spmv_total[index] = 0;
         timing_spmv_communication[index] = 0;
         timing_spmv_compute[index] = 0;
+        timing_setup[index] = 0;
+        timing_convergence[index] = 0;
         time_total_start_end_u16[index] = 0;
     }
 
@@ -262,6 +284,16 @@ fn f_reset() void {
         counter_restrict[index] = 0;
         counter_interp[index] = 0;
         counter_setup_init[index] = 0;
+        // Roofline counters
+        count_fsub[index] = 0;
+        count_fmac[index] = 0;
+        count_fmul[index] = 0;
+        count_fadd[index] = 0;
+        count_fneg[index] = 0;
+        count_fmov_mem[index] = 0;
+        count_fmov_zero[index] = 0;
+        count_fmax[index] = 0;
+        count_fmov32[index] = 0;
     }
 
 
@@ -340,6 +372,8 @@ var ptr_time_total_start_end: [*]u16 = &time_total_start_end_u16;
 var ptr_timing_spmv_total: [*]u16 = &timing_spmv_total;
 var ptr_timing_spmv_communication: [*]u16 = &timing_spmv_communication;
 var ptr_timing_spmv_compute: [*]u16 = &timing_spmv_compute;
+var ptr_timing_setup: [*]u16 = &timing_setup;
+var ptr_timing_convergence: [*]u16 = &timing_convergence;
 
 // counter pointers
 var ptr_counter_smooth: [*]u32 = &counter_smooth;
@@ -350,6 +384,16 @@ var ptr_counter_interp: [*]u32 = &counter_interp;
 var ptr_counter_setup_init: [*]u32 = &counter_setup_init;
 var ptr_counter_rho_check: [*]u32 = &counter_rho_check;
 var ptr_rho_history: [*]f32 = &rho_history;
+// Roofline counter pointers
+var ptr_count_fsub: [*]u32 = &count_fsub;
+var ptr_count_fmac: [*]u32 = &count_fmac;
+var ptr_count_fmul: [*]u32 = &count_fmul;
+var ptr_count_fadd: [*]u32 = &count_fadd;
+var ptr_count_fneg: [*]u32 = &count_fneg;
+var ptr_count_fmov_mem: [*]u32 = &count_fmov_mem;
+var ptr_count_fmov_zero: [*]u32 = &count_fmov_zero;
+var ptr_count_fmax: [*]u32 = &count_fmax;
+var ptr_count_fmov32: [*]u32 = &count_fmov32;
 // var ptr_rho: [*]f32 = &rho;
 
 //----------------------------------------------------//---------------------------------------------------
@@ -391,15 +435,17 @@ fn f_toc_total() void {
     sys_mod.unblock_cmd_stream();
 }
 
-// Timing helper functions
+// Timing helper functions — gated by roofline_measure (first V-cycle only)
 fn save_timestamp_start(timer_id: i16) void {
-    timer.start(timer_id);
+    if (roofline_measure) timer.start(timer_id);
 }
 
 fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
-    timer.stop(timer_id);
-    const offset: i16 = level * timer.tsc_size_words;
-    timer.accumulate_elapsed(timer_id, @ptrcast(*[timer.tsc_size_words]u16, &timing_array[offset]));    // 1 instruction has a cost of ~100 cycles on 512 cycles problem.
+    if (roofline_measure) {
+        timer.stop(timer_id);
+        const offset: i16 = level * timer.tsc_size_words;
+        timer.accumulate_elapsed(timer_id, @ptrcast(*[timer.tsc_size_words]u16, &timing_array[offset]));
+    }
 }
 //-------------------------------------------------
 // GMG KERNELS
@@ -407,9 +453,15 @@ fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
 
 // Apply operator for Jacobi smoothing
 fn f_apply_operator() void {
-    counter_apply_op[current_level] += 1;
-    @fmovs(mem_Au_dsd, 0.0);
-    stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute);
+    @fmovs(mem_Au_dsd, 0.0);                                   // zero-fill Au
+    if (roofline_measure) {
+        count_fmov_zero[current_level] += @as(u32, n);
+        counter_apply_op[current_level] += 1;
+        stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute, &count_fneg[current_level], &count_fmac[current_level], &count_fmov_zero[current_level], &count_fmov32[current_level]);
+    } else {
+        stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute, &dummy_u32, &dummy_u32, &dummy_u32, &dummy_u32);
+    }
+    // NOTE: spmv triggers callback when done — code below this line is DEAD in async dataflow
 }
 
 // Jacobi smoothing: u = u + JACOBI_COEFF * (f - Au)
@@ -417,14 +469,18 @@ fn f_jacobi_smooth() void {
     counter_smooth[current_level] += 1;
     const jacobi_coeff: f32 = jacobi_coeff_array[current_level];
     if (is_active_pe) {
-        // Use r as temporary buffer: r is set to 0 in f_setup_level() and not used
-        // until f_residual() is called, which happens after all smoothing iterations
         @fsubs(mem_r_dsd, mem_f_dsd, mem_Au_dsd);
         @fmacs(mem_u_dsd, mem_u_dsd, mem_r_dsd, jacobi_coeff);
+        if (roofline_measure) {
+            count_fsub[current_level] += @as(u32, n);
+            count_fmac[current_level] += @as(u32, n);
+        }
     } else {
-        @fmovs(mem_u_dsd, 0.0);
+        @fmovs(mem_u_dsd, 0.0);                                // zero-fill u (inactive)
+        if (roofline_measure) count_fmov_zero[current_level] += @as(u32, n);
     }
-    @fmovs(mem_save_u_smooth_dsd, mem_u_dsd);
+    @fmovs(mem_save_u_smooth_dsd, mem_u_dsd);                  // mem→mem copy
+    if (roofline_measure) count_fmov_mem[current_level] += @as(u32, n);
 }
 
 // Calculate residual: r = f - Au
@@ -432,22 +488,31 @@ fn f_residual() void {
     counter_residual[current_level] += 1;
     if (is_active_pe) {
         @fsubs(mem_r_dsd, mem_f_dsd, mem_Au_dsd);
+        if (roofline_measure) count_fsub[current_level] += @as(u32, n);
     } else {
-        @fmovs(mem_r_dsd, 0.0);
+        @fmovs(mem_r_dsd, 0.0);                                // zero-fill r (inactive)
+        if (roofline_measure) count_fmov_zero[current_level] += @as(u32, n);
     }
 }
 
 // Calculate rho: rho = MAX|r| at level 0 (for convergence checking)
-// This matches the Python implementation which uses np.max(np.abs(residual_3d.flatten())))
 fn f_compute_rho() void {
-        // Compute max(r) locally for this PE (not absolute value, to match host)
-        // Find maximum of r locally
-        rho[0] = math_lib.abs(r[0]);  // Initialize with first element
+        rho[0] = math_lib.abs(r[0]);
+        if (roofline_measure) {
+            reduce_mod.setCounterPtrs(&count_fadd[current_level], &count_fmax[current_level], &count_fmov_zero[current_level], &count_fmov32[current_level]);
+        } else {
+            reduce_mod.setCounterPtrs(&dummy_u32, &dummy_u32, &dummy_u32, &dummy_u32);
+        }
         reduce_mod.allreduce(1, &rho, reduce_mod.TYPE_BINARY_OP.MAX);
 }
 
 // Restrict the window into top left PE.
 fn f_reduce_row_col_top_left() void {
+    if (roofline_measure) {
+        reduce_mod.setCounterPtrs(&count_fadd[current_level], &count_fmax[current_level], &count_fmov_zero[current_level], &count_fmov32[current_level]);
+    } else {
+        reduce_mod.setCounterPtrs(&dummy_u32, &dummy_u32, &dummy_u32, &dummy_u32);
+    }
     reduce_mod.reduce_row_col_top_left(n, &r, reduce_mod.TYPE_BINARY_OP.ADD);
 }
 
@@ -479,18 +544,20 @@ fn f_restriction_division() void {
         mem_f_coarse_dsd = @set_dsd_length(mem_f_coarse_dsd, @bitcast(u16, coarse_n));
         
         // Sum pairs in z: f[coarse_idx] = (r[2*coarse_idx] + r[2*coarse_idx+1]) / 8
-        // First, copy even indices (0, 2, 4, 6, ...) to f
         @fmovs(mem_f_coarse_dsd, mem_r_even_dsd);
-        // Then add odd indices (1, 3, 5, 7, ...) to get pairs summed
         @fadds(mem_f_coarse_dsd, mem_f_coarse_dsd, mem_r_odd_dsd);
-        
-        // Divide by 8 total: 4 (for x,y averaging from 2x2 window) * 2 (for z pair averaging)
-        // This completes full 2x2x2 coarsening: average 8 fine points to 1 coarse point
-        const inv_total: f32 = 1.0 / 8.0;  // 1/(4*2) for full 2x2x2 coarsening
+        const inv_total: f32 = 1.0 / 8.0;
         @fmuls(mem_f_coarse_dsd, mem_f_coarse_dsd, inv_total);
-        @fmovs(mem_f_dsd, mem_f_coarse_dsd);    // not same size, will this work?
+        @fmovs(mem_f_dsd, mem_f_coarse_dsd);
+        if (roofline_measure) {
+            count_fmov_mem[current_level] += @as(u32, coarse_n);   // copy even→f
+            count_fadd[current_level] += @as(u32, coarse_n);
+            count_fmul[current_level] += @as(u32, coarse_n);
+            count_fmov_mem[current_level] += @as(u32, coarse_n);   // copy f_coarse→f
+        }
     } else {
         @fmovs(mem_f_dsd, 0.0);
+        if (roofline_measure) count_fmov_zero[current_level] += @as(u32, n);
     }
 
 }
@@ -511,23 +578,22 @@ fn f_interpolation_expand_z() void {
     var mem_r_coarse_dsd = @set_dsd_base_addr(mem_r_dsd, &r);
     mem_r_coarse_dsd = @set_dsd_length(mem_r_coarse_dsd, @bitcast(u16, coarse_n));
     @fmovs(mem_r_coarse_dsd, mem_u_coarse_dsd);  // Save coarse values
-    
+
     // Create strided DSDs to write to even and odd positions
-    // DSD for even indices: 0, 2, 4, 6, ... (stride 2, starting at offset 0)
     var mem_u_even_dsd = @set_dsd_base_addr(mem_u_dsd, &u);
     mem_u_even_dsd = @set_dsd_length(mem_u_even_dsd, @bitcast(u16, coarse_n));
-    mem_u_even_dsd = @set_dsd_stride(mem_u_even_dsd, 2);  // Write to 0, 2, 4, 6, ...
-    
-    // DSD for odd indices: 1, 3, 5, 7, ... (stride 2, starting at offset 1)
+    mem_u_even_dsd = @set_dsd_stride(mem_u_even_dsd, 2);
+
     var mem_u_odd_dsd = @set_dsd_base_addr(mem_u_dsd, &u);
-    mem_u_odd_dsd = @increment_dsd_offset(mem_u_odd_dsd, 1, f32);  // Start at index 1
+    mem_u_odd_dsd = @increment_dsd_offset(mem_u_odd_dsd, 1, f32);
     mem_u_odd_dsd = @set_dsd_length(mem_u_odd_dsd, @bitcast(u16, coarse_n));
-    mem_u_odd_dsd = @set_dsd_stride(mem_u_odd_dsd, 2);  // Write to 1, 3, 5, 7, ...
-    
-    // Copy coarse values to even positions (0, 2, 4, 6, ...)
+    mem_u_odd_dsd = @set_dsd_stride(mem_u_odd_dsd, 2);
+
     @fmovs(mem_u_even_dsd, mem_r_coarse_dsd);
-    // Copy coarse values to odd positions (1, 3, 5, 7, ...)
     @fmovs(mem_u_odd_dsd, mem_r_coarse_dsd);
+    if (roofline_measure) {
+        count_fmov_mem[current_level] += @as(u32, coarse_n) * 3;  // save + even + odd (all mem→mem)
+    }
     
     // Now u has fine z dimension n with duplicated values
     // Update mem_u_dsd to reflect fine z dimension (n)
@@ -540,13 +606,20 @@ fn f_interpolation_add() void {
     counter_interp[current_level] += 1;
     if (is_active_pe) {
         @fadds(mem_u_dsd, mem_u_dsd, mem_save_u_smooth_dsd);
+        if (roofline_measure) count_fadd[current_level] += @as(u32, n);
     } else {
-        @fmovs(mem_u_dsd, 0.0); // TODO: OPTIMIZEME - save memory copy
+        @fmovs(mem_u_dsd, 0.0);
+        if (roofline_measure) count_fmov_zero[current_level] += @as(u32, n);
     }
 }
 
 // Broadcast the coarse solution to all fine points in the window.
 fn f_bcast_from_top_left() void {
+    if (roofline_measure) {
+        reduce_mod.setCounterPtrs(&count_fadd[current_level], &count_fmax[current_level], &count_fmov_zero[current_level], &count_fmov32[current_level]);
+    } else {
+        reduce_mod.setCounterPtrs(&dummy_u32, &dummy_u32, &dummy_u32, &dummy_u32);
+    }
     reduce_mod.broadcast_from_top_left(n, &u, current_level, &timing_bcast_configure, &timing_bcast_to_all);
 }
 
@@ -569,7 +642,7 @@ fn f_init_spmv_and_reduce(level_id: u16) void {
 
 // Setup the level parameters.
 fn f_setup_level(level_id: u16, down: i16) void {
-    // save_timestamp_start(TIMER_ID_SETUP_INIT);
+    save_timestamp_start(TIMER_ID_SETUP);
     counter_setup_init[current_level] += 1;
 
     // TODO: OPTIMIZEME - use DSR or DSDs or do once.
@@ -620,25 +693,25 @@ fn f_setup_level(level_id: u16, down: i16) void {
     
     // SAVE AND RESTORE
     if (down == 1) {
-        // Only reset u to 0 if we're not at level 0, or if we're at level 0 and it's the first iteration (k == 0)
-        // At level 0, for subsequent iterations, we want to preserve the solution from the previous iteration
         if (level_id != 0) {
-            @fmovs(mem_u_dsd, 0.0);
+            @fmovs(mem_u_dsd, 0.0);                                    // zero-fill u
+            if (roofline_measure) count_fmov_zero[current_level] += @as(u32, n);
         }
-        // CRITICAL: At level 0, for subsequent iterations (k > 0), restore original RHS from save_f_down
-        // before saving it again. This ensures f is always the original RHS at the start of each V-cycle.
         if (level_id == 0 and k > 0) {
-            @fmovs(mem_f_dsd, mem_save_f_down_dsd);  // Restore original RHS from first iteration
+            @fmovs(mem_f_dsd, mem_save_f_down_dsd);                    // restore f (mem→mem)
+            if (roofline_measure) count_fmov_mem[current_level] += @as(u32, n);
         }
-        @fmovs(mem_save_f_down_dsd, mem_f_dsd);  // Save current f (RHS for this level)
+        @fmovs(mem_save_f_down_dsd, mem_f_dsd);                        // save f (mem→mem)
+        if (roofline_measure) count_fmov_mem[current_level] += @as(u32, n);
     } else {
-        // Up cycle: restore the f values saved during down cycle
-        @fmovs(mem_f_dsd, mem_save_f_down_dsd);
+        @fmovs(mem_f_dsd, mem_save_f_down_dsd);                        // restore f (mem→mem)
+        if (roofline_measure) count_fmov_mem[current_level] += @as(u32, n);
     }
-    
-    @fmovs(mem_r_dsd, 0.0);
 
-    // save_timestamp_end(current_level, &timing_setup_init, TIMER_ID_SETUP_INIT);
+    @fmovs(mem_r_dsd, 0.0);                                            // zero-fill r
+    if (roofline_measure) count_fmov_zero[current_level] += @as(u32, n);
+
+    save_timestamp_end(current_level, &timing_setup, TIMER_ID_SETUP);
 }
 
 // ------------------------------------------------
@@ -686,8 +759,9 @@ fn f_trigger_state_machine() void {
 
 task f_state() void {
     if (STATE_SYNC == cur_state) {
-        // sync all PEs by internal allreduce module
+        // sync all PEs by internal allreduce module — NOT part of V-cycle, don't count in roofline
         next_state = STATE_EXIT;
+        reduce_mod.setCounterPtrs(&dummy_u32, &dummy_u32, &dummy_u32, &dummy_u32);
         reduce_mod.allreduce(1, &dot, reduce_mod.TYPE_BINARY_OP.ADD);
     }
     else if (STATE_INIT == cur_state) {
@@ -891,10 +965,10 @@ task f_state() void {
         // 1. f is restored to original RHS from save_f_down
         // 2. DSD lengths (n) are correct for level 0
         // 3. Stencil coefficients are correct for level 0
+        save_timestamp_start(TIMER_ID_CONVERGENCE);
         f_setup_level(@as(u16, current_level), 0); // down=False, restores f from save_f_down
         next_state = STATE_RESIDUAL_AFTER_V_CYCLE_COMPUTE;
-        
-        // timer.start(TIMER_ID_RHO_CHECK);
+
         f_apply_operator();
         
     } else if (STATE_RESIDUAL_AFTER_V_CYCLE_COMPUTE == cur_state) {
@@ -919,17 +993,19 @@ task f_state() void {
         // if max(r) < tol, then exit
         // if (rho > tolerance) and (k < max_iter), continue
         // This matches the Python implementation: while (xi_max > self.rel_tolerance) and (iterations < max_iter)
+        save_timestamp_end(current_level, &timing_convergence, TIMER_ID_CONVERGENCE);
         k = k + 1;
+        // After first V-cycle (k transitions 0→1), stop all roofline measurement.
+        // Subsequent iterations run without timer/counter overhead.
+        roofline_measure = false;
         if ((rho[0] > tolerance) and (k < max_iter)) {
             // Not converged and iterations remaining: increment counter and start next V-cycle
             next_state = STATE_INIT;
         } else {
             // Converged or max iterations reached: exit
             next_state = STATE_EXIT;
-            // f_toc_total();
 
         }
-        // save_timestamp_end(current_level, &timing_rho_check, TIMER_ID_RHO_CHECK);
         counter_rho_check[current_level] += 1;
         // print_time_debug();
         f_trigger_state_machine();
@@ -983,6 +1059,8 @@ comptime {
     @export_symbol(ptr_timing_spmv_total, "timing_spmv_total");
     @export_symbol(ptr_timing_spmv_communication, "timing_spmv_communication");
     @export_symbol(ptr_timing_spmv_compute, "timing_spmv_compute");
+    @export_symbol(ptr_timing_setup, "timing_setup");
+    @export_symbol(ptr_timing_convergence, "timing_convergence");
 
 
     // counters
@@ -995,6 +1073,16 @@ comptime {
     @export_symbol(ptr_counter_rho_check, "counter_rho_check");
     @export_symbol(ptr_rho_history, "rho_history");
     // @export_symbol(ptr_rho, "rho");
+    // Roofline FLOP counters
+    @export_symbol(ptr_count_fsub, "count_fsub");
+    @export_symbol(ptr_count_fmac, "count_fmac");
+    @export_symbol(ptr_count_fmul, "count_fmul");
+    @export_symbol(ptr_count_fadd, "count_fadd");
+    @export_symbol(ptr_count_fneg, "count_fneg");
+    @export_symbol(ptr_count_fmov_mem, "count_fmov_mem");
+    @export_symbol(ptr_count_fmov_zero, "count_fmov_zero");
+    @export_symbol(ptr_count_fmax, "count_fmax");
+    @export_symbol(ptr_count_fmov32, "count_fmov32");
 
 }
 

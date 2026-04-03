@@ -111,7 +111,6 @@ def analyze_memory():
     print("-" * 70)
     counter_arrays = {
         "counter_smooth": LEVELS * 2,
-        "counter_apply_op": LEVELS * 2,
         "counter_residual": LEVELS * 2,
         "counter_restrict": LEVELS * 2,
         "counter_interp": LEVELS * 2,
