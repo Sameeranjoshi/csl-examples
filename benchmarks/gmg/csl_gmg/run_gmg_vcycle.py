@@ -617,32 +617,31 @@ def main():
     timing_spmv_compute_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_spmv_compute, WORDS_PER_TIMESTAMP, "spmv_compute")
     timing_setup_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_setup, WORDS_PER_TIMESTAMP, "setup")
     timing_convergence_data = copy_timing_make_48bit(height, width, args.levels, simulator, symbol_timing_convergence, WORDS_PER_TIMESTAMP, "convergence")
-    # counter_one = np.array([1]) # Because we have only 1 level
-    # ones = np.ones(args.levels, dtype=int)
     timing_total_start_end_data = copy_timing_make_48bit(height, width,1, simulator, symbol_time_total_start_end, WORDS_PER_TIMESTAMP, "total")
 
     counter_rho_check = copy_counters(height, width, args.levels, simulator, symbol_counter_rho_check)
-    # FMOV32 counter (u32) — @mov32 fabric receives: data received from other PEs
-    count_fmov32_1d = np.zeros(1*1*args.levels, dtype=np.uint32)
-    simulator.memcpy_d2h(count_fmov32_1d, symbol_count_fmov32, 0, 0, 1, 1, args.levels,
-                        streaming=False, data_type=MemcpyDataType.MEMCPY_32BIT,
-                        order=MemcpyOrder.COL_MAJOR, nonblock=False)
-
-    # Roofline FLOP counters (use u32 path — values can exceed 65535)
+    # Read roofline counters using MEMCPY_16BIT with width×height region
+    # (u32 read as 2×u16 words — avoids MEMCPY_32BIT call limit on small grids)
     roofline_counters = {}
     for name, sym in [('fsub', symbol_count_fsub), ('fmac', symbol_count_fmac),
                       ('fmul', symbol_count_fmul), ('fadd', symbol_count_fadd),
                       ('fneg', symbol_count_fneg), ('fmov_mem', symbol_count_fmov_mem),
                       ('fmov_zero', symbol_count_fmov_zero),
-                      ('fmax', symbol_count_fmax)]:
-        counter_1d = np.zeros(1*1*args.levels, dtype=np.uint32)
-        simulator.memcpy_d2h(counter_1d, sym, 0, 0, 1, 1, args.levels,
-                            streaming=False, data_type=MemcpyDataType.MEMCPY_32BIT,
+                      ('fmax', symbol_count_fmax),
+                      ('fmov32', symbol_count_fmov32)]:
+        n_words = args.levels * 2  # 2 u16 words per u32 element
+        buf = np.zeros(height * width * n_words, dtype=np.uint32)
+        simulator.memcpy_d2h(buf, sym, 0, 0, width, height, n_words,
+                            streaming=False, data_type=MemcpyDataType.MEMCPY_16BIT,
                             order=MemcpyOrder.COL_MAJOR, nonblock=False)
-        # Keep as u32 — don't use oned_to_hwl_colmajor which truncates to u16
-        # For 1x1 PE region, column-major is just the array itself
-        roofline_counters[name] = counter_1d
-    roofline_counters['fmov32'] = count_fmov32_1d
+        hwl = oned_to_hwl_colmajor(width, height, n_words, buf, np.uint16)
+        pe00 = hwl[0, 0, :]
+        vals = np.zeros(args.levels, dtype=np.uint32)
+        for lv in range(args.levels):
+            lo = int(pe00[lv * 2])
+            hi = int(pe00[lv * 2 + 1])
+            vals[lv] = lo | (hi << 16)
+        roofline_counters[name] = vals
 
     ###########################################################
     # Convergence

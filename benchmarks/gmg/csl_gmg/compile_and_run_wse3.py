@@ -434,7 +434,7 @@ def main():
 
         # 6/6/6
         # ls -d out_dir_S*x*_P6_P6_B6 | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_6_6_6.txt
-        #  (4, 2, 100, 1e-5, 6, 6, 6),   # Tiny problem
+         (4, 2, 100, 1e-5, 6, 6, 6),   # Tiny problem
         #  (8, 3, 100, 1e-5, 6, 6, 6),   # Tiny problem
         #  (16, 4, 100, 1e-5, 6, 6, 6),   # Small problem
         #  (32, 5, 100, 1e-5, 6, 6, 6),   # Small problem
