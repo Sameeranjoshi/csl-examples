@@ -47,35 +47,24 @@ def copy_data_d2h(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
     # total_bytes = u_wse_1d.nbytes + r_wse_1d.nbytes + rho_wse.nbytes
     # return u_wse_1d, r_wse_1d, rho_wse[0], rho_history_array, total_bytes
 
-def copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_f, symbol_hx_array, symbol_hy_array, symbol_hz_array, symbol_jacobi_coeff_array, device_solver, args):
+def copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, symbol_u, symbol_f, symbol_hx_array, symbol_jacobi_coeff_array, device_solver, args):
     """
-    Copies problem and grid spacing data to device, but now
-    for hx/hy/hz/jacobi_coeff arrays, repeats values so each PE (height x width)
-    gets a full levels-vector (across the 3rd dimension). Arranges those
-    arrays into (height, width, levels) layout for device copy.
+    Copies problem and grid spacing data to device.
+    Isotropic grid: hx=hy=hz, so only hx_array is sent (hy/hz removed from kernel).
     """
     # Prepare grid spacing arrays for one PE (vector length = args.levels)
-    hx_base = np.array([device_solver.grids[i]['hx'] for i in range(args.levels)], dtype=DTYPE)
-    hy_base = np.array([device_solver.grids[i]['hy'] for i in range(args.levels)], dtype=DTYPE)
-    hz_base = np.array([device_solver.grids[i]['hz'] for i in range(args.levels)], dtype=DTYPE)
-    
-    # Prepare Jacobi coefficient array for one PE
-    # Match host formula: diagonal = -2*(1/hx² + 1/hy² + 1/hz²)
-    # diag_inv = 1/diagonal = -1/(2*(1/hx² + 1/hy² + 1/hz²))
-    # update = omega * diag_inv * (f - Au) = omega * (-1/(2*(1/hx² + 1/hy² + 1/hz²))) * (f - Au)
-    # So jacobi_coeff = omega * (-1/(2*(1/hx² + 1/hy² + 1/hz²))) = -omega/(2*(1/hx² + 1/hy² + 1/hz²))
+    # Device expects 1/hx (reciprocal) to avoid float division on device
+    inv_hx_base = np.array([1.0 / device_solver.grids[i]['hx'] for i in range(args.levels)], dtype=DTYPE)
+
+    # Prepare Jacobi coefficient array for one PE (isotropic: hx=hy=hz)
     jacobi_coeff_base = np.zeros(args.levels, dtype=DTYPE)
-    omega = device_solver.omega  # 0.75
+    omega = device_solver.omega
     for level in range(args.levels):
         hx = device_solver.grids[level]['hx']
-        hy = device_solver.grids[level]['hy']
-        hz = device_solver.grids[level]['hz']
-        jacobi_coeff_base[level] = -omega / (2.0 * (1.0/(hx*hx) + 1.0/(hy*hy) + 1.0/(hz*hz)))
-    
+        jacobi_coeff_base[level] = -omega / (2.0 * (3.0/(hx*hx)))
+
     # Repeat these arrays so shape is (height, width, levels)
-    hx_array = np.tile(hx_base, (height, width, 1))
-    hy_array = np.tile(hy_base, (height, width, 1))
-    hz_array = np.tile(hz_base, (height, width, 1))
+    hx_array = np.tile(inv_hx_base, (height, width, 1))  # stores 1/hx
     jacobi_coeff_array = np.tile(jacobi_coeff_base, (height, width, 1))
 
     # Prepare u/f arrays
@@ -86,25 +75,19 @@ def copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
     # Debug: Print what we're sending
     print(f"Grid spacing and Jacobi coefficients:")
     for level in range(args.levels):
-        print(f"  Level {level}: hx={hx_base[level]:.6f}, hy={hy_base[level]:.6f}, hz={hz_base[level]:.6f}, jacobi={jacobi_coeff_base[level]:.6e}")
-    
+        hx = device_solver.grids[level]['hx']
+        print(f"  Level {level}: hx={hx:.6f}, 1/hx={inv_hx_base[level]:.6f}, jacobi={jacobi_coeff_base[level]:.6e}")
+
     # Copy spacing/jacobi arrays: flatten in COLUMN-MAJOR order to match memcpy
     hx_flat = hwl_2_oned_colmajor(height, width, args.levels, hx_array, DTYPE)
-    hy_flat = hwl_2_oned_colmajor(height, width, args.levels, hy_array, DTYPE)
-    hz_flat = hwl_2_oned_colmajor(height, width, args.levels, hz_array, DTYPE)
     jacobi_flat = hwl_2_oned_colmajor(height, width, args.levels, jacobi_coeff_array, DTYPE)
 
-    # simulator.launch("f_tic_h2d", nonblock=True)
     # Copy u and f arrays
     simulator.memcpy_h2d(symbol_u, u_1d, 0, 0, width, height, zDim,
                          streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=True)
     simulator.memcpy_h2d(symbol_f, f_1d, 0, 0, width, height, zDim,
                          streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=True)
     simulator.memcpy_h2d(symbol_hx_array, hx_flat, 0, 0, width, height, args.levels,
-                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=True)
-    simulator.memcpy_h2d(symbol_hy_array, hy_flat, 0, 0, width, height, args.levels,
-                         streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=True)
-    simulator.memcpy_h2d(symbol_hz_array, hz_flat, 0, 0, width, height, args.levels,
                          streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=True)
     simulator.memcpy_h2d(symbol_jacobi_coeff_array, jacobi_flat, 0, 0, width, height, args.levels,
                          streaming=False, data_type=memcpy_dtype, order=memcpy_order, nonblock=True)
@@ -113,8 +96,6 @@ def copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, sy
         u_1d.nbytes
         + f_1d.nbytes
         + hx_flat.nbytes
-        + hy_flat.nbytes
-        + hz_flat.nbytes
         + jacobi_flat.nbytes
     )
 
@@ -515,8 +496,7 @@ def main():
     symbol_f = simulator.get_id("f")
     symbol_r = simulator.get_id("r")
     symbol_hx_array = simulator.get_id("hx_array")
-    symbol_hy_array = simulator.get_id("hy_array")
-    symbol_hz_array = simulator.get_id("hz_array")
+    # hy_array, hz_array removed — isotropic grid uses hx_array only
     symbol_jacobi_coeff_array = simulator.get_id("jacobi_coeff_array")
     symbol_timing_smooth = simulator.get_id("timing_smooth")
     symbol_timing_smooth_apply = simulator.get_id("timing_smooth_apply")
@@ -573,7 +553,7 @@ def main():
     ############################################################
    # Timing measures inside the function
     copy_data_h2d(height, width, zDim, memcpy_dtype, memcpy_order, simulator, 
-                 symbol_u, symbol_f, symbol_hx_array, symbol_hy_array, symbol_hz_array, symbol_jacobi_coeff_array, device_solver, args)
+                 symbol_u, symbol_f, symbol_hx_array, symbol_jacobi_coeff_array, device_solver, args)
 
     ############################################################
     # Kernel launch

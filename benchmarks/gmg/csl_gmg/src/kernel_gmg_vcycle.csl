@@ -12,17 +12,17 @@ param MAX_ZDIM: i16;
 param BLOCK_SIZE: i16;
 param LEVELS: i16;
 param STATE: local_task_id;
-const MAX_ITERATIONS: i16 = 60;  // Maximum iterations for storing rho history, this takes some space be mindful with allocations.
+const MAX_ITERATIONS: i16 = 25;  // Reduced from 60 to save memory (160 bytes). 256³ converges in ~10 iters.
 
 //-------------------------------------------------
 // LIBRARIES and STATE MACHINE STATES
 //-------------------------------------------------
 const math_lib = @import_module("<math>");
-const blas_lib = @import_module("blas.csl"); // modified reduced some code.
 const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
 const timer = @import_module("timer_modified.csl", .{ .timerCount = 12 });
 const layout_mod = @import_module("<layout>");
-const simprint = @import_module("<simprint>", .{.enable = true});
+// simprint disabled — all calls are commented out, saves code+data if module has overhead
+// const simprint = @import_module("<simprint>", .{.enable = true});
 // const timestamp = @import_module("<time>");
 const reduce_mod = @import_module("./modified_csl_lib_hops/allreduce/pe.csl", @concat_structs(reduceParams, .{
 // const reduce_mod = @import_module("./modified_csl_lib/allreduce/pe.csl", @concat_structs(reduceParams, .{
@@ -124,59 +124,55 @@ const TOTAL_GMG_SIZE: i16 = compute_total_gmg_size();
 var save_u_smooth = @zeros([TOTAL_GMG_SIZE]f32);
 var save_f_down = @zeros([TOTAL_GMG_SIZE]f32);
 
-// Grid spacing arrays for each level (passed from host)
+// Grid spacing array for each level (isotropic: hx=hy=hz, so single array)
 var hx_array = @zeros([LEVELS]f32);
-var hy_array = @zeros([LEVELS]f32);
-var hz_array = @zeros([LEVELS]f32);
-var jacobi_coeff_array = @zeros([LEVELS]f32); // Jacobi coefficients for each level
+var jacobi_coeff_array = @zeros([LEVELS]f32);
+var jacobi_coeff_level: f32 = @as(f32, 0.0); // Cached per-level Jacobi coefficient (set in f_setup_level)
+const INV_RESTRICT_FACTOR: f32 = 1.0 / 8.0;  // 1/(2×2×2) for full coarsening
 var hx_level: f32 = @as(f32, 1.0);
-var hy_level: f32 = @as(f32, 1.0);
-var hz_level: f32 = @as(f32, 1.0);
 var stencil_coeff = @zeros([7]f32);
 
 // Timing buffers - store accumulated elapsed timestamps for each operation at each level
-// Operations: smooth (down + up separate), apply_op, restriction, interpolation
-// For each operation we store elapsed timestamp words only (u16[tsc_size_words])
-var timing_smooth = @zeros([LEVELS * timer.tsc_size_words]u16); // pre-/post-smoothing accumulated elapsed timing
-var timing_smooth_apply = @zeros([LEVELS * timer.tsc_size_words]u16);  // smooth: f_apply_operator (SPMV)
-var timing_smooth_update = @zeros([LEVELS * timer.tsc_size_words]u16); // smooth: f_jacobi_smooth
-var timing_residual = @zeros([LEVELS * timer.tsc_size_words]u16);    // residual accumulated elapsed timing
-var timing_restrict = @zeros([LEVELS * timer.tsc_size_words]u16);    // restriction accumulated elapsed timing
-var timing_interp = @zeros([LEVELS * timer.tsc_size_words]u16);      // interpolation accumulated elapsed timing
-var timing_interp_expand_z = @zeros([LEVELS * timer.tsc_size_words]u16);  // interpolation expand_z micro
-var timing_interp_bcast = @zeros([LEVELS * timer.tsc_size_words]u16);     // interpolation bcast micro
-var timing_bcast_configure = @zeros([LEVELS * timer.tsc_size_words]u16);  // bcast_from_top_left_configure
-var timing_bcast_to_all = @zeros([LEVELS * timer.tsc_size_words]u16);     // broadcast_to_all_inside_window
-var timing_interp_add = @zeros([LEVELS * timer.tsc_size_words]u16);       // interpolation add micro
-var timing_spmv_total = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv total accumulated elapsed timing
-var timing_spmv_communication = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv communication accumulated elapsed timing
-var timing_spmv_compute = @zeros([LEVELS * timer.tsc_size_words]u16);      // spmv compute accumulated elapsed timing
-var timing_setup = @zeros([LEVELS * timer.tsc_size_words]u16);           // f_setup_level overhead per level
-var timing_convergence = @zeros([LEVELS * timer.tsc_size_words]u16);     // convergence check (SpMV+residual+allreduce at L0)
-var time_total_start_end_u16 = @zeros([timer.tsc_size_words]u16);   // this is also elapsed time for entire V-cycle, 1 level
+const TIMER_ARRAY_SIZE: i16 = LEVELS * timer.tsc_size_words;
+// Main timers (always present): smooth, residual, restrict, interp, setup, convergence, total
+var timing_smooth = @zeros([TIMER_ARRAY_SIZE]u16);
+var timing_residual = @zeros([TIMER_ARRAY_SIZE]u16);
+var timing_restrict = @zeros([TIMER_ARRAY_SIZE]u16);
+var timing_interp = @zeros([TIMER_ARRAY_SIZE]u16);
+var timing_setup = @zeros([TIMER_ARRAY_SIZE]u16);
+var timing_convergence = @zeros([TIMER_ARRAY_SIZE]u16);
+var time_total_start_end_u16 = @zeros([timer.tsc_size_words]u16);
 
+// Micro-timers for detailed profiling (stencil/bcast sub-timings)
+var timing_smooth_apply = @zeros([TIMER_ARRAY_SIZE]u16);
+var timing_smooth_update = @zeros([TIMER_ARRAY_SIZE]u16);
+var timing_interp_expand_z = @zeros([TIMER_ARRAY_SIZE]u16);
+var timing_interp_bcast = @zeros([TIMER_ARRAY_SIZE]u16);
+var timing_bcast_configure = @zeros([TIMER_ARRAY_SIZE]u16);
+var timing_bcast_to_all = @zeros([TIMER_ARRAY_SIZE]u16);
+var timing_interp_add = @zeros([TIMER_ARRAY_SIZE]u16);
+var timing_spmv_total = @zeros([TIMER_ARRAY_SIZE]u16);
+var timing_spmv_communication = @zeros([TIMER_ARRAY_SIZE]u16);
+var timing_spmv_compute = @zeros([TIMER_ARRAY_SIZE]u16);
 
-// // Operation counters - track number of operations at each level
-var counter_smooth = @zeros([LEVELS]u32);    // Number of up smoothing iterations per level
-var counter_apply_op = @zeros([LEVELS]u32);     // Number of operator applications per level
-var counter_residual = @zeros([LEVELS]u32);     // Number of residual operations per level
-var counter_rho_check = @zeros([LEVELS]u32);   // Number of rho check operations per level
-var counter_restrict = @zeros([LEVELS]u32);     // Number of restriction operations per level
-var counter_interp = @zeros([LEVELS]u32);       // Number of interpolation operations per level
-var counter_setup_init = @zeros([LEVELS]u32);   // Number of setup initialization operations per level
+// Operation counters (always present)
+var counter_smooth = @zeros([LEVELS]u32);
+var counter_residual = @zeros([LEVELS]u32);
+var counter_rho_check = @zeros([LEVELS]u32);
+var counter_restrict = @zeros([LEVELS]u32);
+var counter_interp = @zeros([LEVELS]u32);
+var counter_setup_init = @zeros([LEVELS]u32);
 
-// Roofline FLOP counters per level (like Table V in Ruichisai et al.)
-// Count each builtin operation type * vector length at each level
-// Memory cost: 7 arrays * LEVELS * 4 bytes = ~252 bytes for 9 levels
-var count_fsub = @zeros([LEVELS]u32);    // @fsubs: 1 FLOP, 2 loads, 1 store
-var count_fmac = @zeros([LEVELS]u32);    // @fmacs: 2 FLOPs (mul+add), 3 loads, 1 store
-var count_fmul = @zeros([LEVELS]u32);    // @fmuls: 1 FLOP, 2 loads, 1 store
-var count_fadd = @zeros([LEVELS]u32);    // @fadds: 1 FLOP, 2 loads, 1 store
-var count_fneg = @zeros([LEVELS]u32);    // @fnegs: 1 FLOP, 1 load, 1 store
-var count_fmov_mem = @zeros([LEVELS]u32);  // @fmovs mem→mem: 0 FLOPs, 1 load, 1 store = 8 B
-var count_fmov_zero = @zeros([LEVELS]u32); // @fmovs zero-fill: 0 FLOPs, 0 loads, 1 store = 4 B
-var count_fmax = @zeros([LEVELS]u32);    // @fmaxs: 1 FLOP, 1 load, 1 store
-var count_fmov32 = @zeros([LEVELS]u32);  // fabric loads: wavelets received from neighbors (router→CE)
+// Roofline FLOP counters per level
+var count_fsub = @zeros([LEVELS]u32);
+var count_fmac = @zeros([LEVELS]u32);
+var count_fmul = @zeros([LEVELS]u32);
+var count_fadd = @zeros([LEVELS]u32);
+var count_fneg = @zeros([LEVELS]u32);
+var count_fmov_mem = @zeros([LEVELS]u32);
+var count_fmov_zero = @zeros([LEVELS]u32);
+var count_fmax = @zeros([LEVELS]u32);
+var count_fmov32 = @zeros([LEVELS]u32);
 
 
 // State machine parameters
@@ -237,13 +233,9 @@ fn f_reset() void {
     index = 0;
     while(index < LEVELS) : (index +=1) {
         hx_array[index] = 0.0;
-        hy_array[index] = 0.0;
-        hz_array[index] = 0.0;
         jacobi_coeff_array[index] = 0.0;
     }
     hx_level = @as(f32, 1.0);
-    hy_level = @as(f32, 1.0);
-    hz_level = @as(f32, 1.0);
     index = 0;
     while(index < 7) : (index +=1) {
         stencil_coeff[index] = 0.0;
@@ -275,7 +267,6 @@ fn f_reset() void {
     index = 0;
     while(index < LEVELS) : (index +=1) {
         counter_smooth[index] = 0;
-        counter_apply_op[index] = 0;
         counter_residual[index] = 0;
         counter_rho_check[index] = 0;
         counter_restrict[index] = 0;
@@ -349,8 +340,6 @@ var ptr_u: [*]f32 = &u;
 var ptr_f: [*]f32 = &f;
 var ptr_r: [*]f32 = &r;
 var ptr_hx_array: [*]f32 = &hx_array;
-var ptr_hy_array: [*]f32 = &hy_array;
-var ptr_hz_array: [*]f32 = &hz_array;
 var ptr_jacobi_coeff_array: [*]f32 = &jacobi_coeff_array;
 
 // timing pointers
@@ -374,7 +363,6 @@ var ptr_timing_convergence: [*]u16 = &timing_convergence;
 
 // counter pointers
 var ptr_counter_smooth: [*]u32 = &counter_smooth;
-var ptr_counter_apply_op: [*]u32 = &counter_apply_op;
 var ptr_counter_residual: [*]u32 = &counter_residual;
 var ptr_counter_restrict: [*]u32 = &counter_restrict;
 var ptr_counter_interp: [*]u32 = &counter_interp;
@@ -399,15 +387,14 @@ var ptr_count_fmov32: [*]u32 = &count_fmov32;
 //-------------------------------------------------
 // Helper functions
 fn isActivePE(px: i16, py: i16, factor_val: u16) bool {
-    return (px % @as(i16, factor_val)) == 0 and (py % @as(i16, factor_val)) == 0;
+    // factor is always a power of 2, so use bitmask instead of modulo (saves __modsi3)
+    const mask: i16 = @as(i16, factor_val) - 1;
+    return (px & mask) == 0 and (py & mask) == 0;
 }
 
 fn is_top_left_of_restriction_window(px: u16, py: u16, window_width: u16, window_height: u16) bool {
-    const window_idx_x: u16 = px / window_width;
-    const window_idx_y: u16 = py / window_height;
-    const window_st_x: u16 = window_idx_x * window_width;
-    const window_st_y: u16 = window_idx_y * window_height;
-    return (px == window_st_x) and (py == window_st_y);
+    // window_width/height are always powers of 2, so use bitmask
+    return (px & (window_width - 1)) == 0 and (py & (window_height - 1)) == 0;
 }
 
 // ------------------------------------------------
@@ -448,27 +435,24 @@ fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
 
 // Apply operator for Jacobi smoothing
 fn f_apply_operator() void {
-    @fmovs(mem_Au_dsd, 0.0);
-    count_fmov_zero[current_level] += @as(u32, n);
-    counter_apply_op[current_level] += 1;
+    // spmv zeros y internally before accumulating — no need to zero Au here
     stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute, &count_fneg[current_level], &count_fmac[current_level], &count_fmov_zero[current_level], &count_fmov32[current_level]);
 }
 
 // Jacobi smoothing: u = u + JACOBI_COEFF * (f - Au)
 fn f_jacobi_smooth() void {
     counter_smooth[current_level] += 1;
-    const jacobi_coeff: f32 = jacobi_coeff_array[current_level];
+    // jacobi_coeff_level is cached per level in f_setup_level
     if (is_active_pe) {
         @fsubs(mem_r_dsd, mem_f_dsd, mem_Au_dsd);
-        @fmacs(mem_u_dsd, mem_u_dsd, mem_r_dsd, jacobi_coeff);
+        @fmacs(mem_u_dsd, mem_u_dsd, mem_r_dsd, jacobi_coeff_level);
         count_fsub[current_level] += @as(u32, n);
         count_fmac[current_level] += @as(u32, n);
     } else {
         @fmovs(mem_u_dsd, 0.0);                                // zero-fill u (inactive)
         count_fmov_zero[current_level] += @as(u32, n);
     }
-    @fmovs(mem_save_u_smooth_dsd, mem_u_dsd);                  // mem→mem copy
-    count_fmov_mem[current_level] += @as(u32, n);
+    // save_u_smooth moved to STATE_DOWN_SMOOTH_CHECK (only needed once after last pre-smooth iter)
 }
 
 // Calculate residual: r = f - Au
@@ -505,7 +489,7 @@ fn f_restriction_division() void {
         restriction_window_width, restriction_window_height)) {
         // Full coarsening: sum pairs in z dimension after x,y averaging
         // Fine level z dimension is n, coarse level z dimension is n/2
-        const coarse_n: i16 = n / 2;  // Coarse z dimension
+        const coarse_n: i16 = n >> 1;  // Coarse z dimension
         
         // Create strided DSDs to access pairs in z: (0,1), (2,3), (4,5), (6,7), ...
         // DSD for even indices: 0, 2, 4, 6, ... (stride 2, starting at offset 0)
@@ -524,13 +508,10 @@ fn f_restriction_division() void {
         mem_f_coarse_dsd = @set_dsd_length(mem_f_coarse_dsd, @bitcast(u16, coarse_n));
         
         // Sum pairs in z: f[coarse_idx] = (r[2*coarse_idx] + r[2*coarse_idx+1]) / 8
-        @fmovs(mem_f_coarse_dsd, mem_r_even_dsd);
-        @fadds(mem_f_coarse_dsd, mem_f_coarse_dsd, mem_r_odd_dsd);
-        const inv_total: f32 = 1.0 / 8.0;
-        @fmuls(mem_f_coarse_dsd, mem_f_coarse_dsd, inv_total);
+        @fadds(mem_f_coarse_dsd, mem_r_even_dsd, mem_r_odd_dsd);  // f_coarse = even + odd (no intermediate copy)
+        @fmuls(mem_f_coarse_dsd, mem_f_coarse_dsd, INV_RESTRICT_FACTOR);
         @fmovs(mem_f_dsd, mem_f_coarse_dsd);
 
-        count_fmov_mem[current_level] += @as(u32, coarse_n);   // copy even→f
         count_fadd[current_level] += @as(u32, coarse_n);
         count_fmul[current_level] += @as(u32, coarse_n);
         count_fmov_mem[current_level] += @as(u32, coarse_n);   // copy f_coarse→f
@@ -547,7 +528,7 @@ fn f_interpolation_expand_z() void {
     // Reverse of restriction: if restriction sums pairs (0,1)->0, (2,3)->1, ...
     // Then interpolation duplicates: 0->(0,1), 1->(2,3), ...
     // Coarse z dimension is n/2, fine z dimension is n
-    const coarse_n: i16 = n / 2;  // Coarse z dimension
+    const coarse_n: i16 = n >> 1;  // Coarse z dimension
     
     // Save coarse values temporarily in r (first coarse_n elements)
     // r is safe to use here: it's set to 0 in f_setup_level() and not used until
@@ -599,14 +580,13 @@ fn f_bcast_from_top_left() void {
 // Setup the hops based spmv and restriction parameters.
 fn f_init_spmv_and_reduce(level_id: u16) void {
     
-    var const_2: f16 = 2.0;
-    factor = @as(u16, math_lib.pow(const_2, @as(f16, level_id)));
+    factor = @as(u16, 1) << level_id;
     hops = factor;
     is_active_pe = isActivePE(@as(i16, pe_id_x), @as(i16, pe_id_y), factor);
     stencil_mod.setHopBasedParams(hops, factor, width, height);
 
-    restriction_window_width = @as(u16, math_lib.pow(const_2, @as(f16, level_id + 1)));
-    restriction_window_height = @as(u16, math_lib.pow(const_2, @as(f16, level_id + 1)));    
+    restriction_window_width = @as(u16, 1) << (level_id + 1);
+    restriction_window_height = @as(u16, 1) << (level_id + 1);    
     const window_w = @as(i16, restriction_window_width);
     const window_h = @as(i16, restriction_window_height);
     reduce_mod.setWindowedReductionParams(window_w, window_h, factor, 
@@ -618,18 +598,14 @@ fn f_setup_level(level_id: u16, down: i16) void {
     save_timestamp_start(TIMER_ID_SETUP);
     counter_setup_init[current_level] += 1;
 
-    // TODO: OPTIMIZEME - use DSR or DSDs or do once.
-    var const_2: f16 = 2.0;
     n = @as(i16, @as(u16, MAX_ZDIM) >> level_id);    // zdim/1 --> zdim/2 --> zdim/4 --> ...
     current_level_id = level_id;
-    hx_level = hx_array[level_id]; 
-    // Update stencil coefficients
-    const BETA: f32 = 1.0;
-    const hx_sq: f32 = hx_level * hx_level;
-    // const hy_sq: f32 = hx_sq;
-    // const hz_sq: f32 = hx_sq;
-    const center_coeff: f32 = -2.0 * (1.0 / hx_sq + 1.0 / hx_sq + 1.0 / hx_sq);
-    var neigh_coeff: f32 = 1.0 / hx_sq; // 1/h^2
+    hx_level = hx_array[level_id]; // hx_array stores 1/hx (reciprocal, computed on host)
+    jacobi_coeff_level = jacobi_coeff_array[level_id]; // Cache for f_jacobi_smooth
+    // Update stencil coefficients — hx_level is 1/hx, so inv_hx_sq = hx_level²
+    const inv_hx_sq: f32 = hx_level * hx_level;
+    const center_coeff: f32 = -6.0 * inv_hx_sq;  // -2*(1/h² + 1/h² + 1/h²) = -6/h²
+    var neigh_coeff: f32 = inv_hx_sq;
     stencil_coeff[0] = neigh_coeff;
     stencil_coeff[1] = neigh_coeff;
     stencil_coeff[2] = neigh_coeff;
@@ -778,10 +754,13 @@ task f_state() void {
         } else {
             // End timing for DOWN smoothing
             save_timestamp_end(current_level, &timing_smooth, TIMER_ID_SMOOTH);
+            // Save u for interpolation — only once after last pre-smooth iteration
+            @fmovs(mem_save_u_smooth_dsd, mem_u_dsd);
+            count_fmov_mem[current_level] += @as(u32, n);
             next_state = STATE_DOWN_RESIDUAL_APPLY;
         }
         f_trigger_state_machine();
-        
+
     } else if (STATE_DOWN_RESIDUAL_APPLY == cur_state) {
         // Apply operator for residual
         save_timestamp_start(TIMER_ID_RESIDUAL);
@@ -1012,8 +991,7 @@ comptime {
     @export_symbol(ptr_f, "f");
     @export_symbol(ptr_r, "r");
     @export_symbol(ptr_hx_array, "hx_array");
-    @export_symbol(ptr_hy_array, "hy_array");
-    @export_symbol(ptr_hz_array, "hz_array");
+    // hy_array, hz_array removed — isotropic grid uses hx_array only
     @export_symbol(ptr_jacobi_coeff_array, "jacobi_coeff_array");
     // timing
     @export_symbol(ptr_timing_smooth, "timing_smooth");
@@ -1037,7 +1015,6 @@ comptime {
 
     // counters
     @export_symbol(ptr_counter_smooth, "counter_smooth");
-    @export_symbol(ptr_counter_apply_op, "counter_apply_op");
     @export_symbol(ptr_counter_residual, "counter_residual");
     @export_symbol(ptr_counter_restrict, "counter_restrict");
     @export_symbol(ptr_counter_interp, "counter_interp");

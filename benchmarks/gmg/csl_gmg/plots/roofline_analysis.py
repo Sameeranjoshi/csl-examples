@@ -662,95 +662,6 @@ def plot_roofline(summary, output_dir):
     print(f"\nSaved: {outpath}")
 
 
-def plot_fabric_heatmap(summary, output_dir):
-    """Plot analytical heatmap of total fabric loads per PE across ALL multigrid levels combined.
-
-    Shows communication load imbalance in the strided layout:
-    - Corner PEs: 2 fabric receives per SpMV (boundary on 2 sides)
-    - Edge PEs: 3 fabric receives per SpMV
-    - Interior PEs: 4 fabric receives per SpMV
-    - Inactive PEs at coarse levels: 0 fabric receives
-    All levels are summed to show the total communication burden per PE per V-cycle.
-    Axis: (0,0) = top-left, x goes right, y goes down.
-    """
-    _setup_paper_style()
-
-    sorted_grids = sorted(summary.keys(), key=lambda g: int(g.split('x')[0]))
-    largest_grid = sorted_grids[-1] if sorted_grids else None
-    if not largest_grid:
-        return
-
-    s = summary[largest_grid]
-    levels = s['level_details']
-    grid_size = s['size']
-    n_levels = len(levels)
-
-    # For large grids, show a zoomed region (top-left corner)
-    display_size = min(grid_size, 64)
-
-    # Build combined heatmap: sum fabric loads across ALL levels
-    heatmap_total = np.zeros((display_size, display_size))
-
-    for lv, ld in enumerate(levels):
-        nz = ld['nz']
-        stride = 2 ** lv
-        active_pes_per_dim = grid_size // stride
-        num_spmvs = 14 if lv == 0 else (6 if lv == n_levels - 1 else 13)
-        # Also add allreduce fabric loads for restriction (2 × nz per restriction)
-        allreduce_loads = nz * 2 if lv < n_levels - 1 else 0
-
-        for py in range(display_size):
-            for px in range(display_size):
-                if px % stride != 0 or py % stride != 0:
-                    continue  # inactive at this level
-                recv_dirs = 0
-                if px // stride > 0:
-                    recv_dirs += 1  # west
-                if px // stride < active_pes_per_dim - 1:
-                    recv_dirs += 1  # east
-                if py // stride > 0:
-                    recv_dirs += 1  # north (y increases downward)
-                if py // stride < active_pes_per_dim - 1:
-                    recv_dirs += 1  # south
-                heatmap_total[py, px] += recv_dirs * nz * num_spmvs + allreduce_loads
-
-    # Plot
-    fig, ax = plt.subplots(1, 1, figsize=(10, 9))
-
-    im = ax.imshow(heatmap_total, cmap='YlOrRd', interpolation='nearest',
-                   origin='upper', vmin=0)  # origin='upper' → (0,0) at top-left
-
-    ax.set_xlabel('PE x', fontsize=14, fontweight='bold')
-    ax.set_ylabel('PE y', fontsize=14, fontweight='bold')
-    ax.set_title(f'Total Fabric Loads per PE per V-cycle (all {n_levels} levels summed)\n'
-                 f'Grid: {largest_grid}, top-left {display_size}x{display_size} region',
-                 fontsize=14, fontweight='bold')
-    ax.tick_params(labelsize=10)
-
-    cbar = fig.colorbar(im, ax=ax, label='Fabric loads (wavelets per V-cycle)', shrink=0.85)
-    cbar.ax.tick_params(labelsize=10)
-
-    # Annotate key PEs
-    pe00_val = int(heatmap_total[0, 0])
-    interior_val = int(heatmap_total[display_size // 2, display_size // 2]) if display_size > 4 else 0
-    edge_val = int(heatmap_total[0, display_size // 2]) if display_size > 4 else 0
-
-    # Add annotation text box
-    textstr = (f'PE(0,0) corner: {pe00_val:,}\n'
-               f'Edge PE: {edge_val:,}\n'
-               f'Interior PE: {interior_val:,}\n'
-               f'Max: {int(heatmap_total.max()):,}')
-    props = dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='gray')
-    ax.text(0.98, 0.02, textstr, transform=ax.transAxes, fontsize=11,
-            verticalalignment='bottom', horizontalalignment='right', bbox=props)
-
-    plt.tight_layout()
-    outpath = os.path.join(output_dir, 'fabric_heatmap.png')
-    plt.savefig(outpath, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"Saved: {outpath}")
-
-
 def _fmt_bw(val):
     """Format bandwidth value with appropriate unit."""
     if val >= 1e15:
@@ -930,7 +841,6 @@ def main():
             summary = compute_summary(all_results)
             print_summary_table(summary)
             plot_roofline(summary, SCRIPT_DIR)
-            plot_fabric_heatmap(summary, SCRIPT_DIR)
         else:
             print("No roofline counter data found in the file.")
             print("Make sure the file contains output from a run with FLOP counters enabled.")

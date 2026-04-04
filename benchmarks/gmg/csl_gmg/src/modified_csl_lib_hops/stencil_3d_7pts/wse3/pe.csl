@@ -961,7 +961,8 @@ comptime {
 
 
 fn isActivePE(px: i16, py: i16, factor: u16) bool {
-    return (px % @as(i16, factor)) == 0 and (py % @as(i16, factor)) == 0;
+    const mask: i16 = @as(i16, factor) - 1;
+    return (px & mask) == 0 and (py & mask) == 0;
 }
 
 fn isInsideBox(px: i16, py: i16, first_active_px: i16, first_active_py: i16, last_active_px: i16, last_active_py: i16) bool {
@@ -984,15 +985,16 @@ fn setHopBasedParams(hops_value: u16, factor_value: u16, width: i16, height: i16
     // inactive_horizontal = True if the PE is void AND interior horizontally AND entire column is inactive
     // A column is entirely inactive if px % factor != 0 (no active PEs in that column)
     // The PE must also be interior (not on first or last column)
-    if (!is_active_pe and !first_px and !last_px and ((px % @as(i16, factor)) != 0)){
+    const mask: i16 = @as(i16, factor) - 1;
+    if (!is_active_pe and !first_px and !last_px and ((px & mask) != 0)){
         inactive_horizontal = true;
     } else {
         inactive_horizontal = false;
     }
     // inactive_vertical = True if the PE is void AND interior vertically AND entire row is inactive
-    // A row is entirely inactive if py % factor != 0 (no active PEs in that row)
+    // A row is entirely inactive if py & mask != 0 (no active PEs in that row)
     // The PE must also be interior (not on first or last row)
-    if (!is_active_pe and !first_py and !last_py and ((py % @as(i16, factor)) != 0)){
+    if (!is_active_pe and !first_py and !last_py and ((py & mask) != 0)){
         inactive_vertical = true;
     } else {
         inactive_vertical = false;

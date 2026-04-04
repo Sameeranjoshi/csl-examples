@@ -189,7 +189,8 @@ var current_level_id: u16 = 0;
 // Configure runtime reduction parameters (call from kernel)
 // Sets width/height and per-PE edge flags; reduction then targets bottom-right PE
 fn isActivePE(px: i16, py: i16, factor: u16) bool {
-    return (px % @as(i16, factor)) == 0 and (py % @as(i16, factor)) == 0;
+    const mask: i16 = @as(i16, factor) - 1;
+    return (px & mask) == 0 and (py & mask) == 0;
 }
 
 // Runtime parameters for active PE counts in window
@@ -216,12 +217,9 @@ fn setWindowedReductionParams(window_width: i16, window_height: i16, factor: u16
     
     // Calculate which window this PE belongs to
     // Windows are tiled across the mesh: [0..win_w)[win_w..2*win_w)...
-    const window_idx_x: i16 = px / window_width;
-    const window_idx_y: i16 = py / window_height;
-    
-    // Calculate window boundaries
-    window_st_x = window_idx_x * window_width;
-    window_st_y = window_idx_y * window_height;
+    // window_width/height are always powers of 2, use bitmask
+    window_st_x = px & ~(window_width - 1);
+    window_st_y = py & ~(window_height - 1);
     window_end_x = window_st_x + window_width - 1;
     window_end_y = window_st_y + window_height - 1;
     
