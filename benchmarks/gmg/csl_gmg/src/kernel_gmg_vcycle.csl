@@ -182,7 +182,6 @@ var count_fmov32 = @zeros([LEVELS]u32);  // fabric loads: wavelets received from
 // State machine parameters
 var dot = @zeros([1]f32); // dummy variable for f_sync
 var dummy_u32: u32 = 0;  // dummy counter for sync (not counted in roofline)
-var roofline_measure: bool = true;  // Only measure first V-cycle (k==0) -- TODO: re-enable gating after simulator stall is fixed
 var n: i16 = 0;  // zDim
 var num_levels: i16 = 0;
 var pre_smooth_iter: i16 = 0;
@@ -219,8 +218,6 @@ var next_state: i16 = 0;
 
 
 fn f_reset() void {
-    roofline_measure = true;  // Re-enable measurement for the next run
-
     // GMG data structures
     var index: i16 = 0;
     while(index < MAX_ZDIM) : (index +=1) {
@@ -435,17 +432,15 @@ fn f_toc_total() void {
     sys_mod.unblock_cmd_stream();
 }
 
-// Timing helper functions — gated by roofline_measure (first V-cycle only)
+// Timing helper functions
 fn save_timestamp_start(timer_id: i16) void {
-    if (roofline_measure) timer.start(timer_id);
+    timer.start(timer_id);
 }
 
 fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
-    if (roofline_measure) {
-        timer.stop(timer_id);
-        const offset: i16 = level * timer.tsc_size_words;
-        timer.accumulate_elapsed(timer_id, @ptrcast(*[timer.tsc_size_words]u16, &timing_array[offset]));
-    }
+    timer.stop(timer_id);
+    const offset: i16 = level * timer.tsc_size_words;
+    timer.accumulate_elapsed(timer_id, @ptrcast(*[timer.tsc_size_words]u16, &timing_array[offset]));
 }
 //-------------------------------------------------
 // GMG KERNELS
@@ -453,15 +448,10 @@ fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
 
 // Apply operator for Jacobi smoothing
 fn f_apply_operator() void {
-    @fmovs(mem_Au_dsd, 0.0);                                   // zero-fill Au
-    if (roofline_measure) {
-        count_fmov_zero[current_level] += @as(u32, n);
-        counter_apply_op[current_level] += 1;
-        stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute, &count_fneg[current_level], &count_fmac[current_level], &count_fmov_zero[current_level], &count_fmov32[current_level]);
-    } else {
-        stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute, &dummy_u32, &dummy_u32, &dummy_u32, &dummy_u32);
-    }
-    // NOTE: spmv triggers callback when done — code below this line is DEAD in async dataflow
+    @fmovs(mem_Au_dsd, 0.0);
+    count_fmov_zero[current_level] += @as(u32, n);
+    counter_apply_op[current_level] += 1;
+    stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute, &count_fneg[current_level], &count_fmac[current_level], &count_fmov_zero[current_level], &count_fmov32[current_level]);
 }
 
 // Jacobi smoothing: u = u + JACOBI_COEFF * (f - Au)
@@ -471,16 +461,14 @@ fn f_jacobi_smooth() void {
     if (is_active_pe) {
         @fsubs(mem_r_dsd, mem_f_dsd, mem_Au_dsd);
         @fmacs(mem_u_dsd, mem_u_dsd, mem_r_dsd, jacobi_coeff);
-        if (roofline_measure) {
-            count_fsub[current_level] += @as(u32, n);
-            count_fmac[current_level] += @as(u32, n);
-        }
+        count_fsub[current_level] += @as(u32, n);
+        count_fmac[current_level] += @as(u32, n);
     } else {
         @fmovs(mem_u_dsd, 0.0);                                // zero-fill u (inactive)
-        if (roofline_measure) count_fmov_zero[current_level] += @as(u32, n);
+        count_fmov_zero[current_level] += @as(u32, n);
     }
     @fmovs(mem_save_u_smooth_dsd, mem_u_dsd);                  // mem→mem copy
-    if (roofline_measure) count_fmov_mem[current_level] += @as(u32, n);
+    count_fmov_mem[current_level] += @as(u32, n);
 }
 
 // Calculate residual: r = f - Au
@@ -488,31 +476,23 @@ fn f_residual() void {
     counter_residual[current_level] += 1;
     if (is_active_pe) {
         @fsubs(mem_r_dsd, mem_f_dsd, mem_Au_dsd);
-        if (roofline_measure) count_fsub[current_level] += @as(u32, n);
+        count_fsub[current_level] += @as(u32, n);
     } else {
         @fmovs(mem_r_dsd, 0.0);                                // zero-fill r (inactive)
-        if (roofline_measure) count_fmov_zero[current_level] += @as(u32, n);
+        count_fmov_zero[current_level] += @as(u32, n);
     }
 }
 
 // Calculate rho: rho = MAX|r| at level 0 (for convergence checking)
 fn f_compute_rho() void {
         rho[0] = math_lib.abs(r[0]);
-        if (roofline_measure) {
-            reduce_mod.setCounterPtrs(&count_fadd[current_level], &count_fmax[current_level], &count_fmov_zero[current_level], &count_fmov32[current_level]);
-        } else {
-            reduce_mod.setCounterPtrs(&dummy_u32, &dummy_u32, &dummy_u32, &dummy_u32);
-        }
+        reduce_mod.setCounterPtrs(&count_fadd[current_level], &count_fmax[current_level], &count_fmov_zero[current_level], &count_fmov32[current_level]);
         reduce_mod.allreduce(1, &rho, reduce_mod.TYPE_BINARY_OP.MAX);
 }
 
 // Restrict the window into top left PE.
 fn f_reduce_row_col_top_left() void {
-    if (roofline_measure) {
-        reduce_mod.setCounterPtrs(&count_fadd[current_level], &count_fmax[current_level], &count_fmov_zero[current_level], &count_fmov32[current_level]);
-    } else {
-        reduce_mod.setCounterPtrs(&dummy_u32, &dummy_u32, &dummy_u32, &dummy_u32);
-    }
+    reduce_mod.setCounterPtrs(&count_fadd[current_level], &count_fmax[current_level], &count_fmov_zero[current_level], &count_fmov32[current_level]);
     reduce_mod.reduce_row_col_top_left(n, &r, reduce_mod.TYPE_BINARY_OP.ADD);
 }
 
@@ -549,15 +529,14 @@ fn f_restriction_division() void {
         const inv_total: f32 = 1.0 / 8.0;
         @fmuls(mem_f_coarse_dsd, mem_f_coarse_dsd, inv_total);
         @fmovs(mem_f_dsd, mem_f_coarse_dsd);
-        if (roofline_measure) {
-            count_fmov_mem[current_level] += @as(u32, coarse_n);   // copy even→f
-            count_fadd[current_level] += @as(u32, coarse_n);
-            count_fmul[current_level] += @as(u32, coarse_n);
-            count_fmov_mem[current_level] += @as(u32, coarse_n);   // copy f_coarse→f
-        }
+
+        count_fmov_mem[current_level] += @as(u32, coarse_n);   // copy even→f
+        count_fadd[current_level] += @as(u32, coarse_n);
+        count_fmul[current_level] += @as(u32, coarse_n);
+        count_fmov_mem[current_level] += @as(u32, coarse_n);   // copy f_coarse→f
     } else {
         @fmovs(mem_f_dsd, 0.0);
-        if (roofline_measure) count_fmov_zero[current_level] += @as(u32, n);
+        count_fmov_zero[current_level] += @as(u32, n);
     }
 
 }
@@ -591,9 +570,7 @@ fn f_interpolation_expand_z() void {
 
     @fmovs(mem_u_even_dsd, mem_r_coarse_dsd);
     @fmovs(mem_u_odd_dsd, mem_r_coarse_dsd);
-    if (roofline_measure) {
-        count_fmov_mem[current_level] += @as(u32, coarse_n) * 3;  // save + even + odd (all mem→mem)
-    }
+    count_fmov_mem[current_level] += @as(u32, coarse_n) * 3;  // save + even + odd (all mem→mem)
     
     // Now u has fine z dimension n with duplicated values
     // Update mem_u_dsd to reflect fine z dimension (n)
@@ -606,20 +583,16 @@ fn f_interpolation_add() void {
     counter_interp[current_level] += 1;
     if (is_active_pe) {
         @fadds(mem_u_dsd, mem_u_dsd, mem_save_u_smooth_dsd);
-        if (roofline_measure) count_fadd[current_level] += @as(u32, n);
+        count_fadd[current_level] += @as(u32, n);
     } else {
         @fmovs(mem_u_dsd, 0.0);
-        if (roofline_measure) count_fmov_zero[current_level] += @as(u32, n);
+        count_fmov_zero[current_level] += @as(u32, n);
     }
 }
 
 // Broadcast the coarse solution to all fine points in the window.
 fn f_bcast_from_top_left() void {
-    if (roofline_measure) {
-        reduce_mod.setCounterPtrs(&count_fadd[current_level], &count_fmax[current_level], &count_fmov_zero[current_level], &count_fmov32[current_level]);
-    } else {
-        reduce_mod.setCounterPtrs(&dummy_u32, &dummy_u32, &dummy_u32, &dummy_u32);
-    }
+    reduce_mod.setCounterPtrs(&count_fadd[current_level], &count_fmax[current_level], &count_fmov_zero[current_level], &count_fmov32[current_level]);
     reduce_mod.broadcast_from_top_left(n, &u, current_level, &timing_bcast_configure, &timing_bcast_to_all);
 }
 
@@ -695,21 +668,21 @@ fn f_setup_level(level_id: u16, down: i16) void {
     if (down == 1) {
         if (level_id != 0) {
             @fmovs(mem_u_dsd, 0.0);                                    // zero-fill u
-            if (roofline_measure) count_fmov_zero[current_level] += @as(u32, n);
+            count_fmov_zero[current_level] += @as(u32, n);
         }
         if (level_id == 0 and k > 0) {
             @fmovs(mem_f_dsd, mem_save_f_down_dsd);                    // restore f (mem→mem)
-            if (roofline_measure) count_fmov_mem[current_level] += @as(u32, n);
+            count_fmov_mem[current_level] += @as(u32, n);
         }
         @fmovs(mem_save_f_down_dsd, mem_f_dsd);                        // save f (mem→mem)
-        if (roofline_measure) count_fmov_mem[current_level] += @as(u32, n);
+        count_fmov_mem[current_level] += @as(u32, n);
     } else {
         @fmovs(mem_f_dsd, mem_save_f_down_dsd);                        // restore f (mem→mem)
-        if (roofline_measure) count_fmov_mem[current_level] += @as(u32, n);
+        count_fmov_mem[current_level] += @as(u32, n);
     }
 
     @fmovs(mem_r_dsd, 0.0);                                            // zero-fill r
-    if (roofline_measure) count_fmov_zero[current_level] += @as(u32, n);
+    count_fmov_zero[current_level] += @as(u32, n);
 
     save_timestamp_end(current_level, &timing_setup, TIMER_ID_SETUP);
 }
@@ -759,9 +732,9 @@ fn f_trigger_state_machine() void {
 
 task f_state() void {
     if (STATE_SYNC == cur_state) {
-        // sync all PEs by internal allreduce module — NOT part of V-cycle, don't count in roofline
+        // sync all PEs — counters get reset by f_reset() before actual measurement
         next_state = STATE_EXIT;
-        reduce_mod.setCounterPtrs(&dummy_u32, &dummy_u32, &dummy_u32, &dummy_u32);
+        reduce_mod.setCounterPtrs(&count_fadd[0], &count_fmax[0], &count_fmov_zero[0], &count_fmov32[0]);
         reduce_mod.allreduce(1, &dot, reduce_mod.TYPE_BINARY_OP.ADD);
     }
     else if (STATE_INIT == cur_state) {
@@ -997,7 +970,6 @@ task f_state() void {
         k = k + 1;
         // After first V-cycle (k transitions 0→1), stop all roofline measurement.
         // Subsequent iterations run without timer/counter overhead.
-        roofline_measure = false;
         if ((rho[0] > tolerance) and (k < max_iter)) {
             // Not converged and iterations remaining: increment counter and start next V-cycle
             next_state = STATE_INIT;
