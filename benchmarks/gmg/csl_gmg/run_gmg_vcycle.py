@@ -192,7 +192,7 @@ def print_configuration_summary(
         ("West/East buffer width", f"{args.width_west_buf}/{args.width_east_buf}"),
         ("Total solver wall time (us[cycles])", f"{t_wall['time_send']:10.3f}us({t_wall['cycles_send']:10.0f})"),
         ("Device iterations", int(counter_rho_check[0])),
-        ("1st V-cycle time (measured)", f"{first_vcycle_time_us:10.3f}us"),
+        ("Avg V-cycle time (no conv)", f"{first_vcycle_time_us:10.3f}us"),
         ("Device final |rho|_inf", f"{device_rho:.3e}"),
     ]
 
@@ -425,21 +425,41 @@ def profiling(
     print(build_divider(interp_micro_header, "="))
 
     ############################################################
-    # V-cycle time cross-check
+    # V-cycle time summary (uniform methodology, matches HPGMG)
+    #   total_wall_time  = solver time, all V-cycles (1 diagnostic conv per V-cycle included)
+    #   conv_total       = sum of convergence checks (only L0 has this), across all iterations
+    #   pure_operators   = wall - conv  (all iterations of the V-cycle operators, no diagnostic)
+    #   avg_vcycle       = pure_operators / iterations  (one V-cycle, no convergence check)
     ############################################################
     di = max(int(counter_rho_check[0]), 1)
-    wall_total = timing_total_start_end_data[0]["time_send"]
+    wall_total_us = timing_total_start_end_data[0]["time_send"]
+    wall_total_cyc = timing_total_start_end_data[0]["cycles_send"]
+    # Convergence accumulates only at L0 (only L0 has conv check)
+    conv_total_us = timing_convergence_data[0]["time_send"]
+    conv_total_cyc = timing_convergence_data[0]["cycles_send"]
+    pure_operators_us = wall_total_us - conv_total_us
+    pure_operators_cyc = wall_total_cyc - conv_total_cyc
+    avg_vcycle_us = pure_operators_us / di
+    avg_vcycle_cyc = pure_operators_cyc / di
     print("=" * 100)
     print(
-        f"1st V-cycle time (sum of per-level timers, directly measured): "
-        f"{total_time_us:10.3f} us ({total_time_cycles:10.0f} cycles)"
+        f"Total solver wall time (all {di} V-cycles, inc. conv check per V-cycle): "
+        f"{wall_total_us:10.3f} us ({wall_total_cyc:10.0f} cycles)"
     )
     print(
-        f"Total solver wall time (all {di} V-cycles): "
-        f"{wall_total:10.3f} us ({timing_total_start_end_data[0]['cycles_send']:10.0f} cycles)"
+        f"Convergence diagnostic time (total, {di} checks, only at L0):               "
+        f"{conv_total_us:10.3f} us ({conv_total_cyc:10.0f} cycles)"
+    )
+    print(
+        f"Pure operators time (wall - convergence, all {di} V-cycles):                "
+        f"{pure_operators_us:10.3f} us ({pure_operators_cyc:10.0f} cycles)"
+    )
+    print(
+        f"Average V-cycle time (pure operators / {di} iters, no conv):                "
+        f"{avg_vcycle_us:10.3f} us ({avg_vcycle_cyc:10.0f} cycles)"
     )
     print("=" * 100)
-    return total_time_us  # 1st V-cycle time (sum of per-level timers)
+    return avg_vcycle_us  # uniform avg V-cycle time (no convergence)
 
 
 def main():

@@ -92,7 +92,11 @@ def parse_text(text):
 
     # Average V-cycle time
     d['avg_vcycle_us'] = _ffloat(
-        r'(?:Wall time per V-cycle \(total / iterations\)|1-V.cycle time).*?:\s*([\d.]+)\s*us',
+        r'(?:Wall time per V-cycle \(total / iterations\)'
+        r'|1-V.cycle time'
+        r'|1st V-cycle time \(measured\)'
+        r'|Avg V-cycle time \(no conv\))'
+        r'.*?:\s*([\d.]+)\s*us',
         text,
     )
     if d['avg_vcycle_us'] is None and d.get('solver_time_us') and d.get('iterations'):

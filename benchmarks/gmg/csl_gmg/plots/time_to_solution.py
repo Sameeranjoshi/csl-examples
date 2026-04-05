@@ -80,7 +80,11 @@ def parse_wse3_responses(filepath):
 
         # Extract average V-cycle time in microseconds
         m_avg = re.search(
-            r'(?:Wall time per V-cycle \(total / iterations\)|1-V cycle time\(Average\)\s*\(us\[cycles\]\))\s*:\s*([\d.]+)\s*us',
+            r'(?:Wall time per V-cycle \(total / iterations\)'
+            r'|1-V cycle time\(Average\)\s*\(us\[cycles\]\)'
+            r'|1st V-cycle time \(measured\)'
+            r'|Avg V-cycle time \(no conv\))'
+            r'\s*:\s*([\d.]+)\s*us',
             block,
         )
         if not m_avg:

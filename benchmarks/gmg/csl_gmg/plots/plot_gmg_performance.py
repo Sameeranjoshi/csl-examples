@@ -104,8 +104,19 @@ def parse_configuration_summary(text: str) -> List[Dict]:
         if iter_match:
             data['device_iterations'] = int(iter_match.group(1))
         
+        # Support legacy and current V-cycle time labels:
+        #   "Wall time per V-cycle (total / iterations): X us"  (legacy)
+        #   "1-V cycle time(Average) (us[cycles]): X us"         (mid)
+        #   "1st V-cycle time (measured)     :    X us"          (old — misleading label)
+        #   "1st V-cycle time (sum of per-level timers, ...)"    (old — misleading label)
+        #   "Avg V-cycle time (no conv)      :    X us"          (current — standard methodology)
         vcycle_avg_match = re.search(
-            r'(?:Wall time per V-cycle \(total / iterations\)|1-V cycle time\(Average\)\s*\(us\[cycles\]\))\s*:\s*([\d.]+)\s*us',
+            r'(?:Wall time per V-cycle \(total / iterations\)'
+            r'|1-V cycle time\(Average\)\s*\(us\[cycles\]\)'
+            r'|1st V-cycle time \(measured\)'
+            r'|1st V-cycle time \(sum of per-level timers, directly measured\)'
+            r'|Avg V-cycle time \(no conv\))'
+            r'\s*:\s*([\d.]+)\s*us',
             section,
         )
         if vcycle_avg_match:
@@ -173,12 +184,24 @@ def split_into_run_blocks(text: str) -> List[tuple]:
 
 # SPMV table header strings (output format may vary: old "Time per Level" vs new "+ Smoothing (us[cycles]) per Level")
 SPMV_HEADER_OLD = '7-pt Stencil Compute vs Communication Time per Level'
-SPMV_HEADER_NEW = '7-pt Stencil Compute vs Communication + Smoothing (us[cycles]) per Level'
+SPMV_HEADER_MID = '7-pt Stencil Compute vs Communication + Smoothing (us[cycles]) per Level'
+SPMV_HEADER_NEW = '7-pt Stencil: SpMV vs smoothing (us[cycles]), per level, scaled to one V-cycle:'
+
+# Interpolation micro-benchmark header (case changed over time)
+INTERP_HEADERS = ('Interpolation micro-benchmark', 'Interpolation Micro-Benchmark')
+
+
+def _find_interp_header(text: str):
+    """Return the first matching interpolation header found in text, or None."""
+    for header in INTERP_HEADERS:
+        if header in text:
+            return header
+    return None
 
 
 def _find_spmv_section(block_text: str):
     """Return section after SPMV header, or None if not found."""
-    for header in (SPMV_HEADER_NEW, SPMV_HEADER_OLD):
+    for header in (SPMV_HEADER_NEW, SPMV_HEADER_MID, SPMV_HEADER_OLD):
         if header in block_text:
             return block_text.split(header, 1)[-1]
     return None
@@ -233,9 +256,10 @@ def parse_spmv_per_level(text: str) -> List[Dict]:
         section = _find_spmv_section(block_text)
         if section is None:
             continue
-        # Only parse the 7-pt Stencil table; stop at Interpolation Micro-Benchmark (same regex would match its rows)
-        if 'Interpolation Micro-Benchmark' in section:
-            section = section.split('Interpolation Micro-Benchmark', 1)[0]
+        # Only parse the 7-pt Stencil table; stop at Interpolation micro-benchmark (same regex would match its rows)
+        interp_hdr = _find_interp_header(section)
+        if interp_hdr:
+            section = section.split(interp_hdr, 1)[0]
         levels = []
         for line in section.split('\n'):
             if re.search(r'\|\s*total\s*\|', line, re.IGNORECASE):
@@ -273,9 +297,10 @@ def parse_interpolation_totals(text: str) -> List[Dict]:
         r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'                  # interp_total
     )
     for grid_size, block_text in blocks:
-        if 'Interpolation Micro-Benchmark' not in block_text:
+        interp_hdr = _find_interp_header(block_text)
+        if not interp_hdr:
             continue
-        section = block_text.split('Interpolation Micro-Benchmark', 1)[-1]
+        section = block_text.split(interp_hdr, 1)[-1]
         match = total_row_re.search(section)
         if match:
             results.append({
@@ -309,9 +334,10 @@ def parse_interpolation_per_level(text: str) -> List[Dict]:
         r'\s*([\d.]+)us\s*\([^)]+\)\s*\|'   # interp_total
     )
     for grid_size, block_text in blocks:
-        if 'Interpolation Micro-Benchmark' not in block_text:
+        interp_hdr = _find_interp_header(block_text)
+        if not interp_hdr:
             continue
-        section = block_text.split('Interpolation Micro-Benchmark', 1)[-1]
+        section = block_text.split(interp_hdr, 1)[-1]
         levels = []
         for line in section.split('\n'):
             if re.search(r'\|\s*total\s*\|', line, re.IGNORECASE):
@@ -359,20 +385,34 @@ def parse_memory_usage(text: str) -> List[Dict]:
 def parse_vcycle_times(text: str) -> List[Dict]:
     """
     Parse V-cycle time from output file (one per run block).
-    Extracts the "Total V-cycle time (Kernel Launch + V-cycle time)" value.
+    Supports legacy, old, and current formats:
+      - "Total V-cycle time (Kernel Launch + V-cycle time): X us"       (legacy)
+      - "1st V-cycle time (measured)     :    X us"                      (old — misleading)
+      - "1st V-cycle time (sum of per-level timers, directly measured)"  (old — misleading)
+      - "Avg V-cycle time (no conv)      :    X us"                      (current)
     """
     results = []
     blocks = split_into_run_blocks(text)
-    vcycle_pattern = re.compile(
+    # Try legacy format first (has the extra "upper bound" line)
+    legacy_pattern = re.compile(
         r'Total Upper bound V-cycle time \(sum of operations\):\s*([\d.]+)\s*us.*?\n'
         r'Total V-cycle time \(Kernel Launch \+ V-cycle time\):\s*([\d.]+)\s*us',
         re.DOTALL
     )
+    current_pattern = re.compile(
+        r'(?:1st V-cycle time \(measured\)'
+        r'|1st V-cycle time \(sum of per-level timers, directly measured\)'
+        r'|Avg V-cycle time \(no conv\))'
+        r'\s*:\s*([\d.]+)\s*us'
+    )
     for grid_size, block_text in blocks:
-        match = vcycle_pattern.search(block_text)
+        match = legacy_pattern.search(block_text)
         if match:
-            time2 = float(match.group(2))  # Kernel Launch + V-cycle time
-            results.append({'grid_size': grid_size, 'vcycle_time_us': time2})
+            results.append({'grid_size': grid_size, 'vcycle_time_us': float(match.group(2))})
+            continue
+        match = current_pattern.search(block_text)
+        if match:
+            results.append({'grid_size': grid_size, 'vcycle_time_us': float(match.group(1))})
     return results
 
 
@@ -661,24 +701,35 @@ def parse_per_operation_timing(text: str) -> List[Dict]:
     """
     Parse "Time per operation and level" tables from the output file.
     Uses run blocks so each problem size appears once.
+    Supports both legacy (5 columns) and current (7 columns) formats.
     """
     results = []
     blocks = split_into_run_blocks(text)
+    # Match the first 5 numeric columns (level, smooth, residual, restriction, interpolation).
+    # Current format has 7 columns (adds setup, convergence) but we only need the first 5.
     row_pattern = re.compile(
         r'\|\s*(\d+)\s*\|'
         r'\s*([\d.]+)us\([^)]+\)\s*\|'
         r'\s*([\d.]+)us\([^)]+\)\s*\|'
         r'\s*([\d.]+)us\([^)]+\)\s*\|'
         r'\s*([\d.]+)us\([^)]+\)\s*\|'
-        r'\s*([\d.]+)us\([^)]+\)\s*\|'
     )
+    # Support both headers: legacy "Time per operation and level (us[cycles]):"
+    # and current "Time per operation and level (us[cycles]), first V-cycle:"
+    legacy_header = 'Time per operation and level (us[cycles]):'
+    current_header = 'Time per operation and level (us[cycles]), first V-cycle:'
     for grid_size, block_text in blocks:
-        if 'Time per operation and level (us[cycles]):' not in block_text:
+        if current_header in block_text:
+            section = block_text.split(current_header, 1)[-1]
+        elif legacy_header in block_text:
+            section = block_text.split(legacy_header, 1)[-1]
+        else:
             continue
-        section = block_text.split('Time per operation and level (us[cycles]):', 1)[-1]
-        # Only parse the first table; stop at 7-pt Stencil or next table
-        if '7-pt Stencil Compute vs Communication' in section:
-            section = section.split('7-pt Stencil Compute vs Communication', 1)[0]
+        # Only parse the first table; stop at 7-pt Stencil (any variant)
+        for stencil_hdr in (SPMV_HEADER_NEW, SPMV_HEADER_MID, SPMV_HEADER_OLD, '7-pt Stencil'):
+            if stencil_hdr in section:
+                section = section.split(stencil_hdr, 1)[0]
+                break
         rows = []
         for line in section.split('\n'):
             if re.search(r'\|\s*total\s*\|', line, re.IGNORECASE):

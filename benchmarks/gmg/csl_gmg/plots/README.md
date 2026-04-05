@@ -29,6 +29,31 @@ The script runs in 5 stages (see `GENERATEFIGURES.sh` for details). It tolerates
 | `optimized_vs_unoptimized.py` | `out_6_6_6.txt` + `out_6_6_6_unoptimized.txt` | `metrics_comparison.png` | Before/after metric comparison |
 | `h200_vs_cs3.py` | `h200_vs_cs3_feb7.csv` | `hpgmg_speedup_barplot.pdf` | WSE-3 vs GH200 speedup bar chart |
 
+## Standard timer methodology (matches HPGMG comparison)
+
+All plots use this single, consistent V-cycle time definition. This is emitted by
+`run_gmg_vcycle.py` in the summary block at the end of `response.txt`:
+
+```
+Total solver wall time (all N V-cycles, inc. conv check per V-cycle): WALL us
+Convergence diagnostic time (total, N checks, only at L0):           CONV us
+Pure operators time (wall - convergence, all N V-cycles):            PURE us
+Average V-cycle time (pure operators / N iters, no conv):            AVG  us
+```
+
+- `WALL` — whole solver wall time, includes one convergence check per V-cycle
+- `CONV` — total convergence-check time across N iterations (accumulates at L0 only)
+- `PURE = WALL - CONV` — pure V-cycle operators, across all iterations
+- `AVG = PURE / N` — **the number plots use** as "per-V-cycle" time
+
+Convergence is excluded because HPGMG reports the same (operators-only V-cycle time).
+
+The older labels `"1st V-cycle time (measured)"` and `"1st V-cycle time (sum of
+per-level timers, directly measured)"` were misleading — they reported the sum
+of per-level accumulated timers (i.e., TOTAL across all iterations, not the first
+V-cycle). The plot scripts still parse them for backward compatibility, but new
+runs use `"Avg V-cycle time (no conv)"`.
+
 ## File conventions
 
 - `out_dir_S{size}x_L{levels}_M{max_iter}_P{pre}_P{post}_B{bottom}/response.txt` — one raw hardware run per problem size+config

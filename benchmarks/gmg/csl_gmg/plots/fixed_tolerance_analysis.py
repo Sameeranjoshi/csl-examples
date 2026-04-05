@@ -69,7 +69,11 @@ def parse_rho_and_timing(filepath):
 
         # Extract avg V-cycle time
         m_avg = re.search(
-            r'(?:Wall time per V-cycle \(total / iterations\)|1-V cycle time\(Average\)\s*\(us\[cycles\]\))\s*:\s*([\d.]+)\s*us',
+            r'(?:Wall time per V-cycle \(total / iterations\)'
+            r'|1-V cycle time\(Average\)\s*\(us\[cycles\]\)'
+            r'|1st V-cycle time \(measured\)'
+            r'|Avg V-cycle time \(no conv\))'
+            r'\s*:\s*([\d.]+)\s*us',
             block,
         )
         avg_vcycle_us = float(m_avg.group(1)) if m_avg else None
