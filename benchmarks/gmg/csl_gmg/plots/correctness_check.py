@@ -254,7 +254,7 @@ def main():
     target_sizes = [int(s) for s in args.sizes.split(',')]
 
     # Parse device results from 6/6/6 config
-    device_file = os.path.join(BASE_DIR, 'all_responses_6_6_6.txt')
+    device_file = os.path.join(BASE_DIR, 'build', 'all_responses_6_6_6.txt')
     device_data = parse_device_rho_history(device_file, target_sizes)
 
     print("=" * 70)

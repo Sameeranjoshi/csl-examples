@@ -329,10 +329,14 @@ def main():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     parent_dir = os.path.dirname(base_dir)
 
-    # Find response file
-    pattern = os.path.join(parent_dir,
+    # Find response file (out_dir_* live under build/ since the scripts/output split)
+    pattern = os.path.join(parent_dir, 'build',
                            f'out_dir_S{args.size}x_L*_M100_{args.config}/response.txt')
     files = glob.glob(pattern)
+    if not files:
+        # Back-compat: try legacy location (pre-build/ reorg)
+        files = glob.glob(os.path.join(parent_dir,
+                                       f'out_dir_S{args.size}x_L*_M100_{args.config}/response.txt'))
     if not files:
         print(f"No response file for size={args.size}, config={args.config}")
         sys.exit(1)
@@ -341,7 +345,7 @@ def main():
 
     # Fallback to all_responses_roofline.txt if response is truncated
     if d.get('avg_vcycle_us') is None:
-        agg = os.path.join(parent_dir, 'all_responses_roofline.txt')
+        agg = os.path.join(parent_dir, 'build', 'all_responses_roofline.txt')
         if os.path.exists(agg):
             dirname = os.path.basename(os.path.dirname(files[0]))
             with open(agg) as f:

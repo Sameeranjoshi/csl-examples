@@ -22,6 +22,7 @@ import numpy as np
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.join(SCRIPT_DIR, '..')
+RESPONSES_DIR = os.path.join(BASE_DIR, 'build')  # all_responses_*.txt now live under build/
 
 GRID_SIZES = ['4x4', '8x8', '16x16', '32x32', '64x64', '128x128', '256x256', '512x512']
 
@@ -258,7 +259,7 @@ def main():
     # Parse all configs
     all_data = {}
     for config_label, filename in WSE3_CONFIGS:
-        filepath = os.path.join(BASE_DIR, filename)
+        filepath = os.path.join(RESPONSES_DIR, filename)
         all_data[config_label] = parse_rho_history(filepath)
 
     # Print table

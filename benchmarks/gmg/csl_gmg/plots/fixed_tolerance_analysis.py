@@ -18,6 +18,7 @@ import numpy as np
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.join(SCRIPT_DIR, '..')
+RESPONSES_DIR = os.path.join(BASE_DIR, 'build')  # all_responses_*.txt now live under build/
 
 FIXED_TOLERANCE = 1e-5
 
@@ -109,7 +110,7 @@ def main():
     # Parse all configs
     all_data = {}
     for config_label, filename in WSE3_CONFIGS:
-        filepath = os.path.join(BASE_DIR, filename)
+        filepath = os.path.join(RESPONSES_DIR, filename)
         all_data[config_label] = parse_rho_and_timing(filepath)
 
     # H200 CSV data for comparison

@@ -1,0 +1,1428 @@
+Output directory: out_dir_S4x_L2_M100_P6_P6_B100
+########################################################
+Parameters: size=4, levels=2, channels=4
+Run parameters: max_ite=100, pre_iter=6, post_iter=6, bottom_iter=100
+Fabric dims: 762,1172
+Compile command: --arch=wse3 --fabric-dims=762,1172 --fabric-offsets=4,1 --params=width:4,height:4,MAX_ZDIM:4,LEVELS:2 --params=BLOCK_SIZE:4 --memcpy --channels=4 --width-west-buf=0 --width-east-buf=0 -o out_vcycle4 --llvm-option=--inline-threshold=256 --llvm-option=--unroll-threshold=256
+Run command: cs_python run_gmg_vcycle.py -m=4 -n=4 -k=4 --latestlink out_vcycle4 --channels=4 --width-west-buf=0 --width-east-buf=0 --zDim=4 --run-only --levels=2 --max-ite=100 --blockSize=4 --pre-iter=6 --post-iter=6 --bottom-iter=100 --tolerance=1e-05 --cmaddr %CMADDR%
+########################################################
+
+======================================================================
+Memory usage check:
+======================================================================
+Summary mode enabled
+==============================================
+Checking Memory Usage from ELF Files
+==============================================
+Using tool: cs_readelf
+ELF Directory: out_dir_S4x_L2_M100_P6_P6_B100/cs_d845da6fa716b5548bf9b77e345b7eadb639e46343469b36509223992d8c84c0/out_vcycle4
+Checking PE at tile (0, 0)
+Sample PE ELF: out_dir_S4x_L2_M100_P6_P6_B100/cs_d845da6fa716b5548bf9b77e345b7eadb639e46343469b36509223992d8c84c0/out_vcycle4/bin/out_0_0.elf
+
+  Code (FUNC symbols):      22104 bytes (21.59 KB) - 96 functions
+  Data (OBJECT symbols):    1390 bytes (1.36 KB) - 231 objects
+
+  Total accounted:          23494 bytes (22.94 KB)
+  Overhead (stack/other):   314 bytes (0.31 KB)
+==============================================
+
+Output directory: out_dir_S8x_L3_M100_P6_P6_B100
+########################################################
+Parameters: size=8, levels=3, channels=8
+Run parameters: max_ite=100, pre_iter=6, post_iter=6, bottom_iter=100
+Fabric dims: 762,1172
+Compile command: --arch=wse3 --fabric-dims=762,1172 --fabric-offsets=4,1 --params=width:8,height:8,MAX_ZDIM:8,LEVELS:3 --params=BLOCK_SIZE:8 --memcpy --channels=8 --width-west-buf=0 --width-east-buf=0 -o out_vcycle8 --llvm-option=--inline-threshold=256 --llvm-option=--unroll-threshold=256
+Run command: cs_python run_gmg_vcycle.py -m=8 -n=8 -k=8 --latestlink out_vcycle8 --channels=8 --width-west-buf=0 --width-east-buf=0 --zDim=8 --run-only --levels=3 --max-ite=100 --blockSize=8 --pre-iter=6 --post-iter=6 --bottom-iter=100 --tolerance=1e-05 --cmaddr %CMADDR%
+########################################################
+
+======================================================================
+Memory usage check:
+======================================================================
+Summary mode enabled
+==============================================
+Checking Memory Usage from ELF Files
+==============================================
+Using tool: cs_readelf
+ELF Directory: out_dir_S8x_L3_M100_P6_P6_B100/cs_5204e52823c395238e7851d2bc133a71b83b4fc4abd4a09ce60703ca1fd801d9/out_vcycle8
+Checking PE at tile (0, 0)
+Sample PE ELF: out_dir_S8x_L3_M100_P6_P6_B100/cs_5204e52823c395238e7851d2bc133a71b83b4fc4abd4a09ce60703ca1fd801d9/out_vcycle8/bin/out_0_0.elf
+
+  Code (FUNC symbols):      22324 bytes (21.80 KB) - 96 functions
+  Data (OBJECT symbols):    1762 bytes (1.72 KB) - 231 objects
+
+  Total accounted:          24086 bytes (23.52 KB)
+  Overhead (stack/other):   346 bytes (0.34 KB)
+==============================================
+
+
+Compile time (s): 640.478993
+
+======================================================================
+Run output:
+======================================================================
+Matplotlib created a temporary cache directory at /tmp/matplotlib-fu7lma8a because the default path (/.config/matplotlib) is not a writable directory; it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+Fontconfig error: Cannot load default config file: No such file: (null)
+WARNING: The message system is being used before initialization.
+         Messages will still be printed, but with limited support.
+COUT034   Latest HIOLIB used
+COUT034  TCP connect to: 10.254.2.67:9000
+COUT034  No credentials found, disabling TLS
+COUT034  TLS is disabled
+COUT034  TLS disabled
+COUT034  Poll
+COUT034  TCP connected
+COUT034  Connection successful
+COUT034  Local addr: 10.125.9.205:41300
+COUT034  hio_ctl:HRQ_HANDSHAKE 55583 us
+COUT034  TCP connect to: 10.254.2.67:9000
+COUT034  TLS disabled
+COUT034  Poll
+COUT034  TCP connected
+COUT034  Connection successful
+COUT034  Local addr: 10.125.9.205:41306
+COUT034  hio_ctl:HRQ_HANDSHAKE 104452 us
+COUT034  hio_ctl:HRQ_GETFABRIC 212 us
+HAAP425 11:11:37 GMT  WARNING: hio_group_program is deprecated, use hio_flows_program
+COUT002 11:11:37 GMT  ERROR: LOGGER NOT INITIALIZED:
+COUT002 11:11:37 GMT  ERROR: 		wio_groups.json is deprecated, use wio_flows.json instead
+HWKA425 11:12:05 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 8 streamer 0 P:2 C:62 (10.254.3.54:64, 10.254.3.60:64, 10.254.3.66:64, 10.254.3.72:64) mode: RoCE
+HWKA425 11:12:06 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 0 streamer 0 P:0 C:63 (10.254.3.50:65, 10.254.3.56:65, 10.254.3.62:65, 10.254.3.68:65) mode: RoCE
+HWKA425 11:12:06 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 1 streamer 0 P:1 C:60 (10.254.3.52:62, 10.254.3.58:62, 10.254.3.64:62, 10.254.3.70:62) mode: RoCE
+HWKA425 11:12:07 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 2 streamer 0 P:2 C:55 (10.254.3.54:57, 10.254.3.60:57, 10.254.3.66:57, 10.254.3.72:57) mode: RoCE
+HWKA425 11:12:07 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 3 streamer 0 P:0 C:40 (10.254.3.50:42, 10.254.3.56:42, 10.254.3.62:42, 10.254.3.68:42) mode: RoCE
+HWKA425 11:12:08 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 4 streamer 0 P:1 C:33 (10.254.3.52:35, 10.254.3.58:35, 10.254.3.64:35, 10.254.3.70:35) mode: RoCE
+HWKA425 11:12:08 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 5 streamer 0 P:2 C:36 (10.254.3.54:38, 10.254.3.60:38, 10.254.3.66:38, 10.254.3.72:38) mode: RoCE
+HWKA425 11:12:09 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 6 streamer 0 P:0 C:37 (10.254.3.50:39, 10.254.3.56:39, 10.254.3.62:39, 10.254.3.68:39) mode: RoCE
+HWKA425 11:12:10 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 7 streamer 0 P:1 C:54 (10.254.3.52:56, 10.254.3.58:56, 10.254.3.64:56, 10.254.3.70:56) mode: RoCE
+HWKA425 11:12:10 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 17 streamer 0 P:2 C:41 (10.254.3.54:43, 10.254.3.60:43, 10.254.3.66:43, 10.254.3.72:43) mode: RoCE
+HWKA425 11:12:11 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 9 streamer 0 P:0 C:126 (10.254.3.50:128, 10.254.3.56:128, 10.254.3.62:128, 10.254.3.68:128) mode: RoCE
+HWKA425 11:12:11 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 10 streamer 0 P:1 C:92 (10.254.3.52:94, 10.254.3.58:94, 10.254.3.64:94, 10.254.3.70:94) mode: RoCE
+HWKA425 11:12:12 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 11 streamer 0 P:2 C:90 (10.254.3.54:92, 10.254.3.60:92, 10.254.3.66:92, 10.254.3.72:92) mode: RoCE
+HWKA425 11:12:12 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 12 streamer 0 P:0 C:72 (10.254.3.50:74, 10.254.3.56:74, 10.254.3.62:74, 10.254.3.68:74) mode: RoCE
+HWKA425 11:12:13 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 13 streamer 0 P:1 C:87 (10.254.3.52:89, 10.254.3.58:89, 10.254.3.64:89, 10.254.3.70:89) mode: RoCE
+HWKA425 11:12:13 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 14 streamer 0 P:2 C:84 (10.254.3.54:86, 10.254.3.60:86, 10.254.3.66:86, 10.254.3.72:86) mode: RoCE
+HWKA425 11:12:14 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 15 streamer 0 P:0 C:104 (10.254.3.50:106, 10.254.3.56:106, 10.254.3.62:106, 10.254.3.68:106) mode: RoCE
+HWKA425 11:12:15 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+out_vcycle8 already exists
+
+============================================================
+Creating reference solver on host...
+============================================================
+
+============================================================
+Device calculations...
+============================================================
+1. Warmup(3 iterations) + reset...
+2. Copying initial data to device...
+Grid spacing and Jacobi coefficients:
+  Level 0: hx=0.125000, 1/hx=8.000000, jacobi=-1.736111e-03
+  Level 1: hx=0.250000, 1/hx=4.000000, jacobi=-6.944444e-03
+  Level 2: hx=0.500000, 1/hx=2.000000, jacobi=-2.777778e-02
+3. Enabling timer...
+4. Synchronizing PEs...
+5. Tic total...
+6. Running GMG V-cycle(max_iter=100, levels=3) on device...
+7. Toc total...
+8. Copying timers and counters from device...
+9. Checking convergence...
+
+============================================================
+Rho values after each iteration
+============================================================
+Total iterations performed: 5
+Iteration    |rho|_max           
+------------------------------------------------------------
+1                   3.275902e+01
+2                   1.905682e-01
+3                   2.415927e-02
+4                   1.089096e-03
+5                   6.233156e-05
+[GMG] rho = |b-A*x|_inf = 6.233156e-05
+  Tolerance = 8.000000e-05
+  Converged: Yes
+10. Profiling...
+
+============================================================
+Performance Timing
+============================================================
+PE(0,0) only. Phase timers (smooth, residual, …) ACCUMULATE across all V-cycles.
+Convergence (L0 only) is separated; see summary block below the tables for per-V-cycle averages.
+
+Time per operation and level (us[cycles]), first V-cycle:
++====================+====================+====================+====================+====================+====================+====================+====================+
+|       level        |       smooth       |      residual      |    restriction     |   interpolation    |       setup        |    convergence     |       total        |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         0          | 152.224us( 133196) | 11.126us(   9735)  |  8.851us(   7745)  |  6.766us(   5920)  |  6.186us(   5413)  | 30.211us(  26435)  | 215.365us( 188444) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         1          | 147.589us( 129140) | 10.811us(   9460)  |  8.749us(   7655)  |  6.737us(   5895)  |  4.234us(   3705)  |  0.000us(      0)  | 178.120us( 155855) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         2          |1219.509us(1067070) |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |  2.240us(   1960)  |  0.000us(      0)  |1221.749us(1069030) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|       total        |1519.321us(1329406) | 21.937us(  19195)  | 17.600us(  15400)  | 13.503us(  11815)  | 12.661us(  11078)  | 30.211us(  26435)  |1615.233us(1413329) |
++====================+====================+====================+====================+====================+====================+====================+====================+
+
+7-pt Stencil: SpMV vs smoothing (us[cycles]), per level, scaled to one V-cycle:
+  SpMV Total / Communication / Compute ÷ 5 (iterations); smooth_* from first V-cycle only.
++====================+====================+====================+====================+====================+====================+====================+====================+
+|       level        |  Total SpMV Time   | Communication Time |    Compute Time    |    smooth_apply    |   smooth_update    |    smooth_total    |  smooth_overhead   |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         0          | 25.113us(  21974)  | 10.025us(   8772)  |  7.344us(   6426)  | 120.464us( 105406) | 10.217us(   8940)  | 152.224us( 133196) | 21.543us(  18850)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         1          | 22.395us(  19596)  |  9.128us(   7987)  |  6.091us(   5330)  | 116.549us( 101980) |  9.497us(   8310)  | 147.589us( 129140) | 21.543us(  18850)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         2          | 167.577us( 146630) | 67.806us(  59330)  | 44.571us(  39000)  | 954.457us( 835150) | 77.143us(  67500)  |1219.509us(1067070) | 187.909us( 164420) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|       total        | 215.086us( 188200) | 86.959us(  76089)  | 58.007us(  50756)  |1191.470us(1042536) | 96.857us(  84750)  |1519.321us(1329406) | 230.994us( 202120) |
++====================+====================+====================+====================+====================+====================+====================+====================+
+
+Interpolation micro-benchmark (us[cycles]), PE(0,0), first V-cycle only:
++====================+====================+====================+====================+====================+====================+====================+
+|       level        |    expand_z(T1)    |  bcast_total(T2)   | reset_routes(T2.1) |  send_data(T2.2)   |   interp_add(T3)   |interp_total(T1+T2+T3)|
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         0          |  0.543us(    475)  |  3.486us(   3050)  |  0.434us(    380)  |  0.960us(    840)  |  0.509us(    445)  |  6.766us(   5920)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         1          |  0.531us(    465)  |  3.480us(   3045)  |  0.434us(    380)  |  0.954us(    835)  |  0.497us(    435)  |  6.737us(   5895)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         2          |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|       total        |  1.074us(    940)  |  6.966us(   6095)  |  0.869us(    760)  |  1.914us(   1675)  |  1.006us(    880)  | 13.503us(  11815)  |
++====================+====================+====================+====================+====================+====================+====================+
+====================================================================================================
+Total solver wall time (all 5 V-cycles, inc. conv check per V-cycle):   1630.245 us (   1426464 cycles)
+Convergence diagnostic time (total, 5 checks, only at L0):                   30.211 us (     26435 cycles)
+Pure operators time (wall - convergence, all 5 V-cycles):                  1600.033 us (   1400029 cycles)
+Average V-cycle time (pure operators / 5 iters, no conv):                   320.007 us (    280006 cycles)
+====================================================================================================
+
+========================================================================================================================
+ROOFLINE — PE(0,0) only; totals accumulated across ALL V-cycles (convergence-check ops excluded)
+  Per-level 'active PEs' is the 2D PE count used at that multigrid level (for scaling).
+  FLOP/Mem/Fab rows below are not summed over the wafer — they are one PE's counts.
+  Divide counts by 'Device iterations to converge' (5) to get per-V-cycle values.
+========================================================================================================================
+
+Level 0 (nz=8, active PEs: 64, stride: 1):
+Operation         Count
+-------------------------
+FSUB                520
+FMAC              4,120
+FMUL                 20
+FADD                140
+FNEG              1,040
+FMOV_MEM            232
+FMOV_ZERO           600
+FMOV32            1,121
+
+Level 1 (nz=4, active PEs: 16, stride: 2):
+Operation         Count
+-------------------------
+FSUB                260
+FMAC              2,060
+FMUL                 10
+FADD                 70
+FNEG                520
+FMOV_MEM            100
+FMOV_ZERO           320
+FMOV32              560
+
+Level 2 (nz=2, active PEs: 4, stride: 4):
+Operation         Count
+-------------------------
+FSUB              1,000
+FMAC              8,000
+FNEG              2,000
+FMOV_MEM             10
+FMOV_ZERO         1,020
+FMOV32            2,000
+
+Device iterations to converge: 5
+Total solver time (all iters): 1630.245 us
+
+Run: python plots/roofline_analysis.py <response.txt> for full roofline analysis and plots.
+========================================================================================================================
+
+============================================================
+Configuration Summary
+============================================================
+HeightxWidthxZDim               : 8x8x8
+Levels                          : 3
+Max iterations                  : 100
+Tolerance (abs)                 : 1.00e-05
+Tolerance (rel)                 : 8.00e-05
+Pre/Post/Bottom iter            : 6/6/100
+Datatype                        : float32
+Jacobi omega                    : 0.666667
+Stencil alpha/beta              : -6.0/1.0
+Channels                        : 8
+Block size                      : 8
+West/East buffer width          : 0/0
+Total solver wall time (us[cycles]):   1630.245us(   1426464)
+Device iterations               : 5
+Avg V-cycle time (no conv)      :    320.007us
+Device final |rho|_inf          : 6.233e-05
+11. Stopping simulator...
+Opened egress stream flow 16 streamer 0 P:1 C:88 (10.254.3.52:90, 10.254.3.58:90, 10.254.3.64:90, 10.254.3.70:90) mode: RoCE
+
+Run time (s): 95.011334
+Output directory: out_dir_S16x_L4_M100_P6_P6_B100
+########################################################
+Parameters: size=16, levels=4, channels=16
+Run parameters: max_ite=100, pre_iter=6, post_iter=6, bottom_iter=100
+Fabric dims: 762,1172
+Compile command: --arch=wse3 --fabric-dims=762,1172 --fabric-offsets=4,1 --params=width:16,height:16,MAX_ZDIM:16,LEVELS:4 --params=BLOCK_SIZE:16 --memcpy --channels=16 --width-west-buf=0 --width-east-buf=0 -o out_vcycle16 --llvm-option=--inline-threshold=256 --llvm-option=--unroll-threshold=256
+Run command: cs_python run_gmg_vcycle.py -m=16 -n=16 -k=16 --latestlink out_vcycle16 --channels=16 --width-west-buf=0 --width-east-buf=0 --zDim=16 --run-only --levels=4 --max-ite=100 --blockSize=16 --pre-iter=6 --post-iter=6 --bottom-iter=100 --tolerance=1e-05 --cmaddr %CMADDR%
+########################################################
+
+======================================================================
+Memory usage check:
+======================================================================
+Summary mode enabled
+==============================================
+Checking Memory Usage from ELF Files
+==============================================
+Using tool: cs_readelf
+ELF Directory: out_dir_S16x_L4_M100_P6_P6_B100/cs_773dbae90ea15afed0383c069c3a183289dab5ac2891ecfbfec28646a9bafadf/out_vcycle16
+Checking PE at tile (0, 0)
+Sample PE ELF: out_dir_S16x_L4_M100_P6_P6_B100/cs_773dbae90ea15afed0383c069c3a183289dab5ac2891ecfbfec28646a9bafadf/out_vcycle16/bin/out_0_0.elf
+
+  Code (FUNC symbols):      22324 bytes (21.80 KB) - 96 functions
+  Data (OBJECT symbols):    2342 bytes (2.29 KB) - 231 objects
+
+  Total accounted:          24666 bytes (24.09 KB)
+  Overhead (stack/other):   310 bytes (0.30 KB)
+==============================================
+
+
+Compile time (s): 641.675740
+
+======================================================================
+Run output:
+======================================================================
+Matplotlib created a temporary cache directory at /tmp/matplotlib-dr1fn8a8 because the default path (/.config/matplotlib) is not a writable directory; it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+Fontconfig error: Cannot load default config file: No such file: (null)
+WARNING: The message system is being used before initialization.
+         Messages will still be printed, but with limited support.
+COUT034   Latest HIOLIB used
+COUT034  TCP connect to: 10.254.2.68:9000
+COUT034  No credentials found, disabling TLS
+COUT034  TLS is disabled
+COUT034  TLS disabled
+COUT034  Poll
+COUT034  TCP connected
+COUT034  Connection successful
+COUT034  Local addr: 10.125.8.161:45116
+COUT034  hio_ctl:HRQ_HANDSHAKE 66243 us
+COUT034  TCP connect to: 10.254.2.68:9000
+COUT034  TLS disabled
+COUT034  Poll
+COUT034  TCP connected
+COUT034  Connection successful
+COUT034  Local addr: 10.125.8.161:45132
+COUT034  hio_ctl:HRQ_HANDSHAKE 75305 us
+COUT034  hio_ctl:HRQ_GETFABRIC 191 us
+HAAP425 11:10:00 GMT  WARNING: hio_group_program is deprecated, use hio_flows_program
+COUT002 11:10:00 GMT  ERROR: LOGGER NOT INITIALIZED:
+COUT002 11:10:00 GMT  ERROR: 		wio_groups.json is deprecated, use wio_flows.json instead
+HWKA425 11:10:29 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 16 streamer 0 P:2 C:53 (10.254.3.78:55, 10.254.3.84:55, 10.254.3.90:55, 10.254.3.96:55) mode: RoCE
+HWKA425 11:10:29 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 0 streamer 0 P:0 C:39 (10.254.3.74:41, 10.254.3.80:41, 10.254.3.86:41, 10.254.3.92:41) mode: RoCE
+HWKA425 11:10:30 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 1 streamer 0 P:1 C:6 (10.254.3.76:8, 10.254.3.82:8, 10.254.3.88:8, 10.254.3.94:8) mode: RoCE
+HWKA425 11:10:30 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 2 streamer 0 P:2 C:36 (10.254.3.78:38, 10.254.3.84:38, 10.254.3.90:38, 10.254.3.96:38) mode: RoCE
+HWKA425 11:10:31 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 3 streamer 0 P:0 C:63 (10.254.3.74:65, 10.254.3.80:65, 10.254.3.86:65, 10.254.3.92:65) mode: RoCE
+HWKA425 11:10:31 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 4 streamer 0 P:1 C:26 (10.254.3.76:28, 10.254.3.82:28, 10.254.3.88:28, 10.254.3.94:28) mode: RoCE
+HWKA425 11:10:32 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 5 streamer 0 P:2 C:51 (10.254.3.78:53, 10.254.3.84:53, 10.254.3.90:53, 10.254.3.96:53) mode: RoCE
+HWKA425 11:10:32 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 6 streamer 0 P:0 C:47 (10.254.3.74:49, 10.254.3.80:49, 10.254.3.86:49, 10.254.3.92:49) mode: RoCE
+HWKA425 11:10:33 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 7 streamer 0 P:1 C:27 (10.254.3.76:29, 10.254.3.82:29, 10.254.3.88:29, 10.254.3.94:29) mode: RoCE
+HWKA425 11:10:34 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 8 streamer 0 P:2 C:41 (10.254.3.78:43, 10.254.3.84:43, 10.254.3.90:43, 10.254.3.96:43) mode: RoCE
+HWKA425 11:10:34 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 9 streamer 0 P:0 C:0 (10.254.3.74:2, 10.254.3.80:2, 10.254.3.86:2, 10.254.3.92:2) mode: RoCE
+HWKA425 11:10:35 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 10 streamer 0 P:1 C:62 (10.254.3.76:64, 10.254.3.82:64, 10.254.3.88:64, 10.254.3.94:64) mode: RoCE
+HWKA425 11:10:35 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 11 streamer 0 P:2 C:30 (10.254.3.78:32, 10.254.3.84:32, 10.254.3.90:32, 10.254.3.96:32) mode: RoCE
+HWKA425 11:10:36 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 12 streamer 0 P:0 C:3 (10.254.3.74:5, 10.254.3.80:5, 10.254.3.86:5, 10.254.3.92:5) mode: RoCE
+HWKA425 11:10:36 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 13 streamer 0 P:1 C:20 (10.254.3.76:22, 10.254.3.82:22, 10.254.3.88:22, 10.254.3.94:22) mode: RoCE
+HWKA425 11:10:37 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 14 streamer 0 P:2 C:43 (10.254.3.78:45, 10.254.3.84:45, 10.254.3.90:45, 10.254.3.96:45) mode: RoCE
+HWKA425 11:10:37 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 15 streamer 0 P:0 C:59 (10.254.3.74:61, 10.254.3.80:61, 10.254.3.86:61, 10.254.3.92:61) mode: RoCE
+HWKA425 11:10:38 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 33 streamer 0 P:1 C:12 (10.254.3.76:14, 10.254.3.82:14, 10.254.3.88:14, 10.254.3.94:14) mode: RoCE
+HWKA425 11:10:39 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 17 streamer 0 P:0 C:109 (10.254.3.74:111, 10.254.3.80:111, 10.254.3.86:111, 10.254.3.92:111) mode: RoCE
+HWKA425 11:10:39 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 18 streamer 0 P:1 C:90 (10.254.3.76:92, 10.254.3.82:92, 10.254.3.88:92, 10.254.3.94:92) mode: RoCE
+HWKA425 11:10:40 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 19 streamer 0 P:2 C:106 (10.254.3.78:108, 10.254.3.84:108, 10.254.3.90:108, 10.254.3.96:108) mode: RoCE
+HWKA425 11:10:40 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 20 streamer 0 P:0 C:119 (10.254.3.74:121, 10.254.3.80:121, 10.254.3.86:121, 10.254.3.92:121) mode: RoCE
+HWKA425 11:10:41 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 21 streamer 0 P:1 C:72 (10.254.3.76:74, 10.254.3.82:74, 10.254.3.88:74, 10.254.3.94:74) mode: RoCE
+HWKA425 11:10:41 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 22 streamer 0 P:2 C:88 (10.254.3.78:90, 10.254.3.84:90, 10.254.3.90:90, 10.254.3.96:90) mode: RoCE
+HWKA425 11:10:42 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 23 streamer 0 P:0 C:113 (10.254.3.74:115, 10.254.3.80:115, 10.254.3.86:115, 10.254.3.92:115) mode: RoCE
+HWKA425 11:10:42 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 24 streamer 0 P:1 C:94 (10.254.3.76:96, 10.254.3.82:96, 10.254.3.88:96, 10.254.3.94:96) mode: RoCE
+HWKA425 11:10:43 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 25 streamer 0 P:2 C:80 (10.254.3.78:82, 10.254.3.84:82, 10.254.3.90:82, 10.254.3.96:82) mode: RoCE
+HWKA425 11:10:44 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 26 streamer 0 P:0 C:126 (10.254.3.74:128, 10.254.3.80:128, 10.254.3.86:128, 10.254.3.92:128) mode: RoCE
+HWKA425 11:10:44 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 27 streamer 0 P:1 C:125 (10.254.3.76:127, 10.254.3.82:127, 10.254.3.88:127, 10.254.3.94:127) mode: RoCE
+HWKA425 11:10:45 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 28 streamer 0 P:2 C:84 (10.254.3.78:86, 10.254.3.84:86, 10.254.3.90:86, 10.254.3.96:86) mode: RoCE
+HWKA425 11:10:45 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 29 streamer 0 P:0 C:125 (10.254.3.74:127, 10.254.3.80:127, 10.254.3.86:127, 10.254.3.92:127) mode: RoCE
+HWKA425 11:10:46 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 30 streamer 0 P:1 C:99 (10.254.3.76:101, 10.254.3.82:101, 10.254.3.88:101, 10.254.3.94:101) mode: RoCE
+HWKA425 11:10:46 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 31 streamer 0 P:2 C:113 (10.254.3.78:115, 10.254.3.84:115, 10.254.3.90:115, 10.254.3.96:115) mode: RoCE
+HWKA425 11:10:47 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+out_vcycle16 already exists
+
+============================================================
+Creating reference solver on host...
+============================================================
+
+============================================================
+Device calculations...
+============================================================
+1. Warmup(3 iterations) + reset...
+2. Copying initial data to device...
+Grid spacing and Jacobi coefficients:
+  Level 0: hx=0.062500, 1/hx=16.000000, jacobi=-4.340278e-04
+  Level 1: hx=0.125000, 1/hx=8.000000, jacobi=-1.736111e-03
+  Level 2: hx=0.250000, 1/hx=4.000000, jacobi=-6.944444e-03
+  Level 3: hx=0.500000, 1/hx=2.000000, jacobi=-2.777778e-02
+3. Enabling timer...
+4. Synchronizing PEs...
+5. Tic total...
+6. Running GMG V-cycle(max_iter=100, levels=4) on device...
+7. Toc total...
+8. Copying timers and counters from device...
+9. Checking convergence...
+
+============================================================
+Rho values after each iteration
+============================================================
+Total iterations performed: 6
+Iteration    |rho|_max           
+------------------------------------------------------------
+1                   2.045688e+02
+2                   4.598846e+00
+3                   3.227676e-01
+4                   1.441654e-03
+5                   7.462818e-04
+6                   2.524257e-05
+[GMG] rho = |b-A*x|_inf = 2.524257e-05
+  Tolerance = 3.968268e-05
+  Converged: Yes
+10. Profiling...
+
+============================================================
+Performance Timing
+============================================================
+PE(0,0) only. Phase timers (smooth, residual, …) ACCUMULATE across all V-cycles.
+Convergence (L0 only) is separated; see summary block below the tables for per-V-cycle averages.
+
+Time per operation and level (us[cycles]), first V-cycle:
++====================+====================+====================+====================+====================+====================+====================+====================+
+|       level        |       smooth       |      residual      |    restriction     |   interpolation    |       setup        |    convergence     |       total        |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         0          | 189.302us( 165639) | 13.680us(  11970)  | 10.800us(   9450)  |  8.153us(   7134)  |  7.512us(   6573)  | 45.113us(  39474)  | 274.560us( 240240) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         1          | 180.699us( 158112) | 13.111us(  11472)  | 10.608us(   9282)  |  8.043us(   7038)  |  5.047us(   4416)  |  0.000us(      0)  | 217.509us( 190320) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         2          | 176.763us( 154668) | 12.864us(  11256)  | 10.423us(   9120)  |  8.002us(   7002)  |  5.136us(   4494)  |  0.000us(      0)  | 213.189us( 186540) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         3          |1486.725us(1300884) |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |  2.722us(   2382)  |  0.000us(      0)  |1489.447us(1303266) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|       total        |2033.489us(1779303) | 39.655us(  34698)  | 31.831us(  27852)  | 24.199us(  21174)  | 20.417us(  17865)  | 45.113us(  39474)  |2194.704us(1920366) |
++====================+====================+====================+====================+====================+====================+====================+====================+
+
+7-pt Stencil: SpMV vs smoothing (us[cycles]), per level, scaled to one V-cycle:
+  SpMV Total / Communication / Compute ÷ 6 (iterations); smooth_* from first V-cycle only.
++====================+====================+====================+====================+====================+====================+====================+====================+
+|       level        |  Total SpMV Time   | Communication Time |    Compute Time    |    smooth_apply    |   smooth_update    |    smooth_total    |  smooth_overhead   |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         0          | 26.034us(  22780)  | 10.418us(   9116)  |  7.936us(   6944)  | 149.510us( 130821) | 13.865us(  12132)  | 189.302us( 165639) | 25.927us(  22686)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         1          | 22.832us(  19978)  |  9.371us(   8200)  |  6.359us(   5564)  | 142.553us( 124734) | 12.219us(  10692)  | 180.699us( 158112) | 25.927us(  22686)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         2          | 22.275us(  19491)  |  9.320us(   8155)  |  5.869us(   5135)  | 139.440us( 122010) | 11.397us(   9972)  | 176.763us( 154668) | 25.927us(  22686)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         3          | 172.375us( 150828) | 73.632us(  64428)  | 44.229us(  38700)  |1173.449us(1026768) | 91.886us(  80400)  |1486.725us(1300884) | 221.390us( 193716) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|       total        | 243.516us( 213076) | 102.741us(  89898) | 64.392us(  56343)  |1604.952us(1404333) | 129.367us( 113196) |2033.489us(1779303) | 299.170us( 261774) |
++====================+====================+====================+====================+====================+====================+====================+====================+
+
+Interpolation micro-benchmark (us[cycles]), PE(0,0), first V-cycle only:
++====================+====================+====================+====================+====================+====================+====================+
+|       level        |    expand_z(T1)    |  bcast_total(T2)   | reset_routes(T2.1) |  send_data(T2.2)   |   interp_add(T3)   |interp_total(T1+T2+T3)|
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         0          |  0.679us(    594)  |  4.203us(   3678)  |  0.514us(    450)  |  1.207us(   1056)  |  0.624us(    546)  |  8.153us(   7134)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         1          |  0.638us(    558)  |  4.162us(   3642)  |  0.514us(    450)  |  1.166us(   1020)  |  0.597us(    522)  |  8.043us(   7038)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         2          |  0.624us(    546)  |  4.155us(   3636)  |  0.514us(    450)  |  1.159us(   1014)  |  0.576us(    504)  |  8.002us(   7002)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         3          |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|       total        |  1.941us(   1698)  | 12.521us(  10956)  |  1.543us(   1350)  |  3.531us(   3090)  |  1.797us(   1572)  | 24.199us(  21174)  |
++====================+====================+====================+====================+====================+====================+====================+
+====================================================================================================
+Total solver wall time (all 6 V-cycles, inc. conv check per V-cycle):   2220.318 us (   1942778 cycles)
+Convergence diagnostic time (total, 6 checks, only at L0):                   45.113 us (     39474 cycles)
+Pure operators time (wall - convergence, all 6 V-cycles):                  2175.205 us (   1903304 cycles)
+Average V-cycle time (pure operators / 6 iters, no conv):                   362.534 us (    317217 cycles)
+====================================================================================================
+
+========================================================================================================================
+ROOFLINE — PE(0,0) only; totals accumulated across ALL V-cycles (convergence-check ops excluded)
+  Per-level 'active PEs' is the 2D PE count used at that multigrid level (for scaling).
+  FLOP/Mem/Fab rows below are not summed over the wafer — they are one PE's counts.
+  Divide counts by 'Device iterations to converge' (6) to get per-V-cycle values.
+========================================================================================================================
+
+Level 0 (nz=16, active PEs: 256, stride: 1):
+Operation         Count
+-------------------------
+FSUB              1,248
+FMAC              9,888
+FMUL                 48
+FADD                336
+FNEG              2,496
+FMOV_MEM            560
+FMOV_ZERO         1,440
+FMOV32            2,689
+
+Level 1 (nz=8, active PEs: 64, stride: 2):
+Operation         Count
+-------------------------
+FSUB                624
+FMAC              4,944
+FMUL                 24
+FADD                168
+FNEG              1,248
+FMOV_MEM            240
+FMOV_ZERO           768
+FMOV32            1,344
+
+Level 2 (nz=4, active PEs: 16, stride: 4):
+Operation         Count
+-------------------------
+FSUB                312
+FMAC              2,472
+FMUL                 12
+FADD                 84
+FNEG                624
+FMOV_MEM            120
+FMOV_ZERO           384
+FMOV32              672
+
+Level 3 (nz=2, active PEs: 4, stride: 8):
+Operation         Count
+-------------------------
+FSUB              1,200
+FMAC              9,600
+FNEG              2,400
+FMOV_MEM             12
+FMOV_ZERO         1,224
+FMOV32            2,400
+
+Device iterations to converge: 6
+Total solver time (all iters): 2220.318 us
+
+Run: python plots/roofline_analysis.py <response.txt> for full roofline analysis and plots.
+========================================================================================================================
+
+============================================================
+Configuration Summary
+============================================================
+HeightxWidthxZDim               : 16x16x16
+Levels                          : 4
+Max iterations                  : 100
+Tolerance (abs)                 : 1.00e-05
+Tolerance (rel)                 : 3.97e-05
+Pre/Post/Bottom iter            : 6/6/100
+Datatype                        : float32
+Jacobi omega                    : 0.666667
+Stencil alpha/beta              : -6.0/1.0
+Channels                        : 16
+Block size                      : 16
+West/East buffer width          : 0/0
+Total solver wall time (us[cycles]):   2220.318us(   1942778)
+Device iterations               : 6
+Avg V-cycle time (no conv)      :    362.534us
+Device final |rho|_inf          : 2.524e-05
+11. Stopping simulator...
+Opened egress stream flow 32 streamer 0 P:0 C:80 (10.254.3.74:82, 10.254.3.80:82, 10.254.3.86:82, 10.254.3.92:82) mode: RoCE
+
+Run time (s): 107.008228
+Output directory: out_dir_S32x_L5_M100_P6_P6_B100
+########################################################
+Parameters: size=32, levels=5, channels=16
+Run parameters: max_ite=100, pre_iter=6, post_iter=6, bottom_iter=100
+Fabric dims: 762,1172
+Compile command: --arch=wse3 --fabric-dims=762,1172 --fabric-offsets=4,1 --params=width:32,height:32,MAX_ZDIM:32,LEVELS:5 --params=BLOCK_SIZE:32 --memcpy --channels=16 --width-west-buf=0 --width-east-buf=0 -o out_vcycle32 --llvm-option=--inline-threshold=256 --llvm-option=--unroll-threshold=256
+Run command: cs_python run_gmg_vcycle.py -m=32 -n=32 -k=32 --latestlink out_vcycle32 --channels=16 --width-west-buf=0 --width-east-buf=0 --zDim=32 --run-only --levels=5 --max-ite=100 --blockSize=32 --pre-iter=6 --post-iter=6 --bottom-iter=100 --tolerance=1e-05 --cmaddr %CMADDR%
+########################################################
+
+======================================================================
+Memory usage check:
+======================================================================
+Summary mode enabled
+==============================================
+Checking Memory Usage from ELF Files
+==============================================
+Using tool: cs_readelf
+ELF Directory: out_dir_S32x_L5_M100_P6_P6_B100/cs_c2f4150f10d3e199f31ed26272440bd11f8e317e938332caee4800d7817acdc7/out_vcycle32
+Checking PE at tile (0, 0)
+Sample PE ELF: out_dir_S32x_L5_M100_P6_P6_B100/cs_c2f4150f10d3e199f31ed26272440bd11f8e317e938332caee4800d7817acdc7/out_vcycle32/bin/out_0_0.elf
+
+  Code (FUNC symbols):      22316 bytes (21.79 KB) - 96 functions
+  Data (OBJECT symbols):    3338 bytes (3.26 KB) - 231 objects
+
+  Total accounted:          25654 bytes (25.05 KB)
+  Overhead (stack/other):   346 bytes (0.34 KB)
+==============================================
+
+Output directory: out_dir_S64x_L6_M100_P6_P6_B100
+########################################################
+Parameters: size=64, levels=6, channels=16
+Run parameters: max_ite=100, pre_iter=6, post_iter=6, bottom_iter=100
+Fabric dims: 762,1172
+Compile command: --arch=wse3 --fabric-dims=762,1172 --fabric-offsets=4,1 --params=width:64,height:64,MAX_ZDIM:64,LEVELS:6 --params=BLOCK_SIZE:64 --memcpy --channels=16 --width-west-buf=0 --width-east-buf=0 -o out_vcycle64 --llvm-option=--inline-threshold=256 --llvm-option=--unroll-threshold=256
+Run command: cs_python run_gmg_vcycle.py -m=64 -n=64 -k=64 --latestlink out_vcycle64 --channels=16 --width-west-buf=0 --width-east-buf=0 --zDim=64 --run-only --levels=6 --max-ite=100 --blockSize=64 --pre-iter=6 --post-iter=6 --bottom-iter=100 --tolerance=1e-05 --cmaddr %CMADDR%
+########################################################
+
+======================================================================
+Memory usage check:
+======================================================================
+Summary mode enabled
+==============================================
+Checking Memory Usage from ELF Files
+==============================================
+Using tool: cs_readelf
+ELF Directory: out_dir_S64x_L6_M100_P6_P6_B100/cs_0f4f371af9fa350d0af544f8e3cffd6625abe54b4514825bb13e4ec6bac6060e/out_vcycle64
+Checking PE at tile (0, 0)
+Sample PE ELF: out_dir_S64x_L6_M100_P6_P6_B100/cs_0f4f371af9fa350d0af544f8e3cffd6625abe54b4514825bb13e4ec6bac6060e/out_vcycle64/bin/out_0_0.elf
+
+  Code (FUNC symbols):      22320 bytes (21.80 KB) - 96 functions
+  Data (OBJECT symbols):    5166 bytes (5.04 KB) - 231 objects
+
+  Total accounted:          27486 bytes (26.84 KB)
+  Overhead (stack/other):   306 bytes (0.30 KB)
+==============================================
+
+
+Compile time (s): 640.614303
+
+======================================================================
+Run output:
+======================================================================
+Matplotlib created a temporary cache directory at /tmp/matplotlib-_p29rgpk because the default path (/.config/matplotlib) is not a writable directory; it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+Fontconfig error: Cannot load default config file: No such file: (null)
+WARNING: The message system is being used before initialization.
+         Messages will still be printed, but with limited support.
+COUT034   Latest HIOLIB used
+COUT034  TCP connect to: 10.254.2.65:9000
+COUT034  No credentials found, disabling TLS
+COUT034  TLS is disabled
+COUT034  TLS disabled
+COUT034  Poll
+COUT034  TCP connected
+COUT034  Connection successful
+COUT034  Local addr: 10.125.9.224:54050
+COUT034  hio_ctl:HRQ_HANDSHAKE 12958 us
+COUT034  TCP connect to: 10.254.2.65:9000
+COUT034  TLS disabled
+COUT034  Poll
+COUT034  TCP connected
+COUT034  Connection successful
+COUT034  Local addr: 10.125.9.224:54060
+COUT034  hio_ctl:HRQ_HANDSHAKE 96722 us
+COUT034  hio_ctl:HRQ_GETFABRIC 193 us
+HAAP425 11:11:58 GMT  WARNING: hio_group_program is deprecated, use hio_flows_program
+COUT002 11:11:58 GMT  ERROR: LOGGER NOT INITIALIZED:
+COUT002 11:11:58 GMT  ERROR: 		wio_groups.json is deprecated, use wio_flows.json instead
+HWKA425 11:12:26 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 16 streamer 0 P:0 C:1 (10.254.3.2:3, 10.254.3.8:3, 10.254.3.14:3, 10.254.3.20:3) mode: RoCE
+HWKA425 11:12:26 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 0 streamer 0 P:1 C:33 (10.254.3.4:35, 10.254.3.10:35, 10.254.3.16:35, 10.254.3.22:35) mode: RoCE
+HWKA425 11:12:27 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 1 streamer 0 P:2 C:2 (10.254.3.6:4, 10.254.3.12:4, 10.254.3.18:4, 10.254.3.24:4) mode: RoCE
+HWKA425 11:12:27 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 2 streamer 0 P:0 C:44 (10.254.3.2:46, 10.254.3.8:46, 10.254.3.14:46, 10.254.3.20:46) mode: RoCE
+HWKA425 11:12:28 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 3 streamer 0 P:1 C:0 (10.254.3.4:2, 10.254.3.10:2, 10.254.3.16:2, 10.254.3.22:2) mode: RoCE
+HWKA425 11:12:29 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 4 streamer 0 P:2 C:32 (10.254.3.6:34, 10.254.3.12:34, 10.254.3.18:34, 10.254.3.24:34) mode: RoCE
+HWKA425 11:12:29 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 5 streamer 0 P:0 C:46 (10.254.3.2:48, 10.254.3.8:48, 10.254.3.14:48, 10.254.3.20:48) mode: RoCE
+HWKA425 11:12:30 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 6 streamer 0 P:1 C:53 (10.254.3.4:55, 10.254.3.10:55, 10.254.3.16:55, 10.254.3.22:55) mode: RoCE
+HWKA425 11:12:30 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 7 streamer 0 P:2 C:58 (10.254.3.6:60, 10.254.3.12:60, 10.254.3.18:60, 10.254.3.24:60) mode: RoCE
+HWKA425 11:12:31 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 8 streamer 0 P:0 C:30 (10.254.3.2:32, 10.254.3.8:32, 10.254.3.14:32, 10.254.3.20:32) mode: RoCE
+HWKA425 11:12:31 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 9 streamer 0 P:1 C:14 (10.254.3.4:16, 10.254.3.10:16, 10.254.3.16:16, 10.254.3.22:16) mode: RoCE
+HWKA425 11:12:32 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 10 streamer 0 P:2 C:6 (10.254.3.6:8, 10.254.3.12:8, 10.254.3.18:8, 10.254.3.24:8) mode: RoCE
+HWKA425 11:12:32 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 11 streamer 0 P:0 C:59 (10.254.3.2:61, 10.254.3.8:61, 10.254.3.14:61, 10.254.3.20:61) mode: RoCE
+HWKA425 11:12:33 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 12 streamer 0 P:1 C:30 (10.254.3.4:32, 10.254.3.10:32, 10.254.3.16:32, 10.254.3.22:32) mode: RoCE
+HWKA425 11:12:34 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 13 streamer 0 P:2 C:15 (10.254.3.6:17, 10.254.3.12:17, 10.254.3.18:17, 10.254.3.24:17) mode: RoCE
+HWKA425 11:12:34 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 14 streamer 0 P:0 C:3 (10.254.3.2:5, 10.254.3.8:5, 10.254.3.14:5, 10.254.3.20:5) mode: RoCE
+HWKA425 11:12:35 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 15 streamer 0 P:1 C:10 (10.254.3.4:12, 10.254.3.10:12, 10.254.3.16:12, 10.254.3.22:12) mode: RoCE
+HWKA425 11:12:35 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 33 streamer 0 P:2 C:8 (10.254.3.6:10, 10.254.3.12:10, 10.254.3.18:10, 10.254.3.24:10) mode: RoCE
+HWKA425 11:12:36 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 17 streamer 0 P:0 C:122 (10.254.3.2:124, 10.254.3.8:124, 10.254.3.14:124, 10.254.3.20:124) mode: RoCE
+HWKA425 11:12:36 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 18 streamer 0 P:1 C:79 (10.254.3.4:81, 10.254.3.10:81, 10.254.3.16:81, 10.254.3.22:81) mode: RoCE
+HWKA425 11:12:37 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 19 streamer 0 P:2 C:107 (10.254.3.6:109, 10.254.3.12:109, 10.254.3.18:109, 10.254.3.24:109) mode: RoCE
+HWKA425 11:12:37 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 20 streamer 0 P:0 C:73 (10.254.3.2:75, 10.254.3.8:75, 10.254.3.14:75, 10.254.3.20:75) mode: RoCE
+HWKA425 11:12:38 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 21 streamer 0 P:1 C:93 (10.254.3.4:95, 10.254.3.10:95, 10.254.3.16:95, 10.254.3.22:95) mode: RoCE
+HWKA425 11:12:38 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 22 streamer 0 P:2 C:106 (10.254.3.6:108, 10.254.3.12:108, 10.254.3.18:108, 10.254.3.24:108) mode: RoCE
+HWKA425 11:12:39 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 23 streamer 0 P:0 C:121 (10.254.3.2:123, 10.254.3.8:123, 10.254.3.14:123, 10.254.3.20:123) mode: RoCE
+HWKA425 11:12:40 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 24 streamer 0 P:1 C:117 (10.254.3.4:119, 10.254.3.10:119, 10.254.3.16:119, 10.254.3.22:119) mode: RoCE
+HWKA425 11:12:40 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 25 streamer 0 P:2 C:84 (10.254.3.6:86, 10.254.3.12:86, 10.254.3.18:86, 10.254.3.24:86) mode: RoCE
+HWKA425 11:12:41 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 26 streamer 0 P:0 C:118 (10.254.3.2:120, 10.254.3.8:120, 10.254.3.14:120, 10.254.3.20:120) mode: RoCE
+HWKA425 11:12:41 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 27 streamer 0 P:1 C:73 (10.254.3.4:75, 10.254.3.10:75, 10.254.3.16:75, 10.254.3.22:75) mode: RoCE
+HWKA425 11:12:42 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 28 streamer 0 P:2 C:72 (10.254.3.6:74, 10.254.3.12:74, 10.254.3.18:74, 10.254.3.24:74) mode: RoCE
+HWKA425 11:12:42 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 29 streamer 0 P:0 C:127 (10.254.3.2:129, 10.254.3.8:129, 10.254.3.14:129, 10.254.3.20:129) mode: RoCE
+HWKA425 11:12:43 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 30 streamer 0 P:1 C:94 (10.254.3.4:96, 10.254.3.10:96, 10.254.3.16:96, 10.254.3.22:96) mode: RoCE
+HWKA425 11:12:43 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 31 streamer 0 P:2 C:114 (10.254.3.6:116, 10.254.3.12:116, 10.254.3.18:116, 10.254.3.24:116) mode: RoCE
+HWKA425 11:12:44 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+out_vcycle64 already exists
+
+============================================================
+Creating reference solver on host...
+============================================================
+
+============================================================
+Device calculations...
+============================================================
+1. Warmup(3 iterations) + reset...
+2. Copying initial data to device...
+Grid spacing and Jacobi coefficients:
+  Level 0: hx=0.015625, 1/hx=64.000000, jacobi=-2.712674e-05
+  Level 1: hx=0.031250, 1/hx=32.000000, jacobi=-1.085069e-04
+  Level 2: hx=0.062500, 1/hx=16.000000, jacobi=-4.340278e-04
+  Level 3: hx=0.125000, 1/hx=8.000000, jacobi=-1.736111e-03
+  Level 4: hx=0.250000, 1/hx=4.000000, jacobi=-6.944444e-03
+  Level 5: hx=0.500000, 1/hx=2.000000, jacobi=-2.777778e-02
+3. Enabling timer...
+4. Synchronizing PEs...
+5. Tic total...
+6. Running GMG V-cycle(max_iter=100, levels=6) on device...
+7. Toc total...
+8. Copying timers and counters from device...
+9. Checking convergence...
+
+============================================================
+Rho values after each iteration
+============================================================
+Total iterations performed: 8
+Iteration    |rho|_max           
+------------------------------------------------------------
+1                   3.573346e+03
+2                   1.999592e+02
+3                   1.053385e+01
+4                   5.275316e-01
+5                   3.056041e-02
+6                   1.365295e-03
+7                   8.969469e-05
+8                   3.294117e-06
+[GMG] rho = |b-A*x|_inf = 3.294117e-06
+  Tolerance = 5.445706e-06
+  Converged: Yes
+10. Profiling...
+
+============================================================
+Performance Timing
+============================================================
+PE(0,0) only. Phase timers (smooth, residual, …) ACCUMULATE across all V-cycles.
+Convergence (L0 only) is separated; see summary block below the tables for per-V-cycle averages.
+
+Time per operation and level (us[cycles]), first V-cycle:
++====================+====================+====================+====================+====================+====================+====================+====================+
+|       level        |       smooth       |      residual      |    restriction     |   interpolation    |       setup        |    convergence     |       total        |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         0          | 338.018us( 295766) | 23.810us(  20834)  | 11.795us(  10321)  | 12.123us(  10608)  | 10.927us(   9561)  | 131.736us( 115269) | 528.410us( 462359) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         1          | 280.130us( 245114) | 19.542us(  17099)  | 11.925us(  10434)  | 11.410us(   9984)  |  6.985us(   6112)  |  0.000us(      0)  | 329.992us( 288743) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         2          | 250.762us( 219417) | 17.822us(  15594)  | 12.435us(  10881)  | 11.035us(   9656)  |  6.958us(   6088)  |  0.000us(      0)  | 299.013us( 261636) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         3          | 242.065us( 211807) | 16.977us(  14855)  | 12.765us(  11169)  | 10.907us(   9544)  |  7.049us(   6168)  |  0.000us(      0)  | 289.763us( 253543) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         4          | 264.850us( 231744) | 19.813us(  17336)  | 11.529us(  10088)  | 10.880us(   9520)  |  7.159us(   6264)  |  0.000us(      0)  | 314.231us( 274952) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         5          |2923.907us(2558419) |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |  3.785us(   3312)  |  0.000us(      0)  |2927.693us(2561731) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|       total        |4299.734us(3762267) | 97.963us(  85718)  | 60.449us(  52893)  | 56.357us(  49312)  | 42.863us(  37505)  | 131.736us( 115269) |4689.102us(4102964) |
++====================+====================+====================+====================+====================+====================+====================+====================+
+
+7-pt Stencil: SpMV vs smoothing (us[cycles]), per level, scaled to one V-cycle:
+  SpMV Total / Communication / Compute ÷ 8 (iterations); smooth_* from first V-cycle only.
++====================+====================+====================+====================+====================+====================+====================+====================+
+|       level        |  Total SpMV Time   | Communication Time |    Compute Time    |    smooth_apply    |   smooth_update    |    smooth_total    |  smooth_overhead   |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         0          | 36.378us(  31830)  | 13.781us(  12058)  | 14.625us(  12797)  | 271.667us( 237709) | 31.928us(  27937)  | 338.018us( 295766) | 34.423us(  30120)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         1          | 27.235us(  23831)  | 10.565us(   9245)  |  9.390us(   8216)  | 222.832us( 194978) | 22.875us(  20016)  | 280.130us( 245114) | 34.423us(  30120)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         2          | 23.907us(  20918)  |  9.317us(   8152)  |  7.369us(   6448)  | 197.853us( 173121) | 18.487us(  16176)  | 250.762us( 219417) | 34.423us(  30120)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         3          | 22.933us(  20067)  |  9.384us(   8211)  |  6.359us(   5564)  | 191.350us( 167431) | 16.293us(  14256)  | 242.065us( 211807) | 34.423us(  30120)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         4          | 26.275us(  22991)  | 13.216us(  11564)  |  5.883us(   5148)  | 215.232us( 188328) | 15.195us(  13296)  | 264.850us( 231744) | 34.423us(  30120)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         5          | 289.620us( 253417) | 189.620us( 165917) | 44.800us(  39200)  |2500.730us(2188139) | 123.429us( 108000) |2923.907us(2558419) | 299.749us( 262280) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|       total        | 426.348us( 373054) | 245.883us( 215148) | 88.426us(  77373)  |3599.664us(3149706) | 228.207us( 199681) |4299.734us(3762267) | 471.863us( 412880) |
++====================+====================+====================+====================+====================+====================+====================+====================+
+
+Interpolation micro-benchmark (us[cycles]), PE(0,0), first V-cycle only:
++====================+====================+====================+====================+====================+====================+====================+
+|       level        |    expand_z(T1)    |  bcast_total(T2)   | reset_routes(T2.1) |  send_data(T2.2)   |   interp_add(T3)   |interp_total(T1+T2+T3)|
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         0          |  1.243us(   1088)  |  6.226us(   5448)  |  0.695us(    608)  |  2.167us(   1896)  |  1.079us(    944)  | 12.123us(  10608)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         1          |  1.024us(    896)  |  5.897us(   5160)  |  0.695us(    608)  |  1.838us(   1608)  |  0.914us(    800)  | 11.410us(   9984)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         2          |  0.923us(    808)  |  5.696us(   4984)  |  0.695us(    608)  |  1.646us(   1440)  |  0.841us(    736)  | 11.035us(   9656)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         3          |  0.878us(    768)  |  5.659us(   4952)  |  0.695us(    608)  |  1.609us(   1408)  |  0.795us(    696)  | 10.907us(   9544)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         4          |  0.869us(    760)  |  5.659us(   4952)  |  0.695us(    608)  |  1.591us(   1392)  |  0.777us(    680)  | 10.880us(   9520)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         5          |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|       total        |  4.937us(   4320)  | 29.138us(  25496)  |  3.474us(   3040)  |  8.850us(   7744)  |  4.407us(   3856)  | 56.357us(  49312)  |
++====================+====================+====================+====================+====================+====================+====================+
+====================================================================================================
+Total solver wall time (all 8 V-cycles, inc. conv check per V-cycle):   4744.995 us (   4151871 cycles)
+Convergence diagnostic time (total, 8 checks, only at L0):                  131.736 us (    115269 cycles)
+Pure operators time (wall - convergence, all 8 V-cycles):                  4613.259 us (   4036602 cycles)
+Average V-cycle time (pure operators / 8 iters, no conv):                   576.657 us (    504575 cycles)
+====================================================================================================
+
+========================================================================================================================
+ROOFLINE — PE(0,0) only; totals accumulated across ALL V-cycles (convergence-check ops excluded)
+  Per-level 'active PEs' is the 2D PE count used at that multigrid level (for scaling).
+  FLOP/Mem/Fab rows below are not summed over the wafer — they are one PE's counts.
+  Divide counts by 'Device iterations to converge' (8) to get per-V-cycle values.
+========================================================================================================================
+
+Level 0 (nz=64, active PEs: 4,096, stride: 1):
+Operation         Count
+-------------------------
+FSUB              6,656
+FMAC             52,736
+FMUL                256
+FADD              1,792
+FNEG             13,312
+FMOV_MEM          3,008
+FMOV_ZERO         7,680
+FMOV32           14,337
+
+Level 1 (nz=32, active PEs: 1,024, stride: 2):
+Operation         Count
+-------------------------
+FSUB              3,328
+FMAC             26,368
+FMUL                128
+FADD                896
+FNEG              6,656
+FMOV_MEM          1,280
+FMOV_ZERO         4,096
+FMOV32            7,168
+
+Level 2 (nz=16, active PEs: 256, stride: 4):
+Operation         Count
+-------------------------
+FSUB              1,664
+FMAC             13,184
+FMUL                 64
+FADD                448
+FNEG              3,328
+FMOV_MEM            640
+FMOV_ZERO         2,048
+FMOV32            3,584
+
+Level 3 (nz=8, active PEs: 64, stride: 8):
+Operation         Count
+-------------------------
+FSUB                832
+FMAC              6,592
+FMUL                 32
+FADD                224
+FNEG              1,664
+FMOV_MEM            320
+FMOV_ZERO         1,024
+FMOV32            1,792
+
+Level 4 (nz=4, active PEs: 16, stride: 16):
+Operation         Count
+-------------------------
+FSUB                416
+FMAC              3,296
+FMUL                 16
+FADD                112
+FNEG                832
+FMOV_MEM            160
+FMOV_ZERO           512
+FMOV32              896
+
+Level 5 (nz=2, active PEs: 4, stride: 32):
+Operation         Count
+-------------------------
+FSUB              1,600
+FMAC             12,800
+FNEG              3,200
+FMOV_MEM             16
+FMOV_ZERO         1,632
+FMOV32            3,200
+
+Device iterations to converge: 8
+Total solver time (all iters): 4744.995 us
+
+Run: python plots/roofline_analysis.py <response.txt> for full roofline analysis and plots.
+========================================================================================================================
+
+============================================================
+Configuration Summary
+============================================================
+HeightxWidthxZDim               : 64x64x64
+Levels                          : 6
+Max iterations                  : 100
+Tolerance (abs)                 : 1.00e-05
+Tolerance (rel)                 : 5.45e-06
+Pre/Post/Bottom iter            : 6/6/100
+Datatype                        : float32
+Jacobi omega                    : 0.666667
+Stencil alpha/beta              : -6.0/1.0
+Channels                        : 16
+Block size                      : 64
+West/East buffer width          : 0/0
+Total solver wall time (us[cycles]):   4744.995us(   4151871)
+Device iterations               : 8
+Avg V-cycle time (no conv)      :    576.657us
+Device final |rho|_inf          : 3.294e-06
+11. Stopping simulator...
+Opened egress stream flow 32 streamer 0 P:0 C:110 (10.254.3.2:112, 10.254.3.8:112, 10.254.3.14:112, 10.254.3.20:112) mode: RoCE
+
+Run time (s): 117.441718
+Output directory: out_dir_S128x_L7_M100_P6_P6_B100
+########################################################
+Parameters: size=128, levels=7, channels=16
+Run parameters: max_ite=100, pre_iter=6, post_iter=6, bottom_iter=100
+Fabric dims: 762,1172
+Compile command: --arch=wse3 --fabric-dims=762,1172 --fabric-offsets=4,1 --params=width:128,height:128,MAX_ZDIM:128,LEVELS:7 --params=BLOCK_SIZE:128 --memcpy --channels=16 --width-west-buf=0 --width-east-buf=0 -o out_vcycle128 --llvm-option=--inline-threshold=256 --llvm-option=--unroll-threshold=256
+Run command: cs_python run_gmg_vcycle.py -m=128 -n=128 -k=128 --latestlink out_vcycle128 --channels=16 --width-west-buf=0 --width-east-buf=0 --zDim=128 --run-only --levels=7 --max-ite=100 --blockSize=128 --pre-iter=6 --post-iter=6 --bottom-iter=100 --tolerance=1e-05 --cmaddr %CMADDR%
+########################################################
+
+======================================================================
+Memory usage check:
+======================================================================
+Summary mode enabled
+==============================================
+Checking Memory Usage from ELF Files
+==============================================
+Using tool: cs_readelf
+ELF Directory: out_dir_S128x_L7_M100_P6_P6_B100/cs_071613a055a805bd87cb2829e6be68ecf9e83992d162a1e91b1633d5d4f7db91/out_vcycle128
+Checking PE at tile (0, 0)
+Sample PE ELF: out_dir_S128x_L7_M100_P6_P6_B100/cs_071613a055a805bd87cb2829e6be68ecf9e83992d162a1e91b1633d5d4f7db91/out_vcycle128/bin/out_0_0.elf
+
+  Code (FUNC symbols):      22320 bytes (21.80 KB) - 96 functions
+  Data (OBJECT symbols):    8658 bytes (8.46 KB) - 231 objects
+
+  Total accounted:          30978 bytes (30.25 KB)
+  Overhead (stack/other):   334 bytes (0.33 KB)
+==============================================
+
+Output directory: out_dir_S256x_L8_M100_P6_P6_B100
+########################################################
+Parameters: size=256, levels=8, channels=16
+Run parameters: max_ite=100, pre_iter=6, post_iter=6, bottom_iter=100
+Fabric dims: 762,1172
+Compile command: --arch=wse3 --fabric-dims=762,1172 --fabric-offsets=4,1 --params=width:256,height:256,MAX_ZDIM:256,LEVELS:8 --params=BLOCK_SIZE:256 --memcpy --channels=16 --width-west-buf=0 --width-east-buf=0 -o out_vcycle256 --llvm-option=--inline-threshold=256 --llvm-option=--unroll-threshold=256
+Run command: cs_python run_gmg_vcycle.py -m=256 -n=256 -k=256 --latestlink out_vcycle256 --channels=16 --width-west-buf=0 --width-east-buf=0 --zDim=256 --run-only --levels=8 --max-ite=100 --blockSize=256 --pre-iter=6 --post-iter=6 --bottom-iter=100 --tolerance=1e-05 --cmaddr %CMADDR%
+########################################################
+
+Compile time (s): 670.458809
+
+======================================================================
+Memory usage check:
+======================================================================
+Summary mode enabled
+==============================================
+Checking Memory Usage from ELF Files
+==============================================
+Using tool: cs_readelf
+ELF Directory: out_dir_S256x_L8_M100_P6_P6_B100/cs_50538676c245890d5b4a489ac3797d8c8a0e32d8d92ad90ffc3d0d8dcb484e1f/out_vcycle256
+Checking PE at tile (0, 0)
+Sample PE ELF: out_dir_S256x_L8_M100_P6_P6_B100/cs_50538676c245890d5b4a489ac3797d8c8a0e32d8d92ad90ffc3d0d8dcb484e1f/out_vcycle256/bin/out_0_0.elf
+
+  Code (FUNC symbols):      22316 bytes (21.79 KB) - 96 functions
+  Data (OBJECT symbols):    15478 bytes (15.12 KB) - 231 objects
+
+  Total accounted:          37794 bytes (36.91 KB)
+  Overhead (stack/other):   302 bytes (0.29 KB)
+==============================================
+
+
+======================================================================
+Run output:
+======================================================================
+Matplotlib created a temporary cache directory at /tmp/matplotlib-xczyhg9e because the default path (/.config/matplotlib) is not a writable directory; it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+Fontconfig error: Cannot load default config file: No such file: (null)
+WARNING: The message system is being used before initialization.
+         Messages will still be printed, but with limited support.
+COUT034   Latest HIOLIB used
+COUT034  TCP connect to: 10.254.2.66:9000
+COUT034  No credentials found, disabling TLS
+COUT034  TLS is disabled
+COUT034  TLS disabled
+COUT034  Poll
+COUT034  TCP connected
+COUT034  Connection successful
+COUT034  Local addr: 10.125.9.36:37708
+COUT034  hio_ctl:HRQ_HANDSHAKE 55764 us
+COUT034  TCP connect to: 10.254.2.66:9000
+COUT034  TLS disabled
+COUT034  Poll
+COUT034  TCP connected
+COUT034  Connection successful
+COUT034  Local addr: 10.125.9.36:37718
+COUT034  hio_ctl:HRQ_HANDSHAKE 98004 us
+COUT034  hio_ctl:HRQ_GETFABRIC 229 us
+HAAP425 11:12:21 GMT  WARNING: hio_group_program is deprecated, use hio_flows_program
+COUT002 11:12:21 GMT  ERROR: LOGGER NOT INITIALIZED:
+COUT002 11:12:21 GMT  ERROR: 		wio_groups.json is deprecated, use wio_flows.json instead
+HWKA425 11:12:49 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 16 streamer 0 P:1 C:32 (10.254.3.28:34, 10.254.3.34:34, 10.254.3.40:34, 10.254.3.46:34) mode: RoCE
+HWKA425 11:12:50 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 0 streamer 0 P:2 C:57 (10.254.3.30:59, 10.254.3.36:59, 10.254.3.42:59, 10.254.3.48:59) mode: RoCE
+HWKA425 11:12:50 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 1 streamer 0 P:0 C:63 (10.254.3.26:65, 10.254.3.32:65, 10.254.3.38:65, 10.254.3.44:65) mode: RoCE
+HWKA425 11:12:51 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 2 streamer 0 P:1 C:47 (10.254.3.28:49, 10.254.3.34:49, 10.254.3.40:49, 10.254.3.46:49) mode: RoCE
+HWKA425 11:12:51 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 3 streamer 0 P:2 C:19 (10.254.3.30:21, 10.254.3.36:21, 10.254.3.42:21, 10.254.3.48:21) mode: RoCE
+HWKA425 11:12:52 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 4 streamer 0 P:0 C:52 (10.254.3.26:54, 10.254.3.32:54, 10.254.3.38:54, 10.254.3.44:54) mode: RoCE
+HWKA425 11:12:52 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 5 streamer 0 P:1 C:41 (10.254.3.28:43, 10.254.3.34:43, 10.254.3.40:43, 10.254.3.46:43) mode: RoCE
+HWKA425 11:12:53 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 6 streamer 0 P:2 C:23 (10.254.3.30:25, 10.254.3.36:25, 10.254.3.42:25, 10.254.3.48:25) mode: RoCE
+HWKA425 11:12:54 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 7 streamer 0 P:0 C:61 (10.254.3.26:63, 10.254.3.32:63, 10.254.3.38:63, 10.254.3.44:63) mode: RoCE
+HWKA425 11:12:54 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 8 streamer 0 P:1 C:16 (10.254.3.28:18, 10.254.3.34:18, 10.254.3.40:18, 10.254.3.46:18) mode: RoCE
+HWKA425 11:12:55 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 9 streamer 0 P:2 C:15 (10.254.3.30:17, 10.254.3.36:17, 10.254.3.42:17, 10.254.3.48:17) mode: RoCE
+HWKA425 11:12:55 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 10 streamer 0 P:0 C:4 (10.254.3.26:6, 10.254.3.32:6, 10.254.3.38:6, 10.254.3.44:6) mode: RoCE
+HWKA425 11:12:56 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 11 streamer 0 P:1 C:53 (10.254.3.28:55, 10.254.3.34:55, 10.254.3.40:55, 10.254.3.46:55) mode: RoCE
+HWKA425 11:12:56 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 12 streamer 0 P:2 C:22 (10.254.3.30:24, 10.254.3.36:24, 10.254.3.42:24, 10.254.3.48:24) mode: RoCE
+HWKA425 11:12:57 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 13 streamer 0 P:0 C:44 (10.254.3.26:46, 10.254.3.32:46, 10.254.3.38:46, 10.254.3.44:46) mode: RoCE
+HWKA425 11:12:57 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 14 streamer 0 P:1 C:19 (10.254.3.28:21, 10.254.3.34:21, 10.254.3.40:21, 10.254.3.46:21) mode: RoCE
+HWKA425 11:12:58 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 15 streamer 0 P:2 C:9 (10.254.3.30:11, 10.254.3.36:11, 10.254.3.42:11, 10.254.3.48:11) mode: RoCE
+HWKA425 11:12:58 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 33 streamer 0 P:0 C:16 (10.254.3.26:18, 10.254.3.32:18, 10.254.3.38:18, 10.254.3.44:18) mode: RoCE
+HWKA425 11:12:59 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 17 streamer 0 P:1 C:64 (10.254.3.28:66, 10.254.3.34:66, 10.254.3.40:66, 10.254.3.46:66) mode: RoCE
+HWKA425 11:13:00 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 18 streamer 0 P:2 C:116 (10.254.3.30:118, 10.254.3.36:118, 10.254.3.42:118, 10.254.3.48:118) mode: RoCE
+HWKA425 11:13:00 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 19 streamer 0 P:0 C:116 (10.254.3.26:118, 10.254.3.32:118, 10.254.3.38:118, 10.254.3.44:118) mode: RoCE
+HWKA425 11:13:01 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 20 streamer 0 P:1 C:98 (10.254.3.28:100, 10.254.3.34:100, 10.254.3.40:100, 10.254.3.46:100) mode: RoCE
+HWKA425 11:13:01 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 21 streamer 0 P:2 C:119 (10.254.3.30:121, 10.254.3.36:121, 10.254.3.42:121, 10.254.3.48:121) mode: RoCE
+HWKA425 11:13:02 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 22 streamer 0 P:0 C:107 (10.254.3.26:109, 10.254.3.32:109, 10.254.3.38:109, 10.254.3.44:109) mode: RoCE
+HWKA425 11:13:02 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 23 streamer 0 P:1 C:127 (10.254.3.28:129, 10.254.3.34:129, 10.254.3.40:129, 10.254.3.46:129) mode: RoCE
+HWKA425 11:13:03 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 24 streamer 0 P:2 C:97 (10.254.3.30:99, 10.254.3.36:99, 10.254.3.42:99, 10.254.3.48:99) mode: RoCE
+HWKA425 11:13:03 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 25 streamer 0 P:0 C:77 (10.254.3.26:79, 10.254.3.32:79, 10.254.3.38:79, 10.254.3.44:79) mode: RoCE
+HWKA425 11:13:04 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 26 streamer 0 P:1 C:84 (10.254.3.28:86, 10.254.3.34:86, 10.254.3.40:86, 10.254.3.46:86) mode: RoCE
+HWKA425 11:13:05 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 27 streamer 0 P:2 C:123 (10.254.3.30:125, 10.254.3.36:125, 10.254.3.42:125, 10.254.3.48:125) mode: RoCE
+HWKA425 11:13:05 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 28 streamer 0 P:0 C:72 (10.254.3.26:74, 10.254.3.32:74, 10.254.3.38:74, 10.254.3.44:74) mode: RoCE
+HWKA425 11:13:06 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 29 streamer 0 P:1 C:94 (10.254.3.28:96, 10.254.3.34:96, 10.254.3.40:96, 10.254.3.46:96) mode: RoCE
+HWKA425 11:13:06 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 30 streamer 0 P:2 C:72 (10.254.3.30:74, 10.254.3.36:74, 10.254.3.42:74, 10.254.3.48:74) mode: RoCE
+HWKA425 11:13:07 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 31 streamer 0 P:0 C:108 (10.254.3.26:110, 10.254.3.32:110, 10.254.3.38:110, 10.254.3.44:110) mode: RoCE
+HWKA425 11:13:07 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+out_vcycle256 already exists
+
+============================================================
+Creating reference solver on host...
+============================================================
+
+============================================================
+Device calculations...
+============================================================
+1. Warmup(3 iterations) + reset...
+2. Copying initial data to device...
+Grid spacing and Jacobi coefficients:
+  Level 0: hx=0.003906, 1/hx=256.000000, jacobi=-1.695421e-06
+  Level 1: hx=0.007812, 1/hx=128.000000, jacobi=-6.781684e-06
+  Level 2: hx=0.015625, 1/hx=64.000000, jacobi=-2.712674e-05
+  Level 3: hx=0.031250, 1/hx=32.000000, jacobi=-1.085069e-04
+  Level 4: hx=0.062500, 1/hx=16.000000, jacobi=-4.340278e-04
+  Level 5: hx=0.125000, 1/hx=8.000000, jacobi=-1.736111e-03
+  Level 6: hx=0.250000, 1/hx=4.000000, jacobi=-6.944444e-03
+  Level 7: hx=0.500000, 1/hx=2.000000, jacobi=-2.777778e-02
+3. Enabling timer...
+4. Synchronizing PEs...
+5. Tic total...
+6. Running GMG V-cycle(max_iter=100, levels=8) on device...
+7. Toc total...
+8. Copying timers and counters from device...
+9. Checking convergence...
+
+============================================================
+Rho values after each iteration
+============================================================
+Total iterations performed: 10
+Iteration    |rho|_max           
+------------------------------------------------------------
+1                   5.767092e+04
+2                   3.670139e+03
+3                   2.013638e+02
+4                   1.159788e+01
+5                   6.652495e-01
+6                   3.733094e-02
+7                   2.181957e-03
+8                   1.200729e-04
+9                   7.173306e-06
+10                  3.839864e-07
+[GMG] rho = |b-A*x|_inf = 3.839864e-07
+  Tolerance = 6.831758e-07
+  Converged: Yes
+10. Profiling...
+
+============================================================
+Performance Timing
+============================================================
+PE(0,0) only. Phase timers (smooth, residual, …) ACCUMULATE across all V-cycles.
+Convergence (L0 only) is separated; see summary block below the tables for per-V-cycle averages.
+
+Time per operation and level (us[cycles]), first V-cycle:
++====================+====================+====================+====================+====================+====================+====================+====================+
+|       level        |       smooth       |      residual      |    restriction     |   interpolation    |       setup        |    convergence     |       total        |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         0          | 831.441us( 727511) | 59.434us(  52005)  | 21.111us(  18472)  | 20.537us(  17970)  | 18.503us(  16190)  | 556.769us( 487173) |1507.795us(1319321) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         1          | 561.578us( 491381) | 40.061us(  35053)  | 16.992us(  14868)  | 16.951us(  14832)  | 10.545us(   9227)  |  0.000us(      0)  | 646.127us( 565361) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         2          | 426.168us( 372897) | 30.305us(  26517)  | 15.987us(  13989)  | 15.120us(  13230)  |  9.537us(   8345)  |  0.000us(      0)  | 497.118us( 434978) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         3          | 364.845us( 319239) | 25.909us(  22670)  | 16.034us(  14030)  | 14.229us(  12450)  |  9.200us(   8050)  |  0.000us(      0)  | 430.216us( 376439) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         4          | 349.840us( 306110) | 25.582us(  22384)  | 16.118us(  14103)  | 13.760us(  12040)  |  9.200us(   8050)  |  0.000us(      0)  | 414.499us( 362687) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         5          | 441.851us( 386620) | 31.331us(  27415)  | 22.994us(  20120)  | 13.611us(  11910)  |  9.291us(   8130)  |  0.000us(      0)  | 519.080us( 454195) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         6          | 648.509us( 567445) | 48.503us(  42440)  | 24.806us(  21705)  | 13.554us(  11860)  |  9.417us(   8240)  |  0.000us(      0)  | 744.789us( 651690) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         7          |9013.592us(7886893) |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |  4.971us(   4350)  |  0.000us(      0)  |9018.563us(7891243) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|       total        |12637.824us(11058096)| 261.125us( 228484) | 134.042us( 117287) | 107.762us(  94292) | 80.665us(  70582)  | 556.769us( 487173) |13778.187us(12055914)|
++====================+====================+====================+====================+====================+====================+====================+====================+
+
+7-pt Stencil: SpMV vs smoothing (us[cycles]), per level, scaled to one V-cycle:
+  SpMV Total / Communication / Compute ÷ 10 (iterations); smooth_* from first V-cycle only.
++====================+====================+====================+====================+====================+====================+====================+====================+
+|       level        |  Total SpMV Time   | Communication Time |    Compute Time    |    smooth_apply    |   smooth_update    |    smooth_total    |  smooth_overhead   |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         0          | 76.433us(  66878)  | 26.317us(  23028)  | 41.405us(  36229)  | 682.383us( 597085) | 105.904us(  92666) | 831.441us( 727511) | 43.154us(  37760)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         1          | 46.508us(  40694)  | 17.087us(  14951)  | 21.857us(  19125)  | 456.750us( 399656) | 61.674us(  53965)  | 561.578us( 491381) | 43.154us(  37760)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         2          | 34.254us(  29972)  | 13.393us(  11719)  | 13.551us(  11858)  | 343.448us( 300517) | 39.566us(  34620)  | 426.168us( 372897) | 43.154us(  37760)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         3          | 28.811us(  25210)  | 12.231us(  10702)  |  9.390us(   8216)  | 293.233us( 256579) | 28.457us(  24900)  | 364.845us( 319239) | 43.154us(  37760)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         4          | 27.844us(  24363)  | 13.358us(  11688)  |  7.369us(   6448)  | 283.646us( 248190) | 23.040us(  20160)  | 349.840us( 306110) | 43.154us(  37760)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         5          | 37.913us(  33174)  | 24.445us(  21390)  |  6.359us(   5564)  | 378.537us( 331220) | 20.160us(  17640)  | 441.851us( 386620) | 43.154us(  37760)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         6          | 60.435us(  52880)  | 47.428us(  41500)  |  5.898us(   5161)  | 586.566us( 513245) | 18.789us(  16440)  | 648.509us( 567445) | 43.154us(  37760)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         7          | 825.148us( 722004) | 726.176us( 635404) | 44.343us(  38800)  |8483.478us(7423043) | 154.286us( 135000) |9013.592us(7886893) | 375.829us( 328850) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|       total        |1137.345us( 995177) | 880.436us( 770382) | 150.172us( 131401) |11508.040us(10069535)| 451.875us( 395391) |12637.824us(11058096)| 677.909us( 593170) |
++====================+====================+====================+====================+====================+====================+====================+====================+
+
+Interpolation micro-benchmark (us[cycles]), PE(0,0), first V-cycle only:
++====================+====================+====================+====================+====================+====================+====================+
+|       level        |    expand_z(T1)    |  bcast_total(T2)   | reset_routes(T2.1) |  send_data(T2.2)   |   interp_add(T3)   |interp_total(T1+T2+T3)|
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         0          |  3.326us(   2910)  | 10.240us(   8960)  |  0.869us(    760)  |  5.154us(   4510)  |  2.514us(   2200)  | 20.537us(  17970)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         1          |  2.151us(   1882)  |  8.594us(   7520)  |  0.869us(    760)  |  3.509us(   3070)  |  1.749us(   1530)  | 16.951us(  14832)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         2          |  1.566us(   1370)  |  7.760us(   6790)  |  0.869us(    760)  |  2.686us(   2350)  |  1.337us(   1170)  | 15.120us(  13230)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         3          |  1.291us(   1130)  |  7.349us(   6430)  |  0.869us(    760)  |  2.274us(   1990)  |  1.131us(    990)  | 14.229us(  12450)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         4          |  1.154us(   1010)  |  7.097us(   6210)  |  0.869us(    760)  |  2.023us(   1770)  |  1.051us(    920)  | 13.760us(  12040)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         5          |  1.109us(    970)  |  7.051us(   6170)  |  0.869us(    760)  |  1.966us(   1720)  |  0.994us(    870)  | 13.611us(  11910)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         6          |  1.097us(    960)  |  7.029us(   6150)  |  0.869us(    760)  |  1.943us(   1700)  |  0.971us(    850)  | 13.554us(  11860)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         7          |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|       total        | 11.694us(  10232)  | 55.120us(  48230)  |  6.080us(   5320)  | 19.554us(  17110)  |  9.749us(   8530)  | 107.762us(  94292) |
++====================+====================+====================+====================+====================+====================+====================+
+====================================================================================================
+Total solver wall time (all 10 V-cycles, inc. conv check per V-cycle):  13875.038 us (  12140658 cycles)
+Convergence diagnostic time (total, 10 checks, only at L0):                  556.769 us (    487173 cycles)
+Pure operators time (wall - convergence, all 10 V-cycles):                 13318.269 us (  11653485 cycles)
+Average V-cycle time (pure operators / 10 iters, no conv):                  1331.827 us (   1165348 cycles)
+====================================================================================================
+
+========================================================================================================================
+ROOFLINE — PE(0,0) only; totals accumulated across ALL V-cycles (convergence-check ops excluded)
+  Per-level 'active PEs' is the 2D PE count used at that multigrid level (for scaling).
+  FLOP/Mem/Fab rows below are not summed over the wafer — they are one PE's counts.
+  Divide counts by 'Device iterations to converge' (10) to get per-V-cycle values.
+========================================================================================================================
+
+Level 0 (nz=256, active PEs: 65,536, stride: 1):
+Operation         Count
+-------------------------
+FSUB             33,280
+FMAC            263,680
+FMUL              1,280
+FADD              8,960
+FNEG             66,560
+FMOV_MEM         15,104
+FMOV_ZERO        38,400
+FMOV32           71,681
+
+Level 1 (nz=128, active PEs: 16,384, stride: 2):
+Operation         Count
+-------------------------
+FSUB             16,640
+FMAC            131,840
+FMUL                640
+FADD              4,480
+FNEG             33,280
+FMOV_MEM          6,400
+FMOV_ZERO        20,480
+FMOV32           35,840
+
+Level 2 (nz=64, active PEs: 4,096, stride: 4):
+Operation         Count
+-------------------------
+FSUB              8,320
+FMAC             65,920
+FMUL                320
+FADD              2,240
+FNEG             16,640
+FMOV_MEM          3,200
+FMOV_ZERO        10,240
+FMOV32           17,920
+
+Level 3 (nz=32, active PEs: 1,024, stride: 8):
+Operation         Count
+-------------------------
+FSUB              4,160
+FMAC             32,960
+FMUL                160
+FADD              1,120
+FNEG              8,320
+FMOV_MEM          1,600
+FMOV_ZERO         5,120
+FMOV32            8,960
+
+Level 4 (nz=16, active PEs: 256, stride: 16):
+Operation         Count
+-------------------------
+FSUB              2,080
+FMAC             16,480
+FMUL                 80
+FADD                560
+FNEG              4,160
+FMOV_MEM            800
+FMOV_ZERO         2,560
+FMOV32            4,480
+
+Level 5 (nz=8, active PEs: 64, stride: 32):
+Operation         Count
+-------------------------
+FSUB              1,040
+FMAC              8,240
+FMUL                 40
+FADD                280
+FNEG              2,080
+FMOV_MEM            400
+FMOV_ZERO         1,280
+FMOV32            2,240
+
+Level 6 (nz=4, active PEs: 16, stride: 64):
+Operation         Count
+-------------------------
+FSUB                520
+FMAC              4,120
+FMUL                 20
+FADD                140
+FNEG              1,040
+FMOV_MEM            200
+FMOV_ZERO           640
+FMOV32            1,120
+
+Level 7 (nz=2, active PEs: 4, stride: 128):
+Operation         Count
+-------------------------
+FSUB              2,000
+FMAC             16,000
+FNEG              4,000
+FMOV_MEM             20
+FMOV_ZERO         2,040
+FMOV32            4,000
+
+Device iterations to converge: 10
+Total solver time (all iters): 13875.038 us
+
+Run: python plots/roofline_analysis.py <response.txt> for full roofline analysis and plots.
+========================================================================================================================
+
+============================================================
+Configuration Summary
+============================================================
+HeightxWidthxZDim               : 256x256x256
+Levels                          : 8
+Max iterations                  : 100
+Tolerance (abs)                 : 1.00e-05
+Tolerance (rel)                 : 6.83e-07
+Pre/Post/Bottom iter            : 6/6/100
+Datatype                        : float32
+Jacobi omega                    : 0.666667
+Stencil alpha/beta              : -6.0/1.0
+Channels                        : 16
+Block size                      : 256
+West/East buffer width          : 0/0
+Total solver wall time (us[cycles]):  13875.038us(  12140658)
+Device iterations               : 10
+Avg V-cycle time (no conv)      :   1331.827us
+Device final |rho|_inf          : 3.840e-07
+11. Stopping simulator...
+Opened egress stream flow 32 streamer 0 P:1 C:78 (10.254.3.28:80, 10.254.3.34:80, 10.254.3.40:80, 10.254.3.46:80) mode: RoCE
+
+Run time (s): 192.470996
+
+======================================================================
+Memory usage check:
+======================================================================
+Summary mode enabled
+==============================================
+Checking Memory Usage from ELF Files
+==============================================
+Using tool: cs_readelf
+ELF Directory: out_dir_S256x_L8_M100_P6_P6_B100/cs_702e1752a5c3e77da1b0546ab6062a0a1f44caefc7d96e397c094f483032fd30/out_vcycle256
+Checking PE at tile (0, 0)
+Sample PE ELF: out_dir_S256x_L8_M100_P6_P6_B100/cs_702e1752a5c3e77da1b0546ab6062a0a1f44caefc7d96e397c094f483032fd30/out_vcycle256/bin/out_0_0.elf
+
+  Code (FUNC symbols):      23200 bytes (22.66 KB) - 96 functions
+  Data (OBJECT symbols):    15528 bytes (15.16 KB) - 240 objects
+
+  Total accounted:          38728 bytes (37.82 KB)
+  Overhead (stack/other):   312 bytes (0.30 KB)
+==============================================
+
+Output directory: out_dir_S512x_L9_M100_P6_P6_B100
+########################################################
+Parameters: size=512, levels=9, channels=16
+Run parameters: max_ite=100, pre_iter=6, post_iter=6, bottom_iter=100
+Fabric dims: 762,1172
+Compile command: --arch=wse3 --fabric-dims=762,1172 --fabric-offsets=4,1 --params=width:512,height:512,MAX_ZDIM:512,LEVELS:9 --params=BLOCK_SIZE:256 --memcpy --channels=16 --width-west-buf=0 --width-east-buf=0 -o out_vcycle512 --llvm-option=--inline-threshold=256 --llvm-option=--unroll-threshold=256
+Run command: cs_python run_gmg_vcycle.py -m=512 -n=512 -k=512 --latestlink out_vcycle512 --channels=16 --width-west-buf=0 --width-east-buf=0 --zDim=512 --run-only --levels=9 --max-ite=100 --blockSize=256 --pre-iter=6 --post-iter=6 --bottom-iter=100 --tolerance=1e-05 --cmaddr %CMADDR%
+########################################################
+
+======================================================================
+Memory usage check:
+======================================================================
+Summary mode enabled
+==============================================
+Checking Memory Usage from ELF Files
+==============================================
+Using tool: cs_readelf
+ELF Directory: out_dir_S512x_L9_M100_P6_P6_B100/cs_b4ff9282c9db9b37f6d79970063d88bb347f1ae10a637544b99503030559d4db/out_vcycle512
+Checking PE at tile (0, 0)
+Sample PE ELF: out_dir_S512x_L9_M100_P6_P6_B100/cs_b4ff9282c9db9b37f6d79970063d88bb347f1ae10a637544b99503030559d4db/out_vcycle512/bin/out_0_0.elf
+
+  Code (FUNC symbols):      22316 bytes (21.79 KB) - 96 functions
+  Data (OBJECT symbols):    24858 bytes (24.28 KB) - 231 objects
+
+  Total accounted:          47174 bytes (46.07 KB)
+  Overhead (stack/other):   346 bytes (0.34 KB)
+==============================================
+

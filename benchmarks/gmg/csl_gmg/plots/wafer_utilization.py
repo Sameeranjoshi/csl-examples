@@ -160,7 +160,7 @@ def print_memory_table():
     print("=" * 100)
 
     # Parse from 6/6/6 config (representative)
-    filepath = os.path.join(BASE_DIR, 'all_responses_6_6_6.txt')
+    filepath = os.path.join(BASE_DIR, 'build', 'all_responses_6_6_6.txt')
     mem_data = parse_memory_from_responses(filepath)
 
     print(f"\n{'Grid':<12} {'Code (KB)':>10} {'Data (KB)':>10} {'Total (KB)':>11} "

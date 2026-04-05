@@ -26,9 +26,12 @@ echo "=========================================="
 echo "Step 1: Aggregating response files"
 echo "=========================================="
 
+# All aggregated all_responses_*.txt files are written into build/ (alongside
+# the out_dir_*/ they were aggregated from). Plot scripts read them from build/.
+mkdir -p build
 collect() {
     local pattern="$1"
-    local outfile="$2"
+    local outfile="build/$2"
     if ls -d ${pattern} 2>/dev/null | head -1 > /dev/null; then
         ls -d ${pattern} \
           | sed 's/.*S\([0-9]*\)x.*/\1 &/' \
@@ -40,12 +43,14 @@ collect() {
     fi
 }
 
-collect 'out_dir_S*x*_P6_P6_B100' all_responses_6_6_100.txt
-collect 'out_dir_S*x*_P4_P4_B100' all_responses_4_4_100.txt
-collect 'out_dir_S*x*_P4_P4_B6'   all_responses_4_4_6.txt
-collect 'out_dir_S*x*_P6_P6_B6'   all_responses_6_6_6.txt
-collect 'shallow_*'               all_responses_6_6_6_shallow.txt
-collect 'out_dir_S*unoptimized*'  all_responses_6_6_6_unoptimized.txt
+# NOTE: out_dir_* and shallow_* directories now live under build/ (see
+# compile_and_run_wse3.py's BUILD_DIR). The collect globs reflect that.
+collect 'build/out_dir_S*x*_P6_P6_B100' all_responses_6_6_100.txt
+collect 'build/out_dir_S*x*_P4_P4_B100' all_responses_4_4_100.txt
+collect 'build/out_dir_S*x*_P4_P4_B6'   all_responses_4_4_6.txt
+collect 'build/out_dir_S*x*_P6_P6_B6'   all_responses_6_6_6.txt
+collect 'build/shallow_*'               all_responses_6_6_6_shallow.txt
+collect 'build/out_dir_S*unoptimized*'  all_responses_6_6_6_unoptimized.txt
 
 # ----------------------------------------------------------------------------
 # Step 2: generate out_*.txt + internal plots from each aggregated file
@@ -62,9 +67,10 @@ cd "${SCRIPT_DIR}"
 run_perf() {
     local input="$1"
     local output="$2"
-    if [ -s "../${input}" ]; then
+    # Inputs (all_responses_*.txt) live under build/ now.
+    if [ -s "../build/${input}" ]; then
         echo "  ${input} -> ${output}"
-        python plot_gmg_performance.py "../${input}" > "${output}" 2>&1
+        python plot_gmg_performance.py "../build/${input}" > "${output}" 2>&1
     else
         echo "  SKIP ${input}: file missing or empty"
     fi
@@ -132,7 +138,7 @@ echo "=========================================="
 echo "Step 5: Roofline analysis"
 echo "=========================================="
 
-ROOFLINE_SAMPLE="${CSL_GMG_DIR}/out_dir_S512x_L9_M100_P6_P6_B6/response.txt"
+ROOFLINE_SAMPLE="${CSL_GMG_DIR}/build/out_dir_S512x_L9_M100_P6_P6_B6/response.txt"
 if [ -s "${ROOFLINE_SAMPLE}" ]; then
     echo "  roofline_analysis.py <- 512³ 6/6/6 -> roofline_plot.png"
     python roofline_analysis.py "${ROOFLINE_SAMPLE}" > /dev/null

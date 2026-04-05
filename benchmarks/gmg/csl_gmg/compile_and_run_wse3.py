@@ -28,8 +28,13 @@ except ImportError:
     logger = None
 # logging.basicConfig(level=logging.INFO)
 
-# Cache file for storing artifact paths
-ARTIFACT_CACHE_FILE = "artifact_cache.json"
+# All output artifacts (out_dir_*/, shallow_*/, artifact_cache.json) live under BUILD_DIR
+# to keep them out of app_path="./src" (avoids polluting the csl-file upload walk and
+# ensures os.walk on src/ does not traverse extracted tarballs / nested cs_* dirs).
+BUILD_DIR = "build"
+
+# Cache file for storing artifact paths (lives under BUILD_DIR)
+ARTIFACT_CACHE_FILE = os.path.join(BUILD_DIR, "artifact_cache.json")
 
 ###############################################################################
 # Build commands (similar to shell script)
@@ -58,6 +63,7 @@ def save_artifact_cache(cache):
     """
     Saves the artifact cache to file.
     """
+    os.makedirs(os.path.dirname(ARTIFACT_CACHE_FILE) or ".", exist_ok=True)
     with open(ARTIFACT_CACHE_FILE, "w") as f:
         json.dump(cache, f, indent=2)
 
@@ -90,9 +96,18 @@ def add_artifact_to_cache(out_path, artifact_path):
     save_artifact_cache(cache)
 
 
-def get_out_path(size, levels, max_ite, pre_iter, post_iter, bottom_iter, suffix=""):
-    """Return the output directory name used for this problem (must match process_on_device)."""
+def get_out_name(size, levels, max_ite, pre_iter, post_iter, bottom_iter, suffix=""):
+    """Logical out-dir name (no BUILD_DIR prefix). Written to response.txt and matched
+    by plot regexes like r'out_dir_S(\\d+)x_'. Do NOT change this format."""
     return f"out_dir_S{size}x_L{levels}_M{max_ite}_P{pre_iter}_P{post_iter}_B{bottom_iter}{suffix}"
+
+
+def get_out_path(size, levels, max_ite, pre_iter, post_iter, bottom_iter, suffix=""):
+    """Filesystem path where this run's out_dir lives: build/out_dir_S*_L*_..."""
+    return os.path.join(
+        BUILD_DIR,
+        get_out_name(size, levels, max_ite, pre_iter, post_iter, bottom_iter, suffix),
+    )
 
 
 def run_check_memory_for_outputs(script_dir=None, out_paths=None):
@@ -123,9 +138,9 @@ def run_check_memory_for_outputs(script_dir=None, out_paths=None):
                 print("None of the run output folders exist yet for memory check (jobs may still be running)")
                 return
         else:
-            out_dirs = sorted(glob.glob("out_dir_*"))
+            out_dirs = sorted(glob.glob(os.path.join(BUILD_DIR, "out_dir_*")))
             if not out_dirs:
-                print("No out_dir_* folders found for memory check")
+                print(f"No {BUILD_DIR}/out_dir_* folders found for memory check")
                 return
 
         for out_path in out_dirs:
@@ -142,27 +157,27 @@ def run_check_memory_for_outputs(script_dir=None, out_paths=None):
                 continue
 
             response_file = os.path.join(out_path, "response.txt")
+            # IMPORTANT: extract to a scratch /tmp dir, NOT into out_path. Extracting
+                # in-place created out_dir_*/cs_*/csl/out_dir_*/... recursion that
+                # later polluted os.walk in SdkCompiler and caused HTTP 413 failures.
+                # Scratch dir is cleaned up by the context manager after the check runs.
+            import tempfile
             for tar_path in tar_files:
                 tar_basename = os.path.basename(tar_path)
                 extract_base = os.path.splitext(os.path.splitext(tar_basename)[0])[0]
-                extract_dir = None
-                if os.path.exists(os.path.join(out_path, extract_base)):
-                    extract_dir = os.path.join(out_path, extract_base)
-                    print(f"  {out_path}: already extracted {extract_base}, reusing")
-                else:
-                    try:
-                        with tarfile.open(tar_path, "r:gz") as tf:
-                            tf.extractall(out_path)
-                            names = tf.getnames()
-                        # Determine extracted top-level dir (tar may create one)
-                        top_dirs = {n.split("/")[0] for n in names if "/" in n} | {n for n in names if not os.path.dirname(n)}
-                        if len(top_dirs) == 1 and "/" not in list(top_dirs)[0]:
-                            extract_dir = os.path.join(out_path, list(top_dirs)[0])
-                        else:
-                            extract_dir = out_path
-                    except Exception as e:
-                        print(f"  {out_path}: failed to extract {tar_path}: {e}")
-                        continue
+                try:
+                    scratch = tempfile.mkdtemp(prefix="cslgmg_check_", dir="/tmp")
+                    with tarfile.open(tar_path, "r:gz") as tf:
+                        tf.extractall(scratch)
+                        names = tf.getnames()
+                    top_dirs = {n.split("/")[0] for n in names if "/" in n} | {n for n in names if not os.path.dirname(n)}
+                    if len(top_dirs) == 1 and "/" not in list(top_dirs)[0]:
+                        extract_dir = os.path.join(scratch, list(top_dirs)[0])
+                    else:
+                        extract_dir = scratch
+                except Exception as e:
+                    print(f"  {out_path}: failed to extract {tar_path}: {e}")
+                    continue
 
                 # Find the dir that has bin/ with .elf files (elf_dir for check_memory_usage.sh)
                 elf_dir_candidates = [
@@ -215,6 +230,8 @@ def run_check_memory_for_outputs(script_dir=None, out_paths=None):
                     f.write(output)
                     f.write("\n")
                 print(f"  {out_path}: appended memory check to response.txt")
+                # Remove scratch extraction so it never leaks back into the source tree.
+                shutil.rmtree(scratch, ignore_errors=True)
     finally:
         try:
             os.chdir(orig_cwd)
@@ -230,7 +247,9 @@ def write_run_info(out_path, size, levels, channels, max_ite, pre_iter, post_ite
     print(f"Compile command: {Compile_command}")
     print(f"Run command: {Run_command}")
     with open(f"./{out_path}/response.txt", "w") as f:
-        f.write(f"Output directory: {out_path}\n")
+        # Write the logical out_dir name (not the build/ prefix) so plot regexes
+        # like r'out_dir_S(\d+)x_' continue to match.
+        f.write(f"Output directory: {os.path.basename(out_path)}\n")
         f.write(f"########################################################\n")
         f.write(f"Parameters: size={size}, levels={levels}, channels={channels}\n")
         f.write(f"Run parameters: max_ite={max_ite}, pre_iter={pre_iter}, post_iter={post_iter}, bottom_iter={bottom_iter}\n")
@@ -253,10 +272,15 @@ def compile_app(layout_file, Compile_command, out_path):
     
     print("Compiling...")
     compile_start = time.time()
+    # IMPORTANT: app_path points only at the CSL source tree (./src) so that
+    # SdkCompiler's os.walk uploads only legitimate kernel sources (~40 .csl
+    # files). Using app_path="." used to walk the whole working tree including
+    # out_dir_*/ extractions (hundreds of thousands of .csl files), which blew
+    # past the HTTP proxy 413 limit and caused every compile to be cancelled.
     with SdkCompiler(disable_version_check=True) as compiler:
         artifact_path = compiler.compile(
-            app_path=".",
-            csl_main=layout_file,
+            app_path="./src",
+            csl_main=layout_file,   # filename relative to app_path, e.g. "layout_gmg_vcycle.csl"
             options=Compile_command,
             out_path=out_path,
         )
@@ -305,7 +329,8 @@ def process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, 
     import threading
     
     
-    layout_file = "./src/layout_gmg_vcycle.csl"
+    # csl_main is relative to app_path (which is "./src"), so just the filename here.
+    layout_file = "layout_gmg_vcycle.csl"
     bsizemap = {
         4: 4,
         8: 8,
@@ -404,7 +429,7 @@ def main():
         #  (32, 5, 100, 1e-5, 6, 6, 100),   # Small problem
         #  (64, 6, 100, 1e-5, 6, 6, 100),   # Medium problem
         #  (128, 7, 100, 1e-5, 6, 6, 100),   # Large problem
-        #  (256, 8, 100, 1e-5, 6, 6, 100),   # Very large
+         (256, 8, 100, 1e-5, 6, 6, 100),   # Very large
         #  (512, 9, 100, 1e-5, 6, 6, 100),   # Very large
    
 
@@ -416,7 +441,7 @@ def main():
         #  (32, 5, 100, 1e-5, 4, 4, 100),   # Small problem
         #  (64, 6, 100, 1e-5, 4, 4, 100),   # Medium problem
         #  (128, 7, 100, 1e-5, 4, 4, 100),   # Large problem
-        #  (256, 8, 100, 1e-5, 4, 4, 100),   # Very large
+         (256, 8, 100, 1e-5, 4, 4, 100),   # Very large
         #  (512, 9, 100, 1e-5, 4, 4, 100),   # Very large
 
         # OSCAR matching problems
@@ -428,20 +453,20 @@ def main():
         #  (32, 5, 100, 1e-5, 4, 4, 6),   # Small problem
         #  (64, 6, 100, 1e-5, 4, 4, 6),   # Medium problem
         #  (128, 7, 100, 1e-5, 4, 4, 6),   # Large problem
-        #  (256, 8, 100, 1e-5, 4, 4, 6),   # Very large
+         (256, 8, 100, 1e-5, 4, 4, 6),   # Very large
         #  (512, 9, 100, 1e-5, 4, 4, 6),   # Very large
         # # 
 
         # 6/6/6
         # ls -d out_dir_S*x*_P6_P6_B6 | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_6_6_6.txt
-         (4, 2, 100, 1e-5, 6, 6, 6),   # Tiny problem
-        #  (8, 3, 100, 1e-5, 6, 6, 6),   # Tiny problem
-        #  (16, 4, 100, 1e-5, 6, 6, 6),   # Small problem
-        #  (32, 5, 100, 1e-5, 6, 6, 6),   # Small problem
-        #  (64, 6, 100, 1e-5, 6, 6, 6),   # Medium problem
-        #  (128, 7, 100, 1e-5, 6, 6, 6),   # Large problem
-         (256, 8, 100, 1e-5, 6, 6, 6),   # Very large
-        #  (512, 9, 100, 1e-5, 6, 6, 6),   # Very large
+        # (4, 2, 100, 1e-5, 6, 6, 6),   # Tiny problem
+        # (8, 3, 100, 1e-5, 6, 6, 6),   # Tiny problem
+        # (16, 4, 100, 1e-5, 6, 6, 6),   # Small problem
+        # (32, 5, 100, 1e-5, 6, 6, 6),   # Small problem
+        # (64, 6, 100, 1e-5, 6, 6, 6),   # Medium problem
+        # (128, 7, 100, 1e-5, 6, 6, 6),   # Large problem
+        (256, 8, 100, 1e-5, 6, 6, 6),   # Very large
+        # (512, 9, 100, 1e-5, 6, 6, 6),   # Very large — fits after R1+R2 optimizations
 
 
         # Only 6/6/6 problems
@@ -527,7 +552,7 @@ def main():
                 process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter)
             except Exception as e:
                 print(f"Failed for size={size}, levels={levels}: {e}")
-        run_check_memory_for_outputs(out_paths=run_out_paths)
+        # run_check_memory_for_outputs(out_paths=run_out_paths)
 
 if __name__ == "__main__":
     main()

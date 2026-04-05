@@ -26,6 +26,7 @@ import numpy as np
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.join(SCRIPT_DIR, '..')
+RESPONSES_DIR = os.path.join(BASE_DIR, 'build')  # all_responses_*.txt now live under build/
 
 # Grid sizes in order
 GRID_SIZES = ['4x4', '8x8', '16x16', '32x32', '64x64', '128x128', '256x256', '512x512']
@@ -378,7 +379,7 @@ def main():
     # Parse all WSE-3 data
     wse3_all = {}
     for config_label, filename in WSE3_CONFIGS:
-        filepath = os.path.join(BASE_DIR, filename)
+        filepath = os.path.join(RESPONSES_DIR, filename)
         wse3_all[config_label] = parse_wse3_responses(filepath)
 
     # Parse H200 CSV
