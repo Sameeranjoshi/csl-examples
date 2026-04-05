@@ -158,11 +158,6 @@ param src1_dsr_ids: [1]u16;
 param MAX_PENCIL_DIM: u16;  // Default to 512 for backward compatibility, but can be set per problem size
 
 const timestamp = @import_module("<time>");
-const timer_bcast = @import_module("timer_modified.csl", .{ .timerCount = 2 });
-
-var bcast_level_local: i16 = 0;
-var timing_bcast_configure_local: [*]u16;
-var timing_bcast_to_all_local: [*]u16;
 
 // const math_lib = @import_module("<math>");
 const layout_mod = @import_module("<layout>");
@@ -182,12 +177,6 @@ var is_window_boundary_x_start: bool = false;  // PE is at window start in x
 var is_window_boundary_x_end: bool = false;    // PE is at window end in x
 var is_window_boundary_y_start: bool = false;  // PE is at window start in y
 var is_window_boundary_y_end: bool = false;    // PE is at window end in y
-// OPT-I: chain-end = last ACTIVE PE in window = window_st + factor.
-// PEs east/south of chain-end are NOT in reduce chain (stay in teardown).
-var is_chain_end_x: bool = false;
-var is_chain_end_y: bool = false;
-var is_east_of_chain_x: bool = false;
-var is_south_of_chain_y: bool = false;
 var total_active_pes_x_in_window: i16 = 2;  // Number of active PEs in x-direction of window
 var total_active_pes_y_in_window: i16 = 2;  // Number of active PEs in y-direction of window
 var current_level_id: u16 = 0;
@@ -195,8 +184,7 @@ var current_level_id: u16 = 0;
 // Configure runtime reduction parameters (call from kernel)
 // Sets width/height and per-PE edge flags; reduction then targets bottom-right PE
 fn isActivePE(px: i16, py: i16, factor: u16) bool {
-    const mask: i16 = @as(i16, factor) - 1;
-    return (px & mask) == 0 and (py & mask) == 0;
+    return (px % @as(i16, factor)) == 0 and (py % @as(i16, factor)) == 0;
 }
 
 // Runtime parameters for active PE counts in window
@@ -223,9 +211,12 @@ fn setWindowedReductionParams(window_width: i16, window_height: i16, factor: u16
     
     // Calculate which window this PE belongs to
     // Windows are tiled across the mesh: [0..win_w)[win_w..2*win_w)...
-    // window_width/height are always powers of 2, use bitmask
-    window_st_x = px & ~(window_width - 1);
-    window_st_y = py & ~(window_height - 1);
+    const window_idx_x: i16 = px / window_width;
+    const window_idx_y: i16 = py / window_height;
+    
+    // Calculate window boundaries
+    window_st_x = window_idx_x * window_width;
+    window_st_y = window_idx_y * window_height;
     window_end_x = window_st_x + window_width - 1;
     window_end_y = window_st_y + window_height - 1;
     
@@ -237,15 +228,6 @@ fn setWindowedReductionParams(window_width: i16, window_height: i16, factor: u16
     is_window_boundary_x_end = (px == window_end_x);
     is_window_boundary_y_start = (py == window_st_y);
     is_window_boundary_y_end = (py == window_end_y);
-
-    // OPT-I: chain-end position = last ACTIVE PE in window = window_st + factor.
-    // PEs east/south of chain-end are not in the reduce chain (stay in teardown).
-    const chain_end_x: i16 = window_st_x + @as(i16, factor);
-    const chain_end_y: i16 = window_st_y + @as(i16, factor);
-    is_chain_end_x = (px == chain_end_x);
-    is_chain_end_y = (py == chain_end_y);
-    is_east_of_chain_x = (px > chain_end_x);
-    is_south_of_chain_y = (py > chain_end_y);
 }
 
 // A new type for binary operators
@@ -314,20 +296,6 @@ const src1_dsr = @get_dsr(dsr_src1, src1_dsr_ids[0]);
 const iq_route = @get_input_queue(queues[0]);
 const oq_route = @get_output_queue(queues[0]);
 
-// Roofline counter pointers (set by caller via setCounterPtrs before each allreduce call)
-var dummy_counter: u32 = 0;
-var local_count_fadd_ptr: *u32 = &dummy_counter;
-var local_count_fmax_ptr: *u32 = &dummy_counter;
-var local_count_fmov_ptr: *u32 = &dummy_counter;
-var local_count_fmov32_ptr: *u32 = &dummy_counter;
-
-fn setCounterPtrs(count_fadd: *u32, count_fmax: *u32, count_fmov: *u32, count_fmov32: *u32) void {
-    local_count_fadd_ptr = count_fadd;
-    local_count_fmax_ptr = count_fmax;
-    local_count_fmov_ptr = count_fmov;
-    local_count_fmov32_ptr = count_fmov32;
-}
-
 // The portal function of allreduce(ADD/MAX)
 //
 // How to use:
@@ -386,30 +354,10 @@ fn reduce_row_col_top_left( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP ) void
    @activate(C_STATE_ENTRY);
 }
 
-// Test helper: reduce along row only (for 1D benchmarking).
-// Used by the 1D test harness to isolate rowReduceReverse timing.
-fn reduce_row_only_top_left( n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP ) void {
-   x = in_tensor;
-   functor = op;
-
-   @assert(n > 0);
-   wvlts_per_pe = @bitcast(u16, n);
-
-   state_seq[0] = STATE_ROW_REDUCE_REVERSE;
-   state_seq[1] = STATE_DONE;
-
-   state_idx = 0;
-   cur_state = state_seq[0];
-   @activate(C_STATE_ENTRY);
-}
-
 // Broadcast from top-left PE to all PEs in the window
-fn broadcast_from_top_left( n: i16, in_tensor: [*]f32, level: i16, timing_bcast_configure: [*]u16, timing_bcast_to_all: [*]u16 ) void {    
+fn broadcast_from_top_left( n: i16, in_tensor: [*]f32 ) void {
    x = in_tensor;
 //    functor = op;
-   bcast_level_local = level;
-   timing_bcast_configure_local = timing_bcast_configure;   // reconfig the routes and colors
-   timing_bcast_to_all_local = timing_bcast_to_all;     // Communication time to send in bcast
 
    @assert(n > 0);
    wvlts_per_pe = @bitcast(u16, n);
@@ -580,6 +528,7 @@ const mem_buf_td_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> teardow
 // it is more intuitive to unblock LOCK in reduce() and broadcast_to_all()
 //
 task f_state_entry() void {
+
     if (STATE_ROW_REDUCE == cur_state){
         // rowReduce_configure() reconfigures the pos0, pos1 and clears TIP
         rowReduce_configure();
@@ -611,23 +560,27 @@ task f_state_entry() void {
     }else if (STATE_ROW_REDUCE_REVERSE == cur_state){
         // Reverse row reduction: right-to-left (EAST to WEST)
         rowReduceReverse_configure();
-        // OPT-I: Chain length = factor+1 (from boundary_x_start to chain_end_x).
-        // Only chain-end injects data. reduce_pes = active_count - 1.
-        reduce_pes = total_active_pes_x_in_window - 1;
-        reduce_first_pe = is_chain_end_x;  // chain-end sends data + TD
-        reduce_last_pe = is_window_boundary_x_start;
+        // perform reverse row reduction and store the result to window start PE
+        // Window end PE sends TD to turn C_ROUTE back to teardown mode
+        // ALL PEs in window forward data, receiver accumulates from all
+        reduce_pes = restriction_window_width - 1;  // All PEs in row forward
+        reduce_first_pe = is_window_boundary_x_end;   // window rightmost PE sends first
+        reduce_last_pe = is_window_boundary_x_start;  // window leftmost PE receives
         reduce( wvlts_per_pe );
 
+        // prefetch next state which will be copied into cur_state in teardown handler
         state_idx += 1;
         next_state = state_seq[state_idx];
 
     }else if (STATE_COL_REDUCE_REVERSE == cur_state){
         // Reverse column reduction: bottom-to-top (SOUTH to NORTH)
         colReduceReverse_configure();
-        // OPT-I: Chain length = factor+1 (from boundary_y_start to chain_end_y).
-        reduce_pes = total_active_pes_y_in_window - 1;
-        reduce_first_pe = is_chain_end_y;
-        reduce_last_pe = is_window_boundary_y_start;
+        // perform reverse column reduction and store the result to window start PE
+        // Window end PE sends TD to turn C_ROUTE back to teardown mode
+        // ALL PEs in window forward data, receiver accumulates from all
+        reduce_pes = restriction_window_height - 1;  // All PEs in column forward
+        reduce_first_pe = is_window_boundary_y_end;   // window bottommost PE sends first
+        reduce_last_pe = is_window_boundary_y_start;  // window topmost PE receives
         reduce( wvlts_per_pe );
 
         // prefetch next state which will be copied into cur_state in teardown handler
@@ -645,16 +598,11 @@ task f_state_entry() void {
         next_state = state_seq[state_idx];
 
     }else if (STATE_BCAST_FROM_TOP_LEFT == cur_state){
- 
-        const level: i16 = bcast_level_local;
-        const offset: i16 = level * timer_bcast.tsc_size_words;
-        // Micro-benchmark: time bcast_from_top_left_configure and broadcast_to_all_inside_window
-        timer_bcast.start(0);
+        // print level information and window details
+        const px: i16 = @as(i16, layout_mod.get_x_coord());
+        const py: i16 = @as(i16, layout_mod.get_y_coord());
         // bcast_from_top_left_configure() reconfigures pos0 and disables pos1
         bcast_from_top_left_configure();
-        timer_bcast.stop(0);
-        timer_bcast.accumulate_elapsed(0, @ptrcast(*[timer_bcast.tsc_size_words]u16, &timing_bcast_configure_local[offset]));
-        timer_bcast.start(1);
         // top-left PE broadcasts the data to others and also sends TD
         broadcast_to_all_inside_window( wvlts_per_pe );
 
@@ -762,7 +710,6 @@ fn broadcast_to_all( n: u16 ) void {
     if ( last_px and last_py ){
         // Pw-1,h-1 sends data and then f_send_ctrl sends a TD
         // f_send_ctrl() will unblock LOCK
-        // @mov32 fabric send — not counted (receive-side only convention)
         //@mov32(fab_trans_x_wdsd, mem_x_buf_dsd, .{.async=true, .activate=f_send_ctrl} );
         @load_to_dsr(dest_dsr, fab_trans_x_wdsd, .{.async=true, .activate=f_send_ctrl} );
         @load_to_dsr(src1_dsr, mem_x_buf_dsd);
@@ -770,8 +717,6 @@ fn broadcast_to_all( n: u16 ) void {
     }else{
         // other PEs receive data and wait for TD
         // unblock LOCK after data is received, T29 will activate LOCK
-        // @mov32 fabric receive — count as fabric load only (not fmov)
-        local_count_fmov32_ptr.* += @as(u32, wvlts_per_pe);
         //@mov32(mem_x_buf_dsd, fab_recv_wdsd, .{.async=true, .unblock=C_LOCK} );
         @load_to_dsr(dest_dsr, mem_x_buf_dsd);
         @load_to_dsr(src1_dsr, fab_recv_wdsd, .{.async=true, .unblock=C_LOCK} );
@@ -808,15 +753,12 @@ fn broadcast_to_all_inside_window( n: u16 ) void {
     if (is_sender) {
         // Top-left PE of window sends data and then f_send_ctrl sends a TD
         // f_send_ctrl() will unblock LOCK
-        // @mov32 fabric send — not counted (receive-side only convention)
         @load_to_dsr(dest_dsr, fab_trans_x_wdsd, .{.async=true, .activate=f_send_ctrl} );
         @load_to_dsr(src1_dsr, mem_x_buf_dsd);
         @mov32(dest_dsr, src1_dsr, .{.async=true} );
     } else if (in_window) {
         // Other PEs in window receive data and wait for TD
         // unblock LOCK after data is received, T29 will activate LOCK
-        // @mov32 fabric receive — count as fabric load only (not fmov)
-        local_count_fmov32_ptr.* += @as(u32, wvlts_per_pe);
         @load_to_dsr(dest_dsr, mem_x_buf_dsd);
         @load_to_dsr(src1_dsr, fab_recv_wdsd, .{.async=true, .unblock=C_LOCK} );
         @mov32(dest_dsr, src1_dsr, .{.async=true} );
@@ -873,13 +815,6 @@ task f_send_data() void {
         // reduce_pes is set to (active_pes_x - 1) or (active_pes_y - 1)
         // So we only receive from active PEs
         if (count_recv_or_send < reduce_pes){
-            // Roofline: count fabric receive and compute op
-            local_count_fmov32_ptr.* += @as(u32, wvlts_per_pe);
-            if (TYPE_BINARY_OP.ADD == functor){
-                local_count_fadd_ptr.* += @as(u32, wvlts_per_pe);
-            } else {
-                local_count_fmax_ptr.* += @as(u32, wvlts_per_pe);
-            }
             //@fadds(mem_x_buf_dsd, mem_x_buf_dsd, fab_recv_wdsd, .{.async=true, .activate=f_send_data} );
             @load_to_dsr(src1_dsr, fab_recv_wdsd, .{.async=true, .activate=f_send_data} );
             @load_to_dsr(src0_dsr, mem_x_buf_dsd);
@@ -897,33 +832,20 @@ task f_send_data() void {
             @unblock(C_LOCK);
         }
     }else{
-        // non-receiver PE
-        // OPT-I: For REVERSE reduces, only chain-end sends. East/south-of-chain skip LOCK.
-        // Forward reduces use original flow (all PEs send).
-        const is_row_rev: bool = (STATE_ROW_REDUCE_REVERSE == cur_state);
-        const is_col_rev: bool = (STATE_COL_REDUCE_REVERSE == cur_state);
-        if (is_row_rev or is_col_rev){
-            const out_of_chain: bool = (is_row_rev and is_east_of_chain_x) or (is_col_rev and is_south_of_chain_y);
-            if (out_of_chain){
-                @unblock(C_LOCK);
-                cur_state = next_state;
-                @activate(C_STATE_ENTRY);
-                return;
-            }
-            const is_sender: bool = (is_row_rev and is_chain_end_x) or (is_col_rev and is_chain_end_y);
-            if (!is_sender){
-                @unblock(C_LOCK);
-                return;
-            }
-        }
+        // other PE (not last PE): ALL PEs must send/forward to keep chain alive
         if (count_recv_or_send < 1){
+            //@mov32(fab_trans_x_wdsd, mem_x_buf_dsd, .{.async=true, .activate=f_send_ctrl} );
             @load_to_dsr(dest_dsr, fab_trans_x_wdsd, .{.async=true, .activate=f_send_ctrl} );
             @load_to_dsr(src1_dsr, mem_x_buf_dsd);
             @mov32(dest_dsr, src1_dsr, .{.async=true} );
-            count_recv_or_send += 1;
+            count_recv_or_send += 1; 
         }else{
+            // sending is done (including data wavelets and control wavelets)
             @unblock(C_LOCK);
+            // only 1st PE sends TD to other PEs
+            // T29 will activate LOCK
             if (reduce_first_pe){
+                //@mov32(fab_trans_ctrl_wdsd, mem_buf_td_dsd, .{.async=true} );
                 @load_to_dsr(dest_dsr, fab_trans_ctrl_wdsd, .{.async=true} );
                 @load_to_dsr(src1_dsr, mem_buf_td_dsd);
                 @mov32(dest_dsr, src1_dsr, .{.async=true} );
@@ -964,12 +886,6 @@ task f_send_ctrl() void{
 // (*) operation is {row_reduce, col_reduce, bcast}
 //
 task f_lock() void {
-    if (STATE_BCAST_FROM_TOP_LEFT == cur_state){
-        const level: i16 = bcast_level_local;
-        const offset: i16 = level * timer_bcast.tsc_size_words;
-        timer_bcast.stop(1);
-        timer_bcast.accumulate_elapsed(1, @ptrcast(*[timer_bcast.tsc_size_words]u16, &timing_bcast_to_all_local[offset]));
-    }
     cur_state = next_state; // go to next state
     @activate(C_STATE_ENTRY);
 }
@@ -1203,65 +1119,69 @@ fn colReduce_configure() void {
 // Reverse row reduction: right-to-left (EAST to WEST)
 // Final result in window start x (leftmost PE of each window)
 fn rowReduceReverse_configure() void {
-    // OPT-I: Chain is from boundary_x_start (receiver, active) to chain_end_x
-    // (= window_st + factor, last active PE = the sender). PEs EAST of chain-end
-    // stay in teardown mode (not configured).
 
-    if (is_east_of_chain_x){
-        return;  // Not in chain.
-    }
-
+    // (1) setup the new routing first because the pos1 needs to inherit from pos0
     const addr = color_config.get_color_config_addr(C_ROUTE);
 
-    if (is_chain_end_x){
-        // chain-end (= last active PE): sends data + TD westward via RAMP
+    if (is_window_boundary_x_end){
+        // window rightmost PE sends data westward
+        // .rx = .{ RAMP },.tx = .{ WEST },
         color_config.reset_routes(addr, .{.tx = WEST, .rx = RAMP});
     }else if (is_window_boundary_x_start){
-        // Receiver (active, leftmost): receive from east, output to CE
+        // window leftmost PE only receives data from east
+        // .rx = .{ EAST }, .tx = .{ RAMP },
         color_config.reset_routes(addr, .{.tx = RAMP, .rx = EAST});
     }else{
-        // Inactive middle forwarder: pure E→W forward
+        // middle PEs within window: receive from east, send to west
+        // .rx = .{ EAST }, .tx = .{ WEST },
         color_config.reset_routes(addr, .{.tx = WEST, .rx = EAST});
     }
 
+    // (2) setup switch according to config parameters
     switch_config.clear_current_position(C_ROUTE);
     switch_config.set_invalid_for_all_switch_positions(C_ROUTE);
 
-    // Only chain-end (sender) gets pos1=RAMP. Middle forwarders and receiver: pos0 only.
-    if (is_chain_end_x){
+    if (is_window_boundary_x_start){
+        // window leftmost PE (receiver) or inactive PEs do not have pos1
+    }else{
+        // others have ".pos1 = .{ .rx = RAMP }"
         switch_config.set_rx_switch_pos1(C_ROUTE, RAMP);
     }
 
+    // (3) clear teardown-in-progress bit
     tile_config.teardown.exit(C_ROUTE);
 }
 
 
 // Reverse column reduction: bottom-to-top (SOUTH to NORTH)
-// OPT-I: Chain from boundary_y_start (receiver) to chain_end_y (= window_st + factor).
-// PEs south of chain-end stay in teardown.
+// Final result in window start y (topmost PE of each window)
 fn colReduceReverse_configure() void {
-    if (is_south_of_chain_y){
-        return;  // Not in chain.
-    }
 
+    // (1) setup the new routing first because the pos1 needs to inherit from pos0
     const addr = color_config.get_color_config_addr(C_ROUTE);
 
-    if (is_chain_end_y){
-        // chain-end (= last active PE): sends data + TD northward via RAMP
+    if (is_window_boundary_y_end){
+        // window bottommost PE sends data northward
+        // .rx = .{ RAMP },.tx = .{ NORTH },
         color_config.reset_routes(addr, .{.tx = NORTH, .rx = RAMP});
     }else if (is_window_boundary_y_start){
-        // Receiver (active, topmost): receive from south, output to CE
+        // window topmost PE only receives data from south
+        // .rx = .{ SOUTH }, .tx = .{ RAMP },
         color_config.reset_routes(addr, .{.tx = RAMP, .rx = SOUTH});
     }else{
-        // Inactive middle forwarder: pure S→N forward
+        // middle PEs within window: receive from south, send to north
+        // .rx = .{ SOUTH }, .tx = .{ NORTH },
         color_config.reset_routes(addr, .{.tx = NORTH, .rx = SOUTH});
     }
 
+    // (2) setup switch according to config parameters
     switch_config.clear_current_position(C_ROUTE);
     switch_config.set_invalid_for_all_switch_positions(C_ROUTE);
 
-    // Only chain-end (sender) gets pos1=RAMP.
-    if (is_chain_end_y){
+    if (is_window_boundary_y_start){
+        // window topmost PE (receiver) or inactive PEs do not have pos1
+    }else{
+        // others have ".pos1 = .{ .rx = RAMP }"
         switch_config.set_rx_switch_pos1(C_ROUTE, RAMP);
     }
 

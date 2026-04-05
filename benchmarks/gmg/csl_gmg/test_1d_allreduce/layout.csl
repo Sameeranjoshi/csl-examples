@@ -1,0 +1,61 @@
+// 1D allreduce test harness layout
+// Grid: width × 2 (2 rows so we have true 2D fabric but test row-reduce only)
+//
+// This test measures rowReduceReverse timing at different multigrid levels
+// to validate the performance model and guide the forwarding optimization.
+
+param width: i16;   // number of PEs in x direction (typically 512)
+param height: i16;  // 2
+param NUM_LEVELS: i16;
+
+const C0: color = @get_color(0);
+
+// State machine entrypoint for the test kernel
+const EN_TEST_STATE: local_task_id = @get_local_task_id(12);
+
+// Allreduce entrypoints
+const EN_SEND_CTRL: local_task_id = @get_local_task_id(17);
+const EN_SEND_DATA: local_task_id = @get_local_task_id(18);
+const EN_STATE_ENTRY: local_task_id = @get_local_task_id(19);
+const EN_LOCK: local_task_id = @get_local_task_id(20);
+
+const reduce = @import_module("src_copy/modified_csl_lib_hops/allreduce/layout.csl", .{
+    .colors = [1]color{C0},
+    .entrypoints = [4]local_task_id{EN_SEND_CTRL, EN_SEND_DATA, EN_STATE_ENTRY, EN_LOCK},
+    .width = width,
+    .height = height
+});
+
+const memcpy = @import_module("<memcpy/get_params>", .{
+    .width = width,
+    .height = height,
+});
+
+layout{
+    @set_rectangle(width, height);
+
+    var py: i16 = 0;
+    while(py < height) : (py += 1) {
+        var px: i16 = 0;
+        while(px < width) : (px += 1) {
+            const memcpyParams = memcpy.get_params(px);
+            const reduceParams = reduce.get_params(px, py);
+            var params: comptime_struct = .{
+                .memcpyParams = memcpyParams,
+                .reduceParams = reduceParams,
+                .width = width,
+                .height = height,
+                .NUM_LEVELS = NUM_LEVELS,
+                .EN_TEST_STATE = EN_TEST_STATE,
+            };
+            @set_tile_code(px, py, "kernel.csl", params);
+        }
+    }
+
+    // Exports
+    @export_name("data", [*]f32, true);
+    @export_name("results", [*]f32, true);
+    @export_name("timing", [*]u32, true);  // NUM_LEVELS × 2 u32 words
+    @export_name("f_run_test", fn(i16)void);  // takes n (pencil/z dim)
+    @export_name("f_enable_timer", fn()void);
+}

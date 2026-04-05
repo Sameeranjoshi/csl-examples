@@ -182,8 +182,8 @@ var is_window_boundary_x_start: bool = false;  // PE is at window start in x
 var is_window_boundary_x_end: bool = false;    // PE is at window end in x
 var is_window_boundary_y_start: bool = false;  // PE is at window start in y
 var is_window_boundary_y_end: bool = false;    // PE is at window end in y
-// OPT-I: chain-end = last ACTIVE PE in window = window_st + factor.
-// PEs east/south of chain-end are NOT in reduce chain (stay in teardown).
+// OPT-I: chain endpoint = last ACTIVE PE in window. PEs east/south of chain-end
+// are NOT in the reduce chain (they stay in teardown mode).
 var is_chain_end_x: bool = false;
 var is_chain_end_y: bool = false;
 var is_east_of_chain_x: bool = false;
@@ -239,7 +239,7 @@ fn setWindowedReductionParams(window_width: i16, window_height: i16, factor: u16
     is_window_boundary_y_end = (py == window_end_y);
 
     // OPT-I: chain-end position = last ACTIVE PE in window = window_st + factor.
-    // PEs east/south of chain-end are not in the reduce chain (stay in teardown).
+    // PEs east of chain-end are not in the reduce chain (stay in teardown).
     const chain_end_x: i16 = window_st_x + @as(i16, factor);
     const chain_end_y: i16 = window_st_y + @as(i16, factor);
     is_chain_end_x = (px == chain_end_x);
@@ -611,23 +611,25 @@ task f_state_entry() void {
     }else if (STATE_ROW_REDUCE_REVERSE == cur_state){
         // Reverse row reduction: right-to-left (EAST to WEST)
         rowReduceReverse_configure();
-        // OPT-I: Chain length = factor+1 (from boundary_x_start to chain_end_x).
-        // Only chain-end injects data. reduce_pes = active_count - 1.
+        // OPT-I: Chain is length (factor+1). Only 1 sender (chain_end = last active).
         reduce_pes = total_active_pes_x_in_window - 1;
         reduce_first_pe = is_chain_end_x;  // chain-end sends data + TD
         reduce_last_pe = is_window_boundary_x_start;
         reduce( wvlts_per_pe );
 
+        // prefetch next state which will be copied into cur_state in teardown handler
         state_idx += 1;
         next_state = state_seq[state_idx];
 
     }else if (STATE_COL_REDUCE_REVERSE == cur_state){
         // Reverse column reduction: bottom-to-top (SOUTH to NORTH)
         colReduceReverse_configure();
-        // OPT-I: Chain length = factor+1 (from boundary_y_start to chain_end_y).
-        reduce_pes = total_active_pes_y_in_window - 1;
-        reduce_first_pe = is_chain_end_y;
-        reduce_last_pe = is_window_boundary_y_start;
+        // perform reverse column reduction and store the result to window start PE
+        // Window end PE sends TD to turn C_ROUTE back to teardown mode
+        // ALL PEs in window forward data, receiver accumulates from all
+        reduce_pes = restriction_window_height - 1;  // All PEs in column forward
+        reduce_first_pe = is_window_boundary_y_end;   // window bottommost PE sends first
+        reduce_last_pe = is_window_boundary_y_start;  // window topmost PE receives
         reduce( wvlts_per_pe );
 
         // prefetch next state which will be copied into cur_state in teardown handler
@@ -898,24 +900,22 @@ task f_send_data() void {
         }
     }else{
         // non-receiver PE
-        // OPT-I: For REVERSE reduces, only chain-end sends. East/south-of-chain skip LOCK.
-        // Forward reduces use original flow (all PEs send).
-        const is_row_rev: bool = (STATE_ROW_REDUCE_REVERSE == cur_state);
-        const is_col_rev: bool = (STATE_COL_REDUCE_REVERSE == cur_state);
-        if (is_row_rev or is_col_rev){
-            const out_of_chain: bool = (is_row_rev and is_east_of_chain_x) or (is_col_rev and is_south_of_chain_y);
-            if (out_of_chain){
-                @unblock(C_LOCK);
-                cur_state = next_state;
-                @activate(C_STATE_ENTRY);
-                return;
-            }
-            const is_sender: bool = (is_row_rev and is_chain_end_x) or (is_col_rev and is_chain_end_y);
-            if (!is_sender){
-                @unblock(C_LOCK);
-                return;
-            }
+        // OPT-I: chain-end (=last active PE) sends data + TD. Inactive forwarders
+        // just forward wavelets via router (no CE work). PEs east of chain-end
+        // aren't in chain — transition directly to next state.
+        if (is_east_of_chain_x){
+            // East of chain: bypass LOCK, transition directly.
+            @unblock(C_LOCK);
+            cur_state = next_state;
+            @activate(C_STATE_ENTRY);
+            return;
         }
+        if (!is_chain_end_x){
+            // Inactive middle forwarder: no injection. Wait for TD to pass through.
+            @unblock(C_LOCK);
+            return;
+        }
+        // chain-end (sender): send data, then TD
         if (count_recv_or_send < 1){
             @load_to_dsr(dest_dsr, fab_trans_x_wdsd, .{.async=true, .activate=f_send_ctrl} );
             @load_to_dsr(src1_dsr, mem_x_buf_dsd);
@@ -923,11 +923,9 @@ task f_send_data() void {
             count_recv_or_send += 1;
         }else{
             @unblock(C_LOCK);
-            if (reduce_first_pe){
-                @load_to_dsr(dest_dsr, fab_trans_ctrl_wdsd, .{.async=true} );
-                @load_to_dsr(src1_dsr, mem_buf_td_dsd);
-                @mov32(dest_dsr, src1_dsr, .{.async=true} );
-            }
+            @load_to_dsr(dest_dsr, fab_trans_ctrl_wdsd, .{.async=true} );
+            @load_to_dsr(src1_dsr, mem_buf_td_dsd);
+            @mov32(dest_dsr, src1_dsr, .{.async=true} );
         }
     }
 }
@@ -1204,26 +1202,28 @@ fn colReduce_configure() void {
 // Final result in window start x (leftmost PE of each window)
 fn rowReduceReverse_configure() void {
     // OPT-I: Chain is from boundary_x_start (receiver, active) to chain_end_x
-    // (= window_st + factor, last active PE = the sender). PEs EAST of chain-end
+    // (= window_st + factor, last active PE, the sender). PEs EAST of chain_end
     // stay in teardown mode (not configured).
 
+    // PEs east of chain-end: not in chain, don't reconfigure.
     if (is_east_of_chain_x){
-        return;  // Not in chain.
+        return;
     }
 
     const addr = color_config.get_color_config_addr(C_ROUTE);
 
     if (is_chain_end_x){
-        // chain-end (= last active PE): sends data + TD westward via RAMP
+        // Chain-end (= last active PE): sends data + TD westward via RAMP
         color_config.reset_routes(addr, .{.tx = WEST, .rx = RAMP});
     }else if (is_window_boundary_x_start){
-        // Receiver (active, leftmost): receive from east, output to CE
+        // Receiver (leftmost, active): receive from east, output to CE
         color_config.reset_routes(addr, .{.tx = RAMP, .rx = EAST});
     }else{
-        // Inactive middle forwarder: pure E→W forward
+        // Inactive middle forwarder (positions 1..factor-1): pure E→W forward
         color_config.reset_routes(addr, .{.tx = WEST, .rx = EAST});
     }
 
+    // Switch config
     switch_config.clear_current_position(C_ROUTE);
     switch_config.set_invalid_for_all_switch_positions(C_ROUTE);
 
@@ -1232,36 +1232,40 @@ fn rowReduceReverse_configure() void {
         switch_config.set_rx_switch_pos1(C_ROUTE, RAMP);
     }
 
+    // Clear teardown-in-progress bit
     tile_config.teardown.exit(C_ROUTE);
 }
 
 
 // Reverse column reduction: bottom-to-top (SOUTH to NORTH)
-// OPT-I: Chain from boundary_y_start (receiver) to chain_end_y (= window_st + factor).
-// PEs south of chain-end stay in teardown.
+// Final result in window start y (topmost PE of each window)
 fn colReduceReverse_configure() void {
-    if (is_south_of_chain_y){
-        return;  // Not in chain.
-    }
 
+    // (1) setup the new routing first because the pos1 needs to inherit from pos0
     const addr = color_config.get_color_config_addr(C_ROUTE);
 
-    if (is_chain_end_y){
-        // chain-end (= last active PE): sends data + TD northward via RAMP
+    if (is_window_boundary_y_end){
+        // window bottommost PE sends data northward
+        // .rx = .{ RAMP },.tx = .{ NORTH },
         color_config.reset_routes(addr, .{.tx = NORTH, .rx = RAMP});
     }else if (is_window_boundary_y_start){
-        // Receiver (active, topmost): receive from south, output to CE
+        // window topmost PE only receives data from south
+        // .rx = .{ SOUTH }, .tx = .{ RAMP },
         color_config.reset_routes(addr, .{.tx = RAMP, .rx = SOUTH});
     }else{
-        // Inactive middle forwarder: pure S→N forward
+        // middle PEs within window: receive from south, send to north
+        // .rx = .{ SOUTH }, .tx = .{ NORTH },
         color_config.reset_routes(addr, .{.tx = NORTH, .rx = SOUTH});
     }
 
+    // (2) setup switch according to config parameters
     switch_config.clear_current_position(C_ROUTE);
     switch_config.set_invalid_for_all_switch_positions(C_ROUTE);
 
-    // Only chain-end (sender) gets pos1=RAMP.
-    if (is_chain_end_y){
+    if (is_window_boundary_y_start){
+        // window topmost PE (receiver) or inactive PEs do not have pos1
+    }else{
+        // others have ".pos1 = .{ .rx = RAMP }"
         switch_config.set_rx_switch_pos1(C_ROUTE, RAMP);
     }
 
