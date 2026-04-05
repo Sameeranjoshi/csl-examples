@@ -54,6 +54,21 @@ of per-level accumulated timers (i.e., TOTAL across all iterations, not the firs
 V-cycle). The plot scripts still parse them for backward compatibility, but new
 runs use `"Avg V-cycle time (no conv)"`.
 
+### Roofline counters (FLOPs, memory traffic, fabric traffic)
+
+All counters (`FSUB`, `FMAC`, `FMUL`, `FADD`, `FNEG`, `FMOV_MEM`, `FMOV_ZERO`,
+`FMOV32`, `FMAX`) in the per-level roofline dump are **totals accumulated across
+all N V-cycle iterations**. The kernel sets an `in_convergence` flag during the
+convergence-check diagnostic (the extra SpMV + residual + allreduce MAX after each
+V-cycle), and the relevant counter increments are gated off so those operators
+do **not** inflate the counts. This keeps the roofline consistent with the
+"pure operators" time (`WALL − CONV`).
+
+To get per-V-cycle values, divide by `Device iterations to converge`.
+For achieved GFLOP/s, no explicit division is needed — `total_flops / total_time`
+is iteration-invariant as long as both numerator and denominator exclude
+convergence identically.
+
 ## File conventions
 
 - `out_dir_S{size}x_L{levels}_M{max_iter}_P{pre}_P{post}_B{bottom}/response.txt` — one raw hardware run per problem size+config

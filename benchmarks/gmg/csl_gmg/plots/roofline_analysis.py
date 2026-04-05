@@ -201,7 +201,10 @@ def print_table_v(counts, total_time_us=None, device_iterations=1):
 
     counts: dict of {level -> {op_type -> count}}
     FMOV32 counts are in counts[level]['fmov32'].
-    All counters are per 1 V-cycle (roofline_measure gated in kernel).
+    Counters are TOTALS across all V-cycle iterations. Convergence-check
+    operators (the extra SpMV/residual/allreduce MAX) are excluded in the kernel
+    via the `in_convergence` flag. Achieved GFLOP/s uses total_flops/total_time
+    (ratio is iteration-invariant, so no explicit division needed).
     """
     all_ops = ['fsub', 'fmac', 'fmul', 'fadd', 'fneg', 'fmov_mem', 'fmov_zero', 'fmax']
 
@@ -313,9 +316,12 @@ def print_table_v(counts, total_time_us=None, device_iterations=1):
 def compute_summary(all_results):
     """Compute per-grid summary for roofline plots and tables.
 
-    FLOP/memory/fabric *counters* in the log are already per one V-cycle
-    (gated by roofline_measure in the kernel). Per-level *timings* come from
-    the timing table (one V-cycle worth of work per row).
+    FLOP/memory/fabric *counters* in the log are TOTALS across all V-cycles.
+    Convergence-check operators (extra SpMV + residual + allreduce MAX) are
+    gated out by the `in_convergence` flag in the kernel, so the counters
+    represent only the pure V-cycle operators. Per-level *timings* are also
+    totals; pure-operators time = level_time - conv_time (conv only at L0).
+    GFLOP/s uses total_flops/total_time → ratio is iteration-invariant.
 
     PE(0,0) is active at every level — its counters are the reference PE.
     """
@@ -337,7 +343,8 @@ def compute_summary(all_results):
             active_pes = (size // (2 ** level)) ** 2
             nz = size >> level
 
-            # Counters are already per 1 V-cycle (roofline_measure gated in kernel)
+            # Counters are TOTALS across all V-cycles (convergence ops excluded via
+            # in_convergence flag in kernel). GFLOP/s uses flops/time (same scaling).
             level_flops = 0
             level_mem = 0
             for op in all_ops:
@@ -353,7 +360,8 @@ def compute_summary(all_results):
             pe00_total_mem += level_mem
 
             level_ai = level_flops / level_mem if level_mem > 0 else 0
-            # Per-level time: already 1 V-cycle (timers gated by roofline_measure)
+            # Per-level time: TOTAL across all V-cycles (accumulated by kernel).
+            # level_time_us includes convergence (only L0 has conv_us > 0).
             level_time_us = data.get('level_times', {}).get(level, 0)
             level_conv_us = data.get('level_conv_times', {}).get(level, 0)
             level_vcycle_us = level_time_us - level_conv_us
@@ -739,7 +747,10 @@ def print_machine_peaks(grid_size, levels_details):
 
 
 def print_summary_table(summary):
-    """Print PE(0,0) roofline summary per 1 V-cycle across all grid sizes."""
+    """Print PE(0,0) roofline summary per 1 V-cycle across all grid sizes.
+    Counts/times are totals; GFLOP/s = total_flops/total_time is iter-invariant.
+    Convergence ops excluded in kernel; conv time subtracted for *_vcycle columns.
+    """
 
     sorted_grids = sorted(summary.keys(), key=lambda g: int(g.split('x')[0]))
     for g in sorted_grids:
@@ -831,7 +842,7 @@ def main():
                 print(f"\n{'#' * 120}")
                 print(f"# Grid: {grid_label}")
                 print(f"{'#' * 120}")
-                # All counters are already per 1 V-cycle (roofline_measure gated)
+                # Counters are TOTALS across all V-cycles (conv ops excluded by kernel)
                 print_table_v(
                     data['levels'],
                     total_time_us=data.get('total_time_us'),

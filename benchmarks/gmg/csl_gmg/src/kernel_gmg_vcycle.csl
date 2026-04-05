@@ -178,6 +178,18 @@ var count_fmov32 = @zeros([LEVELS]u32);
 // State machine parameters
 var dot = @zeros([1]f32); // dummy variable for f_sync
 var dummy_u32: u32 = 0;  // dummy counter for sync (not counted in roofline)
+// Convergence-check counter sink: SpMV + residual + allreduce MAX happen during
+// convergence diagnostic (excluded from time via wall-conv accounting). To keep
+// roofline FLOPs/bytes consistent with the "pure operators" time, we skip counter
+// increments during convergence. Library calls write to these dummy slots instead
+// of the real per-level counters. Separate vars avoid pointer-aliasing stalls.
+var in_convergence: bool = false;
+var dummy_count_fneg: u32 = 0;
+var dummy_count_fmac: u32 = 0;
+var dummy_count_fmov_zero: u32 = 0;
+var dummy_count_fmov32: u32 = 0;
+var dummy_count_fadd: u32 = 0;
+var dummy_count_fmax: u32 = 0;
 var n: i16 = 0;  // zDim
 var num_levels: i16 = 0;
 var pre_smooth_iter: i16 = 0;
@@ -318,6 +330,7 @@ fn f_reset() void {
     current_smooth_iter = 0;
     cur_state = 0;
     next_state = 0;
+    in_convergence = false;
 
     sys_mod.unblock_cmd_stream();
 }
@@ -433,10 +446,20 @@ fn save_timestamp_end(level: i16, timing_array: [*]u16, timer_id: i16) void {
 // GMG KERNELS
 //-------------------------------------------------
 
-// Apply operator for Jacobi smoothing
+// Apply operator for Jacobi smoothing.
+// During convergence, counters are written to dummy slots (not part of roofline).
 fn f_apply_operator() void {
     // spmv zeros y internally before accumulating — no need to zero Au here
-    stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level, &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute, &count_fneg[current_level], &count_fmac[current_level], &count_fmov_zero[current_level], &count_fmov32[current_level]);
+    if (in_convergence) {
+        stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level,
+            &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute,
+            &dummy_count_fneg, &dummy_count_fmac, &dummy_count_fmov_zero, &dummy_count_fmov32);
+    } else {
+        stencil_mod.spmv(n, &stencil_coeff, &u, &Au, current_level,
+            &timing_spmv_total, &timing_spmv_communication, &timing_spmv_compute,
+            &count_fneg[current_level], &count_fmac[current_level],
+            &count_fmov_zero[current_level], &count_fmov32[current_level]);
+    }
 }
 
 // Jacobi smoothing: u = u + JACOBI_COEFF * (f - Au)
@@ -455,22 +478,28 @@ fn f_jacobi_smooth() void {
     // save_u_smooth moved to STATE_DOWN_SMOOTH_CHECK (only needed once after last pre-smooth iter)
 }
 
-// Calculate residual: r = f - Au
+// Calculate residual: r = f - Au.
+// During convergence, skip counter updates (not part of roofline).
 fn f_residual() void {
     counter_residual[current_level] += 1;
     if (is_active_pe) {
         @fsubs(mem_r_dsd, mem_f_dsd, mem_Au_dsd);
-        count_fsub[current_level] += @as(u32, n);
+        if (!in_convergence) {
+            count_fsub[current_level] += @as(u32, n);
+        }
     } else {
         @fmovs(mem_r_dsd, 0.0);                                // zero-fill r (inactive)
-        count_fmov_zero[current_level] += @as(u32, n);
+        if (!in_convergence) {
+            count_fmov_zero[current_level] += @as(u32, n);
+        }
     }
 }
 
-// Calculate rho: rho = MAX|r| at level 0 (for convergence checking)
+// Calculate rho: rho = MAX|r| at level 0 (for convergence checking).
+// This ONLY runs during convergence — counters always go to dummy slots.
 fn f_compute_rho() void {
         rho[0] = math_lib.abs(r[0]);
-        reduce_mod.setCounterPtrs(&count_fadd[current_level], &count_fmax[current_level], &count_fmov_zero[current_level], &count_fmov32[current_level]);
+        reduce_mod.setCounterPtrs(&dummy_count_fadd, &dummy_count_fmax, &dummy_count_fmov_zero, &dummy_count_fmov32);
         reduce_mod.allreduce(1, &rho, reduce_mod.TYPE_BINARY_OP.MAX);
 }
 
@@ -640,25 +669,36 @@ fn f_setup_level(level_id: u16, down: i16) void {
     
     f_init_spmv_and_reduce(current_level_id);
     
-    // SAVE AND RESTORE
+    // SAVE AND RESTORE — fmovs are executed unconditionally, but counters are
+    // gated by in_convergence (setup runs during conv diagnostic at level 0).
     if (down == 1) {
         if (level_id != 0) {
             @fmovs(mem_u_dsd, 0.0);                                    // zero-fill u
-            count_fmov_zero[current_level] += @as(u32, n);
+            if (!in_convergence) {
+                count_fmov_zero[current_level] += @as(u32, n);
+            }
         }
         if (level_id == 0 and k > 0) {
             @fmovs(mem_f_dsd, mem_save_f_down_dsd);                    // restore f (mem→mem)
-            count_fmov_mem[current_level] += @as(u32, n);
+            if (!in_convergence) {
+                count_fmov_mem[current_level] += @as(u32, n);
+            }
         }
         @fmovs(mem_save_f_down_dsd, mem_f_dsd);                        // save f (mem→mem)
-        count_fmov_mem[current_level] += @as(u32, n);
+        if (!in_convergence) {
+            count_fmov_mem[current_level] += @as(u32, n);
+        }
     } else {
         @fmovs(mem_f_dsd, mem_save_f_down_dsd);                        // restore f (mem→mem)
-        count_fmov_mem[current_level] += @as(u32, n);
+        if (!in_convergence) {
+            count_fmov_mem[current_level] += @as(u32, n);
+        }
     }
 
     @fmovs(mem_r_dsd, 0.0);                                            // zero-fill r
-    count_fmov_zero[current_level] += @as(u32, n);
+    if (!in_convergence) {
+        count_fmov_zero[current_level] += @as(u32, n);
+    }
 
     save_timestamp_end(current_level, &timing_setup, TIMER_ID_SETUP);
 }
@@ -918,6 +958,11 @@ task f_state() void {
         // 2. DSD lengths (n) are correct for level 0
         // 3. Stencil coefficients are correct for level 0
         save_timestamp_start(TIMER_ID_CONVERGENCE);
+        // Gate ALL counter updates for convergence-check path: f_setup_level
+        // (fmov_mem restore + fmov_zero r), f_apply_operator (SpMV),
+        // f_residual (fsubs), f_compute_rho (allreduce MAX). Diagnostic is
+        // excluded from both time (wall - conv) and counters (roofline).
+        in_convergence = true;
         f_setup_level(@as(u16, current_level), 0); // down=False, restores f from save_f_down
         next_state = STATE_RESIDUAL_AFTER_V_CYCLE_COMPUTE;
 
@@ -946,6 +991,7 @@ task f_state() void {
         // if (rho > tolerance) and (k < max_iter), continue
         // This matches the Python implementation: while (xi_max > self.rel_tolerance) and (iterations < max_iter)
         save_timestamp_end(current_level, &timing_convergence, TIMER_ID_CONVERGENCE);
+        in_convergence = false;  // back to pure V-cycle operators for next iteration
         k = k + 1;
         // After first V-cycle (k transitions 0→1), stop all roofline measurement.
         // Subsequent iterations run without timer/counter overhead.
@@ -1045,96 +1091,3 @@ comptime {
     @export_symbol(f_reset);
 }
 
-
-
-// fn f_tic_h2d() void {
-//     timer.start(TIMER_ID_H2D);
-//     sys_mod.unblock_cmd_stream();
-// }
-
-// fn f_toc_h2d() void {
-//     timer.stop(TIMER_ID_H2D);
-//     timer.elapsed(TIMER_ID_H2D, @ptrcast(*[timer.tsc_size_words]u16, &time_h2d_u16));
-//     simprint.fmt_with_coords("TIMING_DEBUG: time_h2d=[{d},{d},{d}]", .{@as(u16, time_h2d_u16[0]), @as(u16, time_h2d_u16[1]), @as(u16, time_h2d_u16[2])});
-//     sys_mod.unblock_cmd_stream();
-// }
-
-// fn f_tic_d2h() void {
-//     timer.start(TIMER_ID_D2H);
-//     sys_mod.unblock_cmd_stream();
-// }
-
-// fn f_toc_d2h() void {
-//     timer.stop(TIMER_ID_D2H);
-//     timer.elapsed(TIMER_ID_D2H, @ptrcast(*[timer.tsc_size_words]u16, &time_d2h_u16));
-//     sys_mod.unblock_cmd_stream();
-// }
-
-// fn print_time_debug() void {
-//     const pe_id_x: u16 = layout_mod.get_x_coord();
-//     const pe_id_y: u16 = layout_mod.get_y_coord();
-//     if (current_level_id == 0 and pe_id_x == 0 and pe_id_y == 0) {
-//         // print reference clock
-//         const time_ref_w0 = time_ref_u16[0];
-//         const time_ref_w1 = time_ref_u16[1];
-//         const time_ref_w2 = time_ref_u16[2];
-//         simprint.fmt_with_coords("TIMING_DEBUG: time_ref=[{d},{d},{d}]", .{@as(u16, time_ref_w0), @as(u16, time_ref_w1), @as(u16, time_ref_w2)});
-//         for (@range(i16, 0, num_levels, 1)) |level| {
-//             const offset: i16 = level * timestamp.tsc_size_words;
-//             const smooth_w0 = timing_smooth[offset + 0];
-//             const smooth_w1 = timing_smooth[offset + 1];
-//             const smooth_w2 = timing_smooth[offset + 2];
-
-//             const apply_w0 = timing_apply_op[offset + 0];
-//             const apply_w1 = timing_apply_op[offset + 1];
-//             const apply_w2 = timing_apply_op[offset + 2];
-
-//             const restrict_w0 = timing_restrict[offset + 0];
-//             const restrict_w1 = timing_restrict[offset + 1];
-//             const restrict_w2 = timing_restrict[offset + 2];
-
-//             const interp_w0 = timing_interp[offset + 0];
-//             const interp_w1 = timing_interp[offset + 1];
-//             const interp_w2 = timing_interp[offset + 2];
-
-//             const residual_w0 = timing_residual[offset + 0];
-//             const residual_w1 = timing_residual[offset + 1];
-//             const residual_w2 = timing_residual[offset + 2];
-
-//             const setup_init_w0 = timing_setup_init[offset + 0];
-//             const setup_init_w1 = timing_setup_init[offset + 1];
-//             const setup_init_w2 = timing_setup_init[offset + 2];
-            
-//             const rho_check_w0 = timing_rho_check[offset + 0];
-//             const rho_check_w1 = timing_rho_check[offset + 1];
-//             const rho_check_w2 = timing_rho_check[offset + 2];
-
-//             const compute_w0 = timing_compute[offset + 0];
-//             const compute_w1 = timing_compute[offset + 1];
-//             const compute_w2 = timing_compute[offset + 2];
-
-//             const communication_w0 = timing_communication[offset + 0];
-//             const communication_w1 = timing_communication[offset + 1];
-//             const communication_w2 = timing_communication[offset + 2];
-
-//             simprint.fmt_with_coords("TIMING_DEBUG: level={d}, smooth_elapsed=[{d},{d},{d}],residual_elapsed=[{d},{d},{d}], restrict_elapsed=[{d},{d},{d}], interp_elapsed=[{d},{d},{d}], setup_init_elapsed=[{d},{d},{d}], rho_check_elapsed=[{d},{d},{d}], compute_elapsed=[{d},{d},{d}], communication_elapsed=[{d},{d},{d}]",
-//                 .{@as(u16, level),
-//                     @as(u16, smooth_w0), @as(u16, smooth_w1), @as(u16, smooth_w2),
-//                     @as(u16, residual_w0), @as(u16, residual_w1), @as(u16, residual_w2),  
-//                     @as(u16, restrict_w0), @as(u16, restrict_w1), @as(u16, restrict_w2),
-//                     @as(u16, interp_w0), @as(u16, interp_w1), @as(u16, interp_w2),
-//                     @as(u16, setup_init_w0), @as(u16, setup_init_w1), @as(u16, setup_init_w2),
-//                     @as(u16, rho_check_w0), @as(u16, rho_check_w1), @as(u16, rho_check_w2),
-//                     @as(u16, compute_w0), @as(u16, compute_w1), @as(u16, compute_w2),
-//                     @as(u16, communication_w0), @as(u16, communication_w1), @as(u16, communication_w2)});
-//         }
-//     }
-// }
-
-// // Copy reference clock from allreduce module
-// fn f_reference_timestamps() void {
-//     time_ref_u16[0] = reduce_mod.tscRefBuffer[0];
-//     time_ref_u16[1] = reduce_mod.tscRefBuffer[1];
-//     time_ref_u16[2] = reduce_mod.tscRefBuffer[2];
-//     sys_mod.unblock_cmd_stream();
-// }

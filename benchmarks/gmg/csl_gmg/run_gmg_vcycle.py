@@ -217,8 +217,8 @@ def profiling(
     print("Performance Timing")
     print("="*60)
     print(
-        "PE(0,0) only. Phase timers (smooth, residual, …) accumulate during the first V-cycle only.\n"
-        "Convergence is a separate column in the table below."
+        "PE(0,0) only. Phase timers (smooth, residual, …) ACCUMULATE across all V-cycles.\n"
+        "Convergence (L0 only) is separated; see summary block below the tables for per-V-cycle averages."
     )
 
     ############################################################
@@ -701,12 +701,15 @@ def main():
         )  
     
     ###########################################################
-    # Roofline — PE(0,0) op/traffic counts, first V-cycle only (roofline_measure)
+    # Roofline — PE(0,0) op/traffic counts, accumulated across ALL V-cycles.
+    # Convergence-check operators are EXCLUDED (gated by in_convergence flag
+    # in kernel). Divide by device_iterations in analysis to get per-V-cycle.
     ###########################################################
     print("\n" + "=" * 120)
-    print("ROOFLINE — PE(0,0) only; first V-cycle (kernel counters gated by roofline_measure)")
+    print("ROOFLINE — PE(0,0) only; totals accumulated across ALL V-cycles (convergence-check ops excluded)")
     print("  Per-level 'active PEs' is the 2D PE count used at that multigrid level (for scaling).")
     print("  FLOP/Mem/Fab rows below are not summed over the wafer — they are one PE's counts.")
+    print(f"  Divide counts by 'Device iterations to converge' ({max(int(counter_rho_check[0]), 1)}) to get per-V-cycle values.")
     print("=" * 120)
 
     # Raw counter dump — roofline computation is done by plots/roofline_analysis.py
