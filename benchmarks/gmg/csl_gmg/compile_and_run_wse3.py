@@ -166,7 +166,10 @@ def run_check_memory_for_outputs(script_dir=None, out_paths=None):
                 tar_basename = os.path.basename(tar_path)
                 extract_base = os.path.splitext(os.path.splitext(tar_basename)[0])[0]
                 try:
-                    scratch = tempfile.mkdtemp(prefix="cslgmg_check_", dir="/tmp")
+                    # Extract under BUILD_DIR (not /tmp) so cs_readelf inside
+                    # the Singularity container can see the ELFs.  /tmp is NOT
+                    # bind-mounted into the container.
+                    scratch = tempfile.mkdtemp(prefix="cslgmg_check_", dir=os.path.abspath(BUILD_DIR))
                     with tarfile.open(tar_path, "r:gz") as tf:
                         tf.extractall(scratch)
                         names = tf.getnames()
@@ -429,33 +432,33 @@ def main():
         #  (32, 5, 100, 1e-5, 6, 6, 100),   # Small problem
         #  (64, 6, 100, 1e-5, 6, 6, 100),   # Medium problem
         #  (128, 7, 100, 1e-5, 6, 6, 100),   # Large problem
-         (256, 8, 100, 1e-5, 6, 6, 100),   # Very large
+        #  (256, 8, 100, 1e-5, 6, 6, 100),   # Very large
         #  (512, 9, 100, 1e-5, 6, 6, 100),   # Very large
-   
 
-        # # # # 4/4/100
-        # ls -d out_dir_S*x*_P4_P4_B100 | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_4_4_100.txt
-        #  (4, 2, 100, 1e-5, 4, 4, 100),   # Tiny problem
-        #  (8, 3, 100, 1e-5, 4, 4, 100),   # Tiny problem
-        #  (16, 4, 100, 1e-5, 4, 4, 100),   # Small problem
-        #  (32, 5, 100, 1e-5, 4, 4, 100),   # Small problem
-        #  (64, 6, 100, 1e-5, 4, 4, 100),   # Medium problem
-        #  (128, 7, 100, 1e-5, 4, 4, 100),   # Large problem
-         (256, 8, 100, 1e-5, 4, 4, 100),   # Very large
+
+        # # # # # 4/4/100
+        # # ls -d out_dir_S*x*_P4_P4_B100 | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_4_4_100.txt
+        # #  (4, 2, 100, 1e-5, 4, 4, 100),   # Tiny problem
+        # #  (8, 3, 100, 1e-5, 4, 4, 100),   # Tiny problem
+        # #  (16, 4, 100, 1e-5, 4, 4, 100),   # Small problem
+        # #  (32, 5, 100, 1e-5, 4, 4, 100),   # Small problem
+        # #  (64, 6, 100, 1e-5, 4, 4, 100),   # Medium problem
+        # #  (128, 7, 100, 1e-5, 4, 4, 100),   # Large problem
+        #  (256, 8, 100, 1e-5, 4, 4, 100),   # Very large
         #  (512, 9, 100, 1e-5, 4, 4, 100),   # Very large
 
-        # OSCAR matching problems
-        # # # # 4/4/6
-        # ls -d out_dir_S*x*_P4_P4_B6 | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_4_4_6.txt
-        #  (4, 2, 100, 1e-5, 4, 4, 6),   # Tiny problem
-        #  (8, 3, 100, 1e-5, 4, 4, 6),   # Tiny problem
-        #  (16, 4, 100, 1e-5, 4, 4, 6),   # Small problem
-        #  (32, 5, 100, 1e-5, 4, 4, 6),   # Small problem
-        #  (64, 6, 100, 1e-5, 4, 4, 6),   # Medium problem
-        #  (128, 7, 100, 1e-5, 4, 4, 6),   # Large problem
-         (256, 8, 100, 1e-5, 4, 4, 6),   # Very large
+        # # OSCAR matching problems
+        # # # # # 4/4/6
+        # # ls -d out_dir_S*x*_P4_P4_B6 | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_4_4_6.txt
+        # #  (4, 2, 100, 1e-5, 4, 4, 6),   # Tiny problem
+        # #  (8, 3, 100, 1e-5, 4, 4, 6),   # Tiny problem
+        # #  (16, 4, 100, 1e-5, 4, 4, 6),   # Small problem
+        # #  (32, 5, 100, 1e-5, 4, 4, 6),   # Small problem
+        # #  (64, 6, 100, 1e-5, 4, 4, 6),   # Medium problem
+        # #  (128, 7, 100, 1e-5, 4, 4, 6),   # Large problem
+        #  (256, 8, 100, 1e-5, 4, 4, 6),   # Very large
         #  (512, 9, 100, 1e-5, 4, 4, 6),   # Very large
-        # # 
+        # # #
 
         # 6/6/6
         # ls -d out_dir_S*x*_P6_P6_B6 | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_6_6_6.txt
@@ -465,7 +468,7 @@ def main():
         # (32, 5, 100, 1e-5, 6, 6, 6),   # Small problem
         # (64, 6, 100, 1e-5, 6, 6, 6),   # Medium problem
         # (128, 7, 100, 1e-5, 6, 6, 6),   # Large problem
-        (256, 8, 100, 1e-5, 6, 6, 6),   # Very large
+        # (256, 8, 100, 1e-5, 6, 6, 6),   # Very large
         # (512, 9, 100, 1e-5, 6, 6, 6),   # Very large — fits after R1+R2 optimizations
 
 
@@ -552,7 +555,7 @@ def main():
                 process_on_device(size, levels, channels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter)
             except Exception as e:
                 print(f"Failed for size={size}, levels={levels}: {e}")
-        # run_check_memory_for_outputs(out_paths=run_out_paths)
+        run_check_memory_for_outputs(out_paths=run_out_paths)
 
 if __name__ == "__main__":
     main()

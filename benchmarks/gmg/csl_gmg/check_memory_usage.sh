@@ -47,7 +47,7 @@ echo "Sample PE ELF: $SAMPLE_ELF"
 
 # Use cs-readelf to get memory size per PE
 # Capture the full output
-MEM_OUTPUT=$($CS_READELF -m "$SAMPLE_ELF" 2>&1)
+MEM_OUTPUT=$($CS_READELF -m "$SAMPLE_ELF" 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
 
 # Try to extract actual memory usage in bytes from MEM_OUTPUT (works if cs-readelf prints as:
 #   "(X, Y): 33976 bytes"
@@ -56,7 +56,8 @@ TOTAL_SIZE=$(echo "$MEM_OUTPUT" | grep -Eo '([0-9]+)[[:space:]]+bytes' | head -1
 
 echo ""
 # Parse symbols to categorize by type (FUNC=code, OBJECT=data)
-SYMBOLS_OUTPUT=$($CS_READELF --symbols "$SAMPLE_ELF" 2>&1)
+# Strip ANSI color codes so awk patterns match cleanly
+SYMBOLS_OUTPUT=$($CS_READELF --symbols "$SAMPLE_ELF" 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
 
 # Extract function symbols (code)
 FUNC_SYMBOLS=$(echo "$SYMBOLS_OUTPUT" | awk '/FUNC/ && $3 > 0 {print $3}')
@@ -86,7 +87,7 @@ if [ "$SUMMARY" = "false" ]; then
     echo "=============================================="
     echo "Top 10 Largest Data Symbols:"
     echo "=============================================="
-    SYMBOL_DATA=$($CS_READELF --symbols "$SAMPLE_ELF" 2>&1 | awk '/OBJECT/ && $3 > 0 {print $3, $NF}')
+    SYMBOL_DATA=$($CS_READELF --symbols "$SAMPLE_ELF" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | awk '/OBJECT/ && $3 > 0 {print $3, $NF}')
     if [ -n "$SYMBOL_DATA" ]; then
         echo "$SYMBOL_DATA" | sort -k1,1nr | head -20 | awk '{printf "  %-40s %8s bytes\n", $2, $1}'
 
@@ -104,7 +105,7 @@ if [ "$SUMMARY" = "false" ]; then
     echo "=============================================="
     echo "Top 10 Largest Code Symbols:"
     echo "=============================================="
-    SYMBOL_CODE=$($CS_READELF --symbols "$SAMPLE_ELF" 2>&1 | awk '/FUNC/ && $3 > 0 {print $3, $NF}')
+    SYMBOL_CODE=$($CS_READELF --symbols "$SAMPLE_ELF" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | awk '/FUNC/ && $3 > 0 {print $3, $NF}')
     if [ -n "$SYMBOL_CODE" ]; then
         echo "$SYMBOL_CODE" | sort -k1,1nr | head -20 | awk '{printf "  %-40s %8s bytes\n", $2, $1}'
 
