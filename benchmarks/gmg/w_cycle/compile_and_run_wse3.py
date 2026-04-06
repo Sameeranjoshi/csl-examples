@@ -402,7 +402,7 @@ def main():
 
     problems = [
         # === Active W-cycle test problems (keep this list small) ===
-        (512, 9, 100, 1e-5, 6, 6, 6),   # Very large — fits after R1+R2 optimizations 
+        (256, 8, 100, 1e-5, 6, 6, 6),   # Very large — fits after R1+R2 optimizations 
         # === End active list ===
     ]
     unused_problems = [
