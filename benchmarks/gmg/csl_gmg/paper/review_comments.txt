@@ -1,0 +1,161 @@
+OveMer	RevExp
+Review #215A		2	2
+Review #215B		3	2
+Review #215C		1	3
+Review #215D		2	3
+You are a contact for this submission.
+
+[Edit] Edit submission[Add response] Add Rebuttal response
+
+[Text] Reviews in plain text
+
+Review #215A
+Overall merit
+2. 
+Weak reject
+
+Reviewer expertise
+2. 
+Some familiarity
+
+Paper summary
+The paper presents an implementation of the geometric multigrid solver on the Wafer Scale Engine CS3 platform. The paper reuses the stencil solver previously developed on this architecture and adds implementations for inter-grid operators such as restriction and interpolation. The paper presents a comparison against the HPGMG implementation on H200 GPU, which shows impressive speedups.
+
+Strengths and Weaknesses
+Strengths:
+
+-The GMG implementation on CS3 significantly outperforms the HPGMG implementation on H200 GPU.
+
+-Performance model and analysis are useful to understand the implementation’s performance behaviors
+
+Weaknesses:
+
+-The problem addressed in the paper is not significantly different from prior papers studying stencil workloads on Cerebras WSE. Smooth operation is still the dominating kernel, making good performance compared to GPU not a surprise.
+
+-The paper only presents the implementation of the V-cycle operator. This decision really favors WSE architecture since less time will be spent on coarse grid levels. W-cycle is briefly mentioned in the conclusion while F-cycle is not even touched. This is really disappointing since I’m really interested in a thorough assessment of the WSE architecture using GMG.
+
+Detailed Comments
+-I couldn’t find the definition of GLOW anywhere in the paper. Except for being shown in the title, it is first referred to on page 5 where GMG operators are presented and then appears a few more times in the performance evaluation.
+
+Questions for Rebuttal
+-Best performance was found with the shallow V-cycle operator, but virtually the whole paper talks about V-cycle. Can some discussion of the shallow V-cycle be added into the abstract/introduction, otherwise comparison against GPU would be a bit misleading?
+
+-Please argue why only V-cycle (and its shallow variant) is considered.
+
+Review #215B
+Overall merit
+3. 
+Weak accept
+
+Reviewer expertise
+2. 
+Some familiarity
+
+Paper summary
+This paper is about making effective use of a 900K-core device with a 2d grid interconnect – for a problem that doesn’t (just) have 2d-grid communication. The geometric multigrid V-cycle is dominated by neighbor-to-neighbor communication at the base of the grid hierarchy – but also requires neighbor-to-neighbor communication in coarser grids, and transfer of solutions between fine and coarse grids.
+
+The paper considers various different spatial distributions, settling on perhaps the most obvious: the finest mesh spans the entire array, and each coarser grid is a 2^k-strided subset of the processor – so coarser levels incur multi-hop communication.
+
+Strengths and Weaknesses
+Strengths:
+Interesting to see the issues involved in using this device, notably managing the use of the tiny amount of RAM per core, and the forwarding optimization to minimise the latency of the multihop communications. The role of multicast is noteworthy.
+
+Design is supported by performance modelling.
+
+Experimental work nicely exposes the impact of different optimizations on different phases of the computation.
+
+Weaknesses:
+There is good engineering here but the specific technical ideas are a bit thin – indeed the claimed contributions focus on performance modelling and performance measurement.
+
+How does the performance achieved compare to the performance capability of the device?
+
+Performance is reported relative to HPGMG on GH200 but the specific code version used is not specified clearly.
+
+Yet another Poisson solver paper – it would be so much more compelling to solve a real problem! OK it’s HPGMG.
+
+Detailed Comments
+Re: “we modified the baseline HPGMG code\footnote{https://hpgmg.org/}”: Is the CUDA HPGMG implementation used in the paper on the https://hpgmg.org/ website? I couldn’t find it. Please a link to the specific code that you used.
+
+How much of the RAM is occupied by code?
+
+Minor:
+“we can significantly speed up the time” is an ugly sentence
+
+“As we see in our analytical +model+? discussed in Table 3 and Table 4”
+
+Questions for Rebuttal
+Please specify the GH200 HPGMG code actually used.
+
+Please consider showing performance relative to the device's peak capability.
+
+Review #215C
+Overall merit
+1. 
+Reject
+
+Reviewer expertise
+3. 
+Knowledgeable
+
+Paper summary
+This paper maps the Geometric Multigrid (GMG) algorithm to the Cerebras WSE-3, reporting up to a 25× speedup over a single-node NVIDIA H200 GPU. The implementation exposes the challenges of mapping layered algorithms under memory constraints. Analysis shows that compute time dictates fine-grid execution, whereas strided communication dictates coarse-grid execution, requiring the use of shallow V-cycles over deep cycles. A forwarding optimization is utilized to skip inactive processing elements and reduce coarse-grid communication time. The reported speedup is driven by the architecture's high-bandwidth memory and local network.
+
+Strengths and Weaknesses
+Strengths:
+
+The first geometric multigrid solver implementation on a wafer-scale architecture.
+An analytical communication model combined with a hardware forwarding optimization.
+Weaknesses:
+
+Comparing a wafer-scale engine directly against a single GPU may yield an unfair evaluation.
+The evaluation relies exclusively on a 7-point stencil, leaving complex workload applicability unverified.
+The mapping strategy generates increasing communication overhead at coarse levels, questioning the architecture's suitability for multigrid.
+Detailed Comments
+Overall, this paper presents an interesting mapping of Geometric Multigrid (GMG) onto the WSE-3 architecture. While the proposed strided mapping and forwarding optimizations are commendable, the paper requires significant revisions regarding its hardware comparison methodology, baseline configuration transparency, and experimental justification for the chosen mapping strategies.
+
+Hardware Comparison Disparity: Comparing a WSE-3 (893,064 cores, 44GB SRAM) against a single GH200 GPU is an unbalanced evaluation due to different scale, power, and cost footprints. To validate the 25x speedup claim, please benchmark the WSE-3 against a multi-node GPU cluster with comparable hardware resources or power limits.
+Baseline Configuration Details: Section 4.1 omits optimization details for the GH200 platform. Specify if thread block sizes, grid dimensions, and “pre/post/coarse” were tuned for the Grace Hopper architecture.
+Workload Complexity: The setup uses a simple 3D Poisson equation with a 7-point stencil. Given the strict 48KB per-PE SRAM limit, incorporate benchmarks utilizing denser stencils (e.g., 27-point) or variable coefficients. This will prove the architecture can handle the memory capacities required by typical scientific computing applications.
+Mapping Strategy Evaluation: Section 4.4 shows execution time at coarser levels. Figure 6 confirms the time of “restriction” and “stencil” grows at deeper levels, questioning strided mapping's suitability. Furthermore, Section 3.1 lacks experimental data for alternative layouts. Provide empirical comparisons against the listed layouts to justify your selection and address the communication bottleneck.
+Typos: The manuscript contains 10+ typos. Examples include "WS-3" and "HPGPG" in Section 1, "scuh as" and "can consists of" in Section 2, and missing spaces in Section 4.
+Questions for Rebuttal
+Please see the comments above.
+
+Review #215D
+Overall merit
+2. 
+Weak reject
+
+Reviewer expertise
+3. 
+Knowledgeable
+
+Paper summary
+This paper maps a full Geometric Multigrid (GMG) V-cycle (smooth, residual, restriction, interpolation, and a coarse solver) onto Cerebras WSE-3, a spatial/dataflow wafer-scale system with ~900k PEs arranged as a 2D mesh and only 48KB SRAM per PE. The core mapping choice is a strided distributed layout: the finest grid uses a dense 2D PE region, while at level l only every 2^l-th PE is "active”, with inactive PEs acting as pass-through for inter-PE communication. The 3D grid is mapped by storing the full z pencil locally in each PE, and doing x/y halo exchange over the mesh; restriction is implemented as a window-based reduction to the window’s top-left PE (then divide-by-8), and interpolation uses the hardware’s zero-cost multicast by broadcasting from the window leader after expanding z via slice duplication.
+
+The secret sauce is that this mapping makes fine levels very fast (local SRAM + short-hop halo exchange), but makes coarse levels communication/latency dominated because active PEs become far apart; the paper introduces a forwarding optimization that uses microthreads/queues so wavelets traverse inactive PEs via router queues without repeated ramp+SRAM accesses, collapsing the level-dependent latency term. In evaluation, the paper reports up to ~25x speedup over an NVIDIA Grace Hopper GH200 baseline (but no perf/$ or perf/watt comparison) running HPGMG for certain configurations/sizes, and shows the forwarding optimization can yield ~8.45x speedup for coarse-level communication and ~3.94x end-to-end improvement in a 512^3 setup.
+
+Strengths and Weaknesses
+Strengths
+Strong and timely problem for ICS: an end-to-end mapping of a layered, multi-level scientific solver onto a wafer-scale spatial/dataflow architecture (beyond single-level stencil demos).
+The mapping discussion is useful: the paper compares spatial vs pipelined vs overlapped/distributed layouts and explains why GMG’s dependencies break naive pipeline/spatial approaches.
+Operator-level insight is a real contribution: the paper explains why smooth/residual flip from compute-dominated to communication/latency-dominated at coarse levels in the strided layout, while interpolation benefits from multicast.
+Forwarding optimization is concrete and architecture-aware (bypassing ramp/SRAM on inactive PEs), with a large measured impact.
+Weaknesses
+Multigrid correctness/specification is not crisp enough for reviewers to assess equivalence to HPGMG: restriction/interpolation details (especially interaction with the locally stored z dimension) and the "coarsest level goes to 2x2” wording are ambiguous for a 3D problem.
+The main headline result "25x" is reported primarily as time per V-cycle, while the paper itself acknowledges that "shallow” vs "deep” cycles change the number of iterations to converge; without residual-vs-iteration curves and time-to-solution at a fixed tolerance, the end claim is not fully supported. Moreover, the speedup comparison is for a much smaller and cheaper system, so a perf/area or perf/$ or perf/watt comparison is needed.
+Baseline clarity: the paper text alternates between H200 vs GH200 naming, contains typos (HPGPG), and timing methodology equivalence (on-device counters on WSE vs GPU measurement) is not clearly aligned.
+Scalability/utilization story is incomplete: experiments appear capped by per-PE memory (code+data in 48KB) and are framed as "weak scaling”, but the mapping/axes description is confusing and wafer utilization limits are not explicitly quantified.
+Detailed Comments
+There are broken refs (e.g., "Figure /reffig:4”), and inconsistent WSE dimensions (1724x762 vs 1172x762).
+
+Please add time-to-solution results (to epsilon = 10^-5) for the key configurations in Fig. 5, including residual-vs-V-cycle plots (and ideally residual-vs-time). Right now the paper mixes "time per V-cycle” reporting with discussion that the number of cycles to converge changes.
+Tighten the algorithmic specification: explicitly define restriction/interpolation including z handling, and clearly list (n_x,n_y,n_z) per level and what "coarsest grid is 2x2” means for a 3D problem.
+Fix baseline documentation: exact GPU model, software stack, HPGMG version/commit and knobs, and ensure GPU timing is comparable to the WSE on-device counters.
+Fix submission/polish issues (broken refs, figure caption mismatches, typos). Also resolve the WSE dimension inconsistency (1724x762 vs 1172x762).
+Make the forwarding optimization reusable: a short pseudo-code + clear applicability constraints (which operators benefit, interaction with multicast/reductions, required routing/color assumptions) would help.
+Clarify scaling/utilization: report active PE counts/wafer utilization for each size, and explicitly connect the 48KB code-vs-data tradeoff to the observed problem-size limit and any halo granularity compromises.
+Questions for Rebuttal
+Is Fig. 5 reporting time per V-cycle or time-to-solution? For the best "25x” point, how many V-cycles did each platform take to reach the epsilon? And provide apples to apples comparison with the baseline.
+Can you provide a small correctness check (solution error or residual trajectory match) against a known-correct baseline for the same operator definitions?
+Can you quantify the fraction of the wafer used at the largest runs and what prevents using a larger active region (code size, data footprint, routing/color constraints, other)? See above comments too.
