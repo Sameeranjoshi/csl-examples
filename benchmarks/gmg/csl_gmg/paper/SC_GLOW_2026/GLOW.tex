@@ -345,7 +345,7 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
                 \footnotesize
                 \setlength{\tabcolsep}{3pt}
                 \begin{tabular}{|l||r|r|} \hline
-                    \textbf{Component}               & \textbf{Total} & \textbf{Ours} \\ \hline \hline
+                    \textbf{Component}               & \textbf{Total} & \textbf{Diff} \\ \hline \hline
                     \multicolumn{3}{|c|}{\textbf{Device (CSL)}} \\ \hline \hline
                     \quad kernel\_gmg\_vcycle.csl    & 1,103          & 1,103 (new)   \\ \hline
                     \quad layout\_gmg\_vcycle.csl    & 157            & 157 (new)     \\ \hline
@@ -387,9 +387,11 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
                     \quad CONV\_CHECK               & Loop or exit \\ \hline
                 \end{tabular}
             \end{table}
+
+
         \subsection{Performance Models of Key Operators}
             \label{sec:perfmodel}
-            This subsection describes the internals of the key GMG operators in GLOW, that must be adapted to a distributed, tiled architecture. We discuss the compute- and communication-heavy operators (7-point stencil, and restriction) that mostly dominate the V-cycle cost. We use an analytical model to characterize the costs of operators in our implementation and how they affect the runtime.
+            This subsection describes the internals of the key GMG operators in GLOW, that must be adapted to a distributed, tiled architecture. We discuss the compute and communication-heavy operators (7-point stencil, and restriction) that mostly dominate the V-cycle cost. We use an analytical model to characterize the costs of operators in our implementation and how they affect the runtime.
 
             \paragraph{Strided 7-point Stencil:}
             % We pose our work on prior work in 
@@ -574,8 +576,8 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
             % not at the top of the page.
             \begin{figure}[h!]
                 \centering
-                \includegraphics[width=0.95\linewidth]{figures/hpgmg_speedup_barplot_big.pdf}
-                \caption{Speedup comparison between Cerebras CS-3 and NVIDIA GH200 using HPGMG/Glow across various problem sizes. The bar plot shows relative performance (higher is better). The \% increase indicated on top of 6/6/6(Shallow)(purple) is the relative speedup against the 6/6/6(red), }
+                \includegraphics[width=0.95\linewidth]{figures/hpgmg_speedup_barplot.pdf}
+                \caption{Speedup comparison between Cerebras CS-3 and NVIDIA GH200 using HPGMG/GLOW across various problem sizes. The bar plot shows relative performance (higher is better). The \% increase indicated on top of 6/6/6(Shallow)(purple) is the relative speedup against the 6/6/6(red). {\color{blue} Timings reflect a single V-cycle only measuring pure operator time, excluding convergence checking cost, on both GPU and WSE.}}
                 \label{fig:hpgmg-speedup}
             \end{figure}
 
@@ -628,7 +630,7 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
             \begin{figure}[h!]
                 \centering
                 \includegraphics[width=\linewidth]{figures/per_operation_timing_512x512x512.png}
-                \caption{Per-operator time per level for one V-cycle on a \(512^3\) problem (GLOW on CS-3). Down and up phases are summed at each level. \(x\)-axis: level 0 (finest) to 8 (coarsest). \(y\)-axis: time (log scale; higher is slower). Config: \(4/4/6\) pre/post/coarse, 9 levels, FP32, 7-point stencil.}
+                \caption{Per-operator time per level for one V-cycle on a \(512^3\) problem (GLOW on CS-3). Down and up phases are summed at each level. \(x\)-axis: level 0 (finest) to 8 (coarsest). \(y\)-axis: time (log scale; higher is slower). Config: \(6/6//6\) pre/post/coarse, 9 levels, FP32, 7-point stencil.}
                 \label{fig:per-operation-timing}
             \end{figure}
 
@@ -664,12 +666,12 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
             \textbf{Coarse solver.} The coarse solver applies weighted Jacobi relaxation on the coarsest grid. Its cost is very high compared to fine-level operators and grows with the number of coarse iterations. We showed experiments in Figure~\ref{fig:hpgmg-speedup} with varying coarse iterations, significantly impacting overall performance in deep V-cycles.
 
             % metrics_compare.png
-            \begin{figure*}[t]
-                \centering
-                \includegraphics[width=\linewidth]{figures/metrics_comparison_big.pdf}
-                \caption{Performance of HPGMG/Glow on Cerebras CS-3 and NVIDIA GH200 using a \(512^3\) grid with 9 multigrid levels, up to 100 iterations, a convergence tolerance of \(1\times10^{-5}\), \(4/4/6\) pre-, post-, and bottom-smoothing steps, float32 precision, Jacobi relaxation \(\omega=0.6667\), a 7-point stencil with \(\alpha = -6.0\), \(\beta = 1.0\), 16 channels, 256 block size, and a \(762\times1172\) wafer fabric.}
-                \label{fig:metrics-compare}
-            \end{figure*}
+            % \begin{figure*}[t]
+            %     \centering
+            %     \includegraphics[width=\linewidth]{figures/metrics_comparison_big.pdf}
+            %     \caption{Performance of HPGMG/Glow on Cerebras CS-3 and NVIDIA GH200 using a \(512^3\) grid with 9 multigrid levels, up to 100 iterations, a convergence tolerance of \(1\times10^{-5}\), \(4/4/6\) pre-, post-, and bottom-smoothing steps, float32 precision, Jacobi relaxation \(\omega=0.6667\), a 7-point stencil with \(\alpha = -6.0\), \(\beta = 1.0\), 16 channels, 256 block size, and a \(762\times1172\) wafer fabric.}
+            %     \label{fig:metrics-compare}
+            % \end{figure*}
 
         \subsection{Forwarding Communication Optimization}
             \label{sec:impact-of-optimizations-and-memory-constraints}
@@ -682,10 +684,86 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
         \subsection{Memory Constraints: Code vs. Data Tradeoff}
             The bottom-right panel of Figure 10 shows the breakdown of memory usage within a single processing element (PE), comparing the total available local memory against the size of the binary ELF image loaded on each PE. As shown, the code section alone occupies nearly 47\% of the available 48 KB SRAM and remains constant across multigrid levels. This is largely driven by aggressive function inlining performed by the backend LLVM compiler within the state-machine implementation, as well as the inclusion of stencil and collective-reduction library kernels. In contrast, the data section scales with problem size and the number of multigrid levels, reflecting the storage required for solution vectors, residuals, and intermediate buffers. Under the distributed superimposed mapping strategy adopted in this work, these memory constraints impose a practical limit on scalability. In particular, the fixed code footprint combined with per-level data storage restricts the ability to reduce per-PE data volume, effectively limiting experiments to weak scaling. Moreover, multigrid algorithms inherently require retaining data from finer levels during traversal, further constraining memory reuse under a distributed mapping.
 
-            \textcolor{red}{You should revisit the 512-cubed case needing a different implementation.}
+            {\color{blue}
+            Table~\ref{tab:memory_utilization} quantifies this tradeoff across all problem sizes. Code size remains fixed at ${\sim}$23KB (47\%) regardless of problem size. Data grows from 2.9\% at $4^3$ to 50.7\% at $512^3$, where the PE is 98\% full. Wafer utilization ranges from 0.002\% ($4^3$, 16 PEs) to 29.4\% ($512^3$, 262K PEs), showing that even the largest problem we can fit uses less than a third of the wafer.
 
-            \textcolor{red}{This should be in a Lessons Learned section, probably: These observations highlight an important design trade-off for wafer-scale implementations for multilayered algorithms/applications. %, one such could be CNNs from the AI world. 
-            Future approaches may benefit from hybrid mapping strategies that decouple computation and storage, such as assigning subsets of PEs primarily as memory resources while others focus on computation, or employing more dynamic coloring and routing schemes to reduce code replication and improve memory utilization across levels.}
+            \begin{table}[t]
+                \caption{Per-PE memory breakdown and wafer utilization across problem sizes (48KB SRAM per PE, 893,064 total PEs).}
+                \label{tab:memory_utilization}
+                \centering
+                \footnotesize
+                \setlength{\tabcolsep}{2pt}
+                \begin{tabular}{|r||r|r|r|r|} \hline
+                    \textbf{Size} & \textbf{Code} & \textbf{Data} & \textbf{Total} & \textbf{PE Util.} \\ \hline \hline
+                    $4^3$   & 23,060 (46.9\%) & 1,440 (2.9\%)   & 49.8\% & 0.002\% \\ \hline
+                    $8^3$   & 23,280 (47.4\%) & 1,812 (3.7\%)   & 51.0\% & 0.007\% \\ \hline
+                    $16^3$  & 23,280 (47.4\%) & 2,392 (4.9\%)   & 52.2\% & 0.03\%  \\ \hline
+                    $32^3$  & 23,272 (47.3\%) & 3,388 (6.9\%)   & 54.2\% & 0.12\%  \\ \hline
+                    $64^3$  & 23,276 (47.4\%) & 5,216 (10.6\%)  & 58.0\% & 0.46\%  \\ \hline
+                    $128^3$ & 23,276 (47.4\%) & 8,708 (17.7\%)  & 65.1\% & 1.84\%  \\ \hline
+                    $256^3$ & 23,272 (47.3\%) & 15,528 (31.6\%) & 78.9\% & 7.34\%  \\ \hline
+                    $512^3$ & 23,272 (47.3\%) & 24,908 (50.7\%) & 98.0\% & 29.4\%  \\ \hline
+                \end{tabular}
+            \end{table}
+            }
+
+        {\color{blue}
+        \subsection{Roofline Analysis}
+            Figure~\ref{fig:roofline} presents a roofline analysis for a $512^3$ problem with 9 levels using 262,144 active PEs. The left panel shows the per-PE (0,0) performance: finer levels (L0, L1) reach 43\% and 18\% of the 1.75 GFLOP/s per-PE peak respectively, operating in the compute-bound region. As levels coarsen, performance drops and shifts toward the memory/fabric-bound region due to growing communication distance and shrinking local computation. The right panel shows the active-PE system view, where the per-level peak scales with the number of active PEs at each level. L0 achieves 43\% of its 458.8 TFLOP/s system peak. The roofline confirms that GLOW is compute-bound at fine levels and transitions to communication-bound at coarse levels, consistent with our per-operator analysis.TODO: Write methodology, and talk about the table<todo add me>
+
+            \begin{figure*}[t]
+                \centering
+                \includegraphics[width=\textwidth]{figures/roofline_plot.png}
+                \caption{Roofline analysis for $512^3$ with 9 levels. Left: per-PE performance vs.\ arithmetic intensity. Right: system-level performance scaled by active PEs per level. Dashed line: 1.75 GFLOP/s per-PE peak.}
+                \label{fig:roofline}
+            \end{figure*}
+
+            \begin{table}[t]
+                \caption{Per-PE operation breakdown for a $512^3$ V-cycle. Count is the number of times the operation executes. FLOPs is the arithmetic work (FMAC counts 2 FLOPs per operation; FMOV variants contribute 0). Mem(B) is total SRAM traffic: $(loads + stores) \times 4$ bytes. Fab(B) is fabric traffic from halo exchange; only FMOV32 touches the fabric. Mem AI = Total FLOPs / Mem(B); Fab AI = Total FLOPs / Fab(B).}
+                \label{tab:roofline_ops}
+                \centering
+                \footnotesize
+                \setlength{\tabcolsep}{2pt}
+
+                \vspace{2pt}
+                \textbf{Level 0 ($512^2$ PEs)}
+                \vspace{1pt}
+
+                \begin{tabular}{|l||r|r|r|r|} \hline
+                    \textbf{Op} & \textbf{Count} & \textbf{FLOPs} & \textbf{Mem(B)} & \textbf{Fab(B)} \\ \hline \hline
+                    FSUB      &   79,872 &   79,872 &    958,464 &       0 \\ \hline
+                    FMAC      &  632,832 & 1,265,664& 10,125,312 &       0 \\ \hline
+                    FMUL      &    3,072 &    3,072 &     36,864 &       0 \\ \hline
+                    FADD      &   21,504 &   21,504 &    258,048 &       0 \\ \hline
+                    FNEG      &  159,744 &  159,744 &  1,277,952 &       0 \\ \hline
+                    FMOV\_MEM &   36,352 &        0 &    290,816 &       0 \\ \hline
+                    FMOV\_ZERO&   92,160 &        0 &    368,640 &       0 \\ \hline
+                    FMOV32    &  172,033 &        0 &    688,132 & 688,132 \\ \hline \hline
+                    \textbf{Total} & & \textbf{1,529,856} & \textbf{14,004,228} & \textbf{688,132} \\ \hline \hline
+                    \multicolumn{3}{|l||}{\textbf{Mem AI}: 0.109} & \multicolumn{2}{l|}{\textbf{Fab AI}: 2.223} \\ \hline
+                \end{tabular}
+
+                \vspace{4pt}
+                \textbf{Level 7 ($4^2$ PEs)}
+                \vspace{1pt}
+
+                \begin{tabular}{|l||r|r|r|r|} \hline
+                    \textbf{Op} & \textbf{Count} & \textbf{FLOPs} & \textbf{Mem(B)} & \textbf{Fab(B)} \\ \hline \hline
+                    FSUB      &      624 &      624 &      7,488 &       0 \\ \hline
+                    FMAC      &    4,944 &    9,888 &     79,104 &       0 \\ \hline
+                    FMUL      &       24 &       24 &        288 &       0 \\ \hline
+                    FADD      &      168 &      168 &      2,016 &       0 \\ \hline
+                    FNEG      &    1,248 &    1,248 &      9,984 &       0 \\ \hline
+                    FMOV\_MEM &      240 &        0 &      1,920 &       0 \\ \hline
+                    FMOV\_ZERO&      768 &        0 &      3,072 &       0 \\ \hline
+                    FMOV32    &    1,344 &        0 &      5,376 &   5,376 \\ \hline \hline
+                    \textbf{Total} & & \textbf{11,952} & \textbf{109,248} & \textbf{5,376} \\ \hline \hline
+                    \multicolumn{3}{|l||}{\textbf{Mem AI}: 0.109} & \multicolumn{2}{l|}{\textbf{Fab AI}: 2.223} \\ \hline
+                \end{tabular}
+            \end{table}
+
+            Table~\ref{tab:roofline_ops} breaks down the per-PE operations at the finest (L0) and a coarse level (L7). FMAC (multiply-accumulate from the stencil) dominates the FLOPs, while FMOV32 is the only operation that touches the fabric (halo exchange). The arithmetic intensity is constant across levels (0.109 FLOP/Byte for memory, 2.223 FLOP/Byte for fabric), but absolute work shrinks by $128\times$ from L0 to L7. Coarse levels have too little computation to amortize fixed communication overheads (router latency, growing hop distance), explaining the transition from compute-bound to communication-bound in Figure~\ref{fig:roofline}.
+        }
 
     \section{Lessons Learned and Next Steps}
         {\color{blue}
@@ -709,12 +787,24 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
         6.
 
         {\color{blue}
-        We chose to investigate only the V-cycle in this paper, because it is by far the most common multigrid schedule in practice and because our per-level performance analysis lets the reader translate our findings directly to F-, W-, or \(\mu\)-cycle variants. From a computational-efficiency standpoint, all parallel    architectures favour the V-cycle: it hides coarse-grid latency and overheads behind the throughput-limited, bandwidth-bound fine grids. On the WSE, however, this effect is far more pronounced because coarse-grid operations pay a communication cost that grows with level rather than shrinking: the active-PE stride doubles per level, the inter-PE hop distance grows with it, and the network is low-radix, so each SpMV/reduction/broadcast at level \(\ell\) is increasingly latency-dominated. On a \(256^3\) problem implemented using W cycle with 8 levels, and (\(\gamma=2\)) we see the time per 1 cycle increases from 483.1 useconds(V-cycle) to 15,103.9 useconds(W-cycle), which is almost a 31x slowdown for W cycle. W-cycle visits level L exactly \(2^L\) times, accounting for the penalty.
+        \paragraph{Why V-cycle.}
+        We chose to investigate only the V-cycle in this paper because it is by far the most common multigrid schedule in practice, and our per-level performance analysis lets the reader translate findings to F-, W-, or $\mu$-cycle variants. From a computational-efficiency standpoint, all parallel architectures favour the V-cycle: it hides coarse-grid latency behind the throughput of fine grids. On the WSE this effect is more pronounced because coarse-grid operations pay a communication cost that grows with level: the active-PE stride doubles per level, the hop distance grows with it, and the low-radix network makes each operation at level $\ell$ increasingly latency-dominated.
 
-        }
-        {\color{blue}
-        \textcolor{red}{Summarize what results are in evaluation.  End with GPU performance comparison.}
-        strong/weak scaling behavior.\textcolor{blue}{We can't do a strong scaling as we can't fit > 1 Pencil on 1 PE. It's a weak study paper but we should somewhere talk about this limitation. Which might be a good learning to design a new way of mapping or even for hardware vendors to have say something like a shared tile say across a group of 8 PE. Both learning for hardware vendors or programming abstraction designer (in GPUs we say \texttt{\_\_shared\_\_} or \texttt{\_\_reg\_\_} someone can think like this by annotating a tile 'memorytile' or 'onlycompute' tile, todo: Need to place this at proper location}
+        To quantify this, Table~\ref{tab:vcycle_vs_wcycle} compares V-cycle and W-cycle on a $256^3$ problem with 8 levels and 6/6/6 smoothing. Both converge in 10 iterations, but the W-cycle's average cycle time is $31.3\times$ slower because it visits level $L$ exactly $2^L$ times ($\gamma=2$), repeatedly paying the coarse-level communication penalty. The time to solution is $27.8\times$ worse despite a marginally better convergence rate (1.32 vs.\ 1.24 decades/iteration). This confirms that deeper cycle schedules are poorly matched to the strided mapping on WSE.
+
+            \begin{table}[t]
+                \caption{V-cycle vs.\ W-cycle on $256^3$, 8 levels, 6/6/6 smoothing.}
+                \label{tab:vcycle_vs_wcycle}
+                \centering
+                \footnotesize
+                \setlength{\tabcolsep}{3pt}
+                \begin{tabular}{|l||r|r|r|} \hline
+                    \textbf{Metric} & \textbf{V-cycle} & \textbf{W-cycle} & \textbf{Ratio} \\ \hline \hline
+                    Avg cycle time ($\mu$s)       &    483.1 & 15,103.9 & 31.3$\times$ \\ \hline
+                    Time to solution ($\mu$s)     &  5,445.6 &151,651.9 & 27.8$\times$ \\ \hline
+                    Convergence rate (dec/iter)    &     1.24 &     1.32 &  1.1$\times$ \\ \hline
+                \end{tabular}
+            \end{table}
         }
     \section{Related Work}
         %\paragraph{Stencils and GMG}

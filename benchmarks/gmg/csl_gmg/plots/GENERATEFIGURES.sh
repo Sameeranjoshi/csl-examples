@@ -122,8 +122,8 @@ echo "=========================================="
 # echo "  time_to_solution.py -> time_to_solution.png + iterations_comparison.png"
 # { echo "--- time_to_solution.py ---"; python time_to_solution.py 2>&1; echo; } | tee -a "${LOGFILE}"
 
-echo "  spider_plot.py -> spider_plot.png"
-{ echo "--- spider_plot.py ---"; python spider_plot.py 2>&1; echo; } | tee -a "${LOGFILE}"
+#echo "  spider_plot.py -> spider_plot.png"
+#{ echo "--- spider_plot.py ---"; python spider_plot.py 2>&1; echo; } | tee -a "${LOGFILE}"
 
 # echo "  wafer_utilization.py -> wafer_utilization.png"
 # { echo "--- wafer_utilization.py ---"; python wafer_utilization.py 2>&1; echo; } | tee -a "${LOGFILE}"
@@ -133,6 +133,9 @@ echo "  spider_plot.py -> spider_plot.png"
 
 # echo "  plot_convergence.py -> convergence_*.png"
 # { echo "--- plot_convergence.py ---"; python plot_convergence.py 2>&1; echo; } | tee -a "${LOGFILE}"
+
+echo " Memory and utilization table"
+python memory_utilization_table.py out_6_6_6.txt
 
 echo "  v_vs_w_cycle.py -> W vs V cycle plot"
 { echo "--- v_vs_w_cycle.py ---"; python v_vs_w_cycle.py 2>&1; echo; } | tee -a "${LOGFILE}"
