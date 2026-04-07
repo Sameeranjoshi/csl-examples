@@ -312,100 +312,80 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
 
         \subsection{V-Cycle Execution as Tasks \& State Machine}
             \label{sec:statemachine}
-            The separate operators of the V-cycle are treated as separate tasks and activated by wavelets as described in Section~\ref{sec:programmingmodel}, corresponding to states in a state machine.
-            %requires synchronization across levels. %smoothing is asynchronous and parallelized across all PEs.} 
-            To make the V-cycle discussion complete, we present the state machine transitions from the implementation in Table~\ref{tab:state_machine}, where each operator is shown with its computations at each state.
-            We synchronize all PEs beforehand so that timers are aligned to the same start time.
-
-            The state machine iterates by advancing the states starting from the down cycle. It sets up the level, applies a Jacobi 7-pt stencil operator as a smooth, restricts by reducing residual values within a window to the top-left PE of each window and dividing by 8 (finite-volume). For each level from the coarsest back to the finest the coarse solution in the z-dimension is expanded by duplicating each z-slice to double the z-size. We broadcast the correction from the top-left PE of each restriction window to all PEs in that window, and add the interpolated correction.  The key kernels of the algorithm are 7\_pt\_stencil, reduce\_to\_topleft, and broadcast\_from\_topleft. The latter two are inter-level communication kernels and the former is computed at the current level. Kernels are placed across all PEs of the grid; given the distributed interposing each level can reuse the kernels. \textcolor{red}{I don't understand what this means, but I think it can be omitted: There is no special routing for levels as it is handled by the operators internally.}
+            The separate operators of the V-cycle are treated as separate functions and activated by wavelets as described in Section~\ref{sec:programmingmodel}, corresponding to states in a state machine. To make the V-cycle discussion complete, we present the state machine transitions from the implementation in Table~\ref{tab:state_machine}, where each operator is shown with its computations at each state. We synchronize all PEs beforehand so that timers are aligned to the same start time.
 
             {\color{blue}
-            1. coloring
-            2. layout
-            3. tasks, data state
 
-            \noindent\textbullet{} The implementation of GMG on WSE-3 requires composing all of the programming model elements described in Section 2.2.3---layout, coloring, routing, tasks, DSDs, and runtime router reconfiguration---into a single coordinated
-            program. The full implementation comprises approximately 8,900 lines of CSL device code and 1,800 lines of Python host code. Table~\ref{tab:code_breakdown} summarizes the code organization.
+            Implementing GMG on WSE-3 requires composing host-device runtime orchestrator, a 7-point stencil library for smoothing, and an allreduce library for inter layer transition operators along with layout module to map these operators on wafer PEs.
+            
+                Each module has its own routing and task ID requirements, and all assignments must be partitioned without collision across the limited 24 available hardware colors. The base SDK stencil and allreduce libraries assume immediate-neighbor communication. We extended both libraries to support multi-level strided communication, Dirichlet boundary conditions, and inactive PE optimizations. Table~\ref{tab:code_breakdown} summarizes the implementation.
 
-            \noindent\textbullet{} Layout and coloring. The layout module (\texttt{layout\_gmg\_vcycle.csl}, 157 lines) defines a 2D PE grid on the $762\times1172$ WSE-3 fabric. It allocates 9 colors for inter-PE communication---8 for the stencil operator's directional halo
-            exchanges (east/west/north/south, send and receive) and 1 for the allreduce used in restriction and convergence checking. It also allocates 8 task IDs: 3 for the stencil's send/receive/compute phases, 4 for allreduce
-            stages, and 1 for the V-cycle state machine. These 17 hardware resources must be partitioned without collision across three imported modules (memcpy, stencil, allreduce), each of which has its own internal coloring
-            requirements. The layout then iterates over every PE, generating position-dependent parameters (boundary flags, per-PE stencil routing) and binding them to a single kernel file via \texttt{@set\_tile\_code}.
+            \paragraph{Layout and coloring.}
+                Our layout module partitions 9 colors and 7 task IDs across the three modules. The stencil library uses 8 colors
+                as four bidirectional pairs: C0/C1 for EAST/WEST halo exchange, C2/C3 for the reverse, and C4/C5, C6/C7 for
+                NORTH/SOUTH. Even- and odd-indexed PEs swap send/receive assignments in a checkerboard pattern to avoid link
+                conflicts. The allreduce uses a single color (C8) with dynamic teardown to reuse it across 4 pipeline stages. The
+                V-cycle state machine uses 1 task ID, totaling 16 hardware resources. The layout iterates over every PE, generating
+                position-dependent boundary flags and routing directives for the strided active PE pattern. Our V-cycle state machine uses 1 additional task ID, totaling 16 hardware resources and various operators as localized functions. Our layout iterates over every PE, generating position-dependent parameters specific to the multigrid mapping (boundary flags, per-PE routing directives for the strided active PE pattern) and binds them to the kernels/operators.
 
-            \noindent\textbullet{} Routing and forwarding. Static routing is established at compile time: each PE's comptime block configures 16 \texttt{@set\_local\_color\_config} directives that wire input/output queues to the four cardinal directions via the
-            router's RAMP, EAST, WEST, NORTH, and SOUTH ports. For the strided mapping, where active PEs at level $l$ are $2^l$ hops apart, we modified the upstream SDK stencil and allreduce libraries (3,766 lines) to support runtime
-            route reconfiguration. At each level transition, \texttt{setHopBasedParams} recomputes which PEs are active, which are interior forwarders, and adjusts the send/receive patterns accordingly. The forwarding optimization (Section
-            3.6) uses hardware queues and microthreads to relay wavelets through inactive PEs directly from input queue to output queue, bypassing the memory ramp entirely.
+            \paragraph{Routing and multi-level adaptation.}
+                The base SDK configures static routing at compile time via \texttt{@set\_local\_color\_config} directives that wire input/output queues to the router ports. The strided mapping, however, requires \textit{runtime} route reconfiguration: at level $l$, only PEs at stride $2^l$ are active, and the stencil must exchange halos $2^l$ hops apart rather than with immediate neighbors. We extended both libraries with \texttt{setHopBasedParams}: at each level transition, every PE recomputes whether it is active, an interior forwarder, or a boundary node, and reconfigures its routing accordingly. For restriction, we added \texttt{setWindowedReductionParams} to the allreduce so that only the $2^l \times 2^l$ window of active PEs participates in each reduction. The forwarding optimization (Section~\ref{sec:forwarding}) further configures inactive PEs to relay wavelets directly through router queues, bypassing the memory ramp.
 
-            \noindent\textbullet{} Kernel and state machine. The V-cycle kernel (\texttt{kernel\_gmg\_vcycle.csl}, 1,103 lines) implements the full multigrid algorithm as an on-device state machine with 28 states. Each GMG operator---smooth, residual, restriction,
-            interpolation, coarse solve, and convergence check---maps to one or more states. Transitions are callback-driven: when an asynchronous stencil or allreduce completes, the library invokes \texttt{f\_callback}, which advances the state
-            variable and reactivates the state machine task via \texttt{@activate}. This design executes the entire V-cycle without returning control to the host between states; the host only intervenes between complete V-cycle iterations to
-            read convergence data.
+            \paragraph{State machine and callbacks.}
+                The V-cycle kernel (1,103 lines) executes entirely on-device as a 28-state fine grained state machine (Table~\ref{tab:state_machine}). The down-cycle advances through states that set up each level, apply pre-smoothing via the strided stencil (\texttt{SMOOTH\_APPLY} $\to$ \texttt{SMOOTH\_UPDATE}, looping for the configured number of iterations), compute the residual (\texttt{RESIDUAL\_APPLY} $\to$ \texttt{RESIDUAL\_COMPUTE}), and restrict to the next coarser level (\texttt{RESTRICT\_REDUCE} $\to$ \texttt{RESTRICT\_DIV}). At the coarsest $2\times2$ grid, a Jacobi bottom solver iterates. The up-cycle reverses: for each level it expands the z-dimension (\texttt{EXPAND\_Z}), broadcasts the correction from the top-left PE of each window (\texttt{BCAST}), applies error correction (\texttt{INTERP\_ADD}), and post-smooths. All transitions are callback-driven: when an asynchronous stencil or allreduce completes, the library invokes \texttt{f\_callback}, which advances the state variable and reactivates the state machine task, facilitating an implicit barrier in an async programming model. This design executes an entire V-cycle without returning control to the host; the host intervenes only between complete V-cycle iterations to read the convergence residual $\rho$.
 
-            \noindent\textbullet{} Data management within 48KB. Each PE stores the solution vector $u$, right-hand side $f$, residual $r$, and stencil output $Au$ for the current level, plus multi-level save arrays (\texttt{save\_u\_smooth}, \texttt{save\_f\_down}) sized by the
-            geometric series $n_z(2 - 2^{1-L})$. All data access uses DSDs (Data Structure Descriptors)---62 DSD operations configure strided memory access patterns for operations like restriction (even/odd z-pairs) and interpolation
-            (element duplication). The stencil communication libraries add four directional buffers of \texttt{BLOCK\_SIZE} each for halo exchange, bringing per-PE data pressure close to the 48KB limit for the largest problem sizes. At $512^3$
-            with 9 levels, the halo block size must be reduced from 256 to fit within memory alongside the program code, which itself occupies approximately 47\% of SRAM.
-
-
-            The key message this conveys to the reader: implementing a single multigrid V-cycle on WSE-3 requires the programmer to manually manage color/task ID allocation, static and dynamic routing, DSD-based memory access
-            patterns, callback-driven asynchronous state machines, and per-PE memory budgeting within 48KB—all concerns that are abstracted away on conventional architectures. The 3,766-line modified communication library alone
-            (forked from the SDK) reflects the engineering cost of adapting existing nearest-neighbor stencil code to the strided multi-level setting.
+            \paragraph{Data management within 48KB.}
+                Each PE stores the current-level vectors $u$, $f$, $r$, and $Au$, plus two multi-level save arrays (\texttt{save\_u\_smooth}, \texttt{save\_f\_down}) sized by the geometric series $n_z(2 - 2^{1-L})$ to preserve data across the down-cycle for restoration during the up-cycle. We configure 11 CSL Data Structure Descriptors (DSDs) with strided addressing for operations like restriction (even/odd z-pair averaging) and interpolation (element duplication). The stencil libraries add four directional halo buffers of \texttt{BLOCK\_SIZE} elements each.
+            }
 
             \begin{table}[t]
-                \caption{Code breakdown of the GLOW implementation.}
+                \caption{Code breakdown of the GLOW implementation. \textit{New}: written from scratch. \textit{Mod}: lines added/changed vs.\ upstream SDK.}
                 \label{tab:code_breakdown}
                 \centering
-                \small
-                \begin{tabular}{llr}
-                    \toprule
-                    \textbf{Component}               & \textbf{Role}            & \textbf{Lines} \\
-                    \midrule
-                    \multicolumn{3}{l}{\textit{Device (CSL)}}                                    \\[-4pt]
-                    \quad kernel\_gmg\_vcycle.csl    & State machine, operators & 1,103          \\
-                    \quad layout\_gmg\_vcycle.csl    & PE grid, colors, exports & 157            \\
-                    \quad stencil\_3d\_7pts (hops)   & Strided halo exchange    & 2,189          \\
-                    \quad allreduce (hops)           & Windowed reduction/bcast & 1,577          \\
-                    \quad blas.csl + timer           & Local math, timestamps   & 309            \\
-                    \midrule
-                    \multicolumn{3}{l}{\textit{Host (Python)}}                                   \\[-4pt]
-                    \quad run\_gmg\_vcycle.py        & Orchestration, profiling & 770            \\
-                    \quad compile\_and\_run\_wse3.py & Compilation, caching     & 554            \\
-                    \quad util.py + cmd\_parser.py   & Data layout, arguments   & 489            \\
-                    \midrule
-                    \textbf{Total}                   &                          & \textbf{7,148} \\
-                    \bottomrule
+                \footnotesize
+                \setlength{\tabcolsep}{3pt}
+                \begin{tabular}{|l||r|r|} \hline
+                    \textbf{Component}               & \textbf{Total} & \textbf{Ours} \\ \hline \hline
+                    \multicolumn{3}{|c|}{\textbf{Device (CSL)}} \\ \hline \hline
+                    \quad kernel\_gmg\_vcycle.csl    & 1,103          & 1,103 (new)   \\ \hline
+                    \quad layout\_gmg\_vcycle.csl    & 157            & 157 (new)     \\ \hline
+                    \quad stencil\_3d\_7pts (hops)   & 1,090          & ${\sim}$306 (mod) \\ \hline
+                    \quad allreduce (hops)           & 1,522          & ${\sim}$416 (mod) \\ \hline \hline
+                    \multicolumn{3}{|c|}{\textbf{Host (Python)}} \\ \hline \hline
+                    \quad run\_gmg\_vcycle.py        & 770            & 770 (new)     \\ \hline \hline
+                    \textbf{Total}                   & \textbf{4,642} & \textbf{${\sim}$2,752} \\ \hline
                 \end{tabular}
             \end{table}
 
-            }
-
-            \noindent
-            \begin{table}[h] \caption{State machine supporting synchronization.} \label{tab:state_machine}
-                \begin{small}
-                    \begin{tabular}{|l||p{1.35in}|} \hline
-                        \textbf{State name}                       & \textbf{Action}                                                  \\ \hline \hline
-                        \multicolumn{2}{|c|}{\textbf{Smooth}}                                                                        \\ \hline \hline
-                        \texttt{STATE\_DOWN\_INIT}                & set window and stride parameters                                 \\ \hline
-                        \texttt{STATE\_DOWN\_SMOOTH\_APPLY}       & \(Ax_1 \gets \texttt{stencil}(A, x)\)                            \\ \hline
-                        \texttt{STATE\_DOWN\_SMOOTH\_UPDATE}      & \(x_{\mathrm{smooth}} \gets x + Ax_1\)                           \\ \hline \hline
-                        \multicolumn{2}{|c|}{\textbf{Residual}}                                                                      \\ \hline \hline
-                        \texttt{STATE\_DOWN\_RESIDUAL\_APPLY}     & \(Ax_2 \gets \texttt{stencil}(A, x_{\mathrm{smooth}})\)          \\ \hline
-                        \texttt{STATE\_DOWN\_RESIDUAL\_COMPUTE}   & \(r \gets b - Ax_2\)                                             \\ \hline
-                        \multicolumn{2}{|c|}{\textbf{Restriction}}                                                                   \\ \hline \hline
-                        \texttt{STATE\_DOWN\_RESTRICT\_ALLREDUCE} & \(b \gets \texttt{reduce\_to\_topleft}(r)\)                      \\ \hline
-                        \texttt{STATE\_DOWN\_RESTRICT\_DIV}       & \(b_{\mathrm{next}} \gets b/8\)                                  \\ \hline \hline
-                        \multicolumn{2}{|c|}{\textbf{Interpolation}}                                                                 \\ \hline \hline
-                        \texttt{STATE\_UP\_INIT}                  & set level, restore data                                          \\ \hline
-                        \texttt{STATE\_UP\_EXPAND\_Z}             & \(x_{\mathrm{coarse}} \gets \texttt{expand}(x_{\mathrm{fine}})\) \\ \hline
-                        \texttt{STATE\_UP\_BCAST}                 & \(I \gets \texttt{broadcast\_from\_topleft}(x)\)                 \\ \hline \hline
-                        \multicolumn{2}{|c|}{\textbf{Error Correction}}                                                              \\ \hline \hline
-                        \texttt{STATE\_INTERP\_ADD}               & \(x \gets x_{\mathrm{smooth}} + I\)                              \\ \hline
-                        \multicolumn{2}{|c|}{\textbf{Coarse Solver}}                                                                 \\ \hline \hline
-                        \texttt{STATE\_COARSE\_SOLVER\_INIT}      & set level                                                        \\ \hline
-                        \texttt{STATE\_COARSE\_SOLVER\_APPLY}     & \(Ax\_coarse \gets \texttt{stencil}(A, x\_coarse)\)              \\ \hline
-                    \end{tabular}
-                \end{small}
+            \begin{table}[t]
+                \caption{State machine states and transitions for one V-cycle.}
+                \label{tab:state_machine}
+                \centering
+                \footnotesize
+                \setlength{\tabcolsep}{3pt}
+                \begin{tabular}{|l||p{1.4in}|} \hline
+                    \textbf{State} & \textbf{Action} \\ \hline \hline
+                    \multicolumn{2}{|c|}{\textbf{Down-cycle (per level)}} \\ \hline \hline
+                    \quad DOWN\_INIT                & Set window/stride params \\ \hline
+                    \quad SMOOTH\_APPLY             & $Ax_1 \gets \texttt{stencil}(A, x)$ \\ \hline
+                    \quad SMOOTH\_UPDATE            & $x_s \gets x + \omega Ax_1$ \\ \hline
+                    \quad RESIDUAL\_APPLY           & $Ax_2 \gets \texttt{stencil}(A, x_s)$ \\ \hline
+                    \quad RESIDUAL\_COMPUTE         & $r \gets b - Ax_2$ \\ \hline
+                    \quad RESTRICT\_REDUCE          & $b \gets \texttt{reduce\_topleft}(r)$ \\ \hline
+                    \quad RESTRICT\_DIV             & $b_{\mathrm{next}} \gets b/8$ \\ \hline \hline
+                    \multicolumn{2}{|c|}{\textbf{Coarse solver}} \\ \hline \hline
+                    \quad COARSE\_INIT              & Set coarsest level \\ \hline
+                    \quad COARSE\_SMOOTH\_*         & Jacobi iterations \\ \hline \hline
+                    \multicolumn{2}{|c|}{\textbf{Up-cycle (per level)}} \\ \hline \hline
+                    \quad UP\_INIT                  & Restore saved $u$, $f$ \\ \hline
+                    \quad EXPAND\_Z                 & $x_c \gets \texttt{expand}(x_f)$ \\ \hline
+                    \quad BCAST                     & $I \gets \texttt{bcast\_topleft}(x)$ \\ \hline
+                    \quad INTERP\_ADD               & $x \gets x_s + I$ \\ \hline
+                    \quad SMOOTH\_*                 & Post-smoothing \\ \hline \hline
+                    \multicolumn{2}{|c|}{\textbf{Convergence}} \\ \hline \hline
+                    \quad CALC\_RHO                 & $\rho \gets \max|r|$ via allreduce \\ \hline
+                    \quad CONV\_CHECK               & Loop or exit \\ \hline
+                \end{tabular}
             \end{table}
         \subsection{Performance Models of Key Operators}
             \label{sec:perfmodel}
