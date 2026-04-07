@@ -12,58 +12,81 @@
 \usepackage{url}
 \def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
     T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
-
-
 \begin{document}
+
+
 \title{GLOW: Accelerating Geometric Multigrid Levels on Cerebras Wafer-Scale Engine}
 \author{Anonymous Submission}
 \maketitle
+
 \begin{abstract}
-    This paper describes the mapping of Geometric Multigrid (GMG) onto the Cerebras Wafer Scale Engine (WSE-3).  The WSE wafer integrates almost a million cores along with a low-latency 2D mesh network, providing unprecedented on-chip bandwidth and fine-grained communication. Although the architecture is predominantly used for deep learning, we explore the suitability of WSE for accelerating GMG.
-    GMG solves sparse linear systems efficiently by recursively coarsening the grid, which leads to more rapid convergence with less computation.
-    As compared to prior implementations of stencils on WSE, this demonstration highlights the challenges of mapping a layered algorithm -- and the full set of operators -- onto a dataflow architecture.  We use this implementation as a foundation to discuss the potential for a variety of data and computation mappings of GMG to WSE, and performance compared to the HPGMG benchmark on an NVIDIA H200 GPU.  Across different GMG configurations and problem sizes, we observe a speedup of up to 25\(\times\) as compared to a single H200 node.
+	This paper describes the mapping of Geometric Multigrid (GMG) onto the Cerebras Wafer Scale Engine (WSE-3).  The WSE wafer integrates almost a million cores along with a low-latency 2D mesh network, providing unprecedented on-chip bandwidth and fine-grained communication. Although the architecture is predominantly used for deep learning, we explore the suitability of WSE for accelerating GMG.
+	GMG solves sparse linear systems efficiently by recursively coarsening the grid, which leads to more rapid convergence with less computation.
+	As compared to prior implementations of stencils on WSE, this demonstration highlights the challenges of mapping a layered algorithm -- and the full set of operators -- onto a dataflow architecture.  We use this implementation as a foundation to discuss the potential for a variety of data and computation mappings of GMG to WSE, and performance compared to the HPGMG benchmark on an NVIDIA H200 GPU.  Across different GMG configurations and problem sizes, we observe a speedup of up to 25\(\times\) as compared to a single H200 node.
 \end{abstract}
+
 \begin{IEEEkeywords}
-    Spatial dataflow architecture, Geometric multigrid, Wafer-Scale Engine
+	Spatial dataflow architecture, Geometric multigrid, Wafer-Scale Engine
 \end{IEEEkeywords}
+
+
 \section{Introduction}
-    Geometric multigrid (GMG) is an important family of algorithms used by computational scientists to accelerate the convergence of iterative solvers for linear systems of the form \(Ax=b\). It is a multigrid because computation is mapped to a hierarchy of coarser grid levels.  As shown in Figure~\ref{fig 1:V-cycle in GMG}, the underlying GMG operators are organized in a V-cycle that includes stencil application, residual, restriction, interpolation, smooth, and a direct (bottom) solver. In such a formulation, the floating-point computation in GMG is dwarfed by the overhead of data movement (during stencil application and across levels), making managing the memory hierarchy and cross-processor communication critical to achieving high performance. The best-performing algorithm for multigrid solutions has always been driven by the architecture: for decades the focus has been on distributed-memory CPU clusters, and, more recently, by accelerators such as GPUs. While these systems deliver high peak floating-point throughput, the performance of the dominant smooth and bottom solver in multigrid is often memory-bound, limited by cache hierarchies, off-chip DRAM bandwidth, and the cost of communicating across nodes over high-latency interconnects. 
-    %These bottlenecks constrain scalability, especially for stencil-based solvers and multigrid methods whose arithmetic intensity is low. 
+Geometric multigrid (GMG) is an important family of algorithms used by computational scientists to accelerate the convergence of iterative solvers for linear systems of the form \(Ax=b\). It is a multigrid because computation is mapped to a hierarchy of coarser grid levels.  As shown in Figure~\ref{fig 1:V-cycle in GMG}, the underlying GMG operators are organized in a V-cycle that includes stencil application, residual, restriction, interpolation, smooth, and a direct (bottom) solver. %\textcolor{red}{OA: add here that is a V-cycle}. 
+In such a formulation, the floating-point computation in GMG is dwarfed by the overhead of data movement (during stencil application and across levels), making managing the memory hierarchy and cross-processor communication critical to achieving high performance.
+The best-performing algorithm for multigrid solutions has always been driven by the architecture: for decades the focus has been on
+%High-performance computing (HPC) has traditionally been driven by 
+distributed-memory CPU clusters, and, more recently, by accelerators such as GPUs. While these systems deliver high peak floating-point throughput, the performance of the dominant smooth and bottom solver in multigrid is often
+%many scientific applications remains fundamentally 
+memory-bound, limited by cache hierarchies, off-chip DRAM bandwidth, and the cost of communicating across nodes over high-latency interconnects. %These bottlenecks constrain scalability, especially for stencil-based solvers and multigrid methods whose arithmetic intensity is low. 
 
 \begin{figure}[th]
-    \centering
-    \includegraphics[width=1\linewidth]{figures/fig1_gmg_v_cycle.drawio (2).png}
-    \caption{Schematic representation of a Geometric Multigrid V-cycle illustrating smooth, restriction, coarse-grid correction, and interpolation operators. Small 3D grid represents the problem domain}
-    \label{fig 1:V-cycle in GMG}
+	\centering
+	\includegraphics[width=1\linewidth]{figures/fig1_gmg_v_cycle.drawio (2).png}
+	\caption{Schematic representation of a Geometric Multigrid V-cycle illustrating smooth, restriction, coarse-grid correction, and interpolation operators. Small 3D grid represents the problem domain}
+	\label{fig 1:V-cycle in GMG}
 \end{figure}
 
-    This paper presents and evaluates the implications of mapping GMG to the Cerebras Wafer-Scale Engine (WSE), a radically different architectural model~\cite{Cerebras,Lauterbach}. By integrating nearly one million processing elements (PEs) and tens of gigabytes of on-wafer SRAM onto a single wafer-scale chip, the WSE provides single-cycle access to local memory and 21 petabytes-per-second of memory bandwidth, along with 214 petabits-per-second of fabric bandwidth through a 2D mesh interconnect. 
-    %This fine-grained distributed-memory architecture eliminates traditional cache hierarchies and drastically reduces memory latency both on PE and across PEs.
-    As a result, algorithms that are typically memory-bound on CPUs and GPUs frequently become compute-bound when ported to the WSE.  Prior work has demonstrated this shift for diverse workloads such as stencil computations~\cite{Sai,sai2,Rocki,scalable_25pt_stencil,mathias}, seismic analysis~\cite{Ltaief}, molecular dynamics~\cite{perez_md_sc24,perez-journal}, and Monte Carlo particle transport kernels~\cite{Tramm24,Yoshii26}.
-    In this paper, we present GLOW (Gmg Levels On Wafer).  We build on the lessons from successful use of Cerebras for stencil computations to provide a mapping of an algorithm that is still structured yet significantly more challenging.
-    Our paper is centered around an iso-capability (same problem size) study of the WSE (44GB of SRAM) and a GH200 GPU (141GB of HBM DRAM).  We present a dispassionate performance analysis of the WSE-3 focusing on the relevant benefits and pitfalls associated with massive decoupled thread parallelism, and planar network topologies for multi-scale computations.  As compared to a GH200 GPU implementation of the HPGMG benchmark, we achieve significantly improved performance.  At the same time,
-    the implementation of GMG must address new challenges on the Cerebras architecture: (1) limitations on problem size that fit on the wafer; (2) relative communication costs growing at deeper levels of the V-Cycle; and, (3) trading off code size and data space in the memory-constrained tile.
+This paper presents
+evaluates the implications of mapping GMG to
+the Cerebras Wafer-Scale Engine (WSE), a radically different architectural model~\cite{Cerebras,Lauterbach}. By integrating nearly one million processing elements (PEs) and tens of gigabytes of on-wafer SRAM onto a single wafer-scale chip, the WSE provides single-cycle access to local memory and 21 petabytes-per-second of memory bandwidth, along with 214 petabits-per-second of fabric bandwidth through a 2D mesh interconnect. %This fine-grained distributed-memory architecture eliminates traditional cache hierarchies and drastically reduces memory latency both on PE and across PEs. 
+As a result, algorithms that are typically memory-bound on CPUs and GPUs frequently become compute-bound when ported to the WSE.  Prior work has demonstrated this shift for diverse workloads such as stencil computations~\cite{Sai,sai2,Rocki,scalable_25pt_stencil,mathias}, seismic analysis~\cite{Ltaief}, molecular dynamics~\cite{perez_md_sc24,perez-journal}, %Monte Carlo simulations~\cite{Rocki,Ltaief,mathias} 
+and Monte Carlo particle transport kernels~\cite{Tramm24,Yoshii26}. % [cite:25-point stencil; others].
 
-    %Despite these successes in stencils, what remains missing is a demonstration of scientific computing workloads that go a step beyond traditional stencil kernels. 
-    %, while important, are now a well explored class of applications on this dataflow machine, and several efforts have replicated or extended these patterns but yet to address a more realistic, end-to-end use case. From the perspective of the Berkeley “Seven Dwarfs” [citeme] taxonomy, \textit{structured grids} represent a key category of scientific workloads that to our knowledge have not been explored on this hardware, particularly in the context of large-scale PDE solvers. This gap highlights the need to push beyond simple 7-point or 25-point stencils towards workloads that are 
-    %Geometric Multigrid (GMG) serves as a manageable proxy application for real-world PDE solvers, %(Adaptive Mesh Refinement(AMR)), 
-    %while introducing algorithmic complexity that stresses the architecture in %nontrivial 
-    %several ways. GMG incorporates richer loop structures, multi-level communication, data movement patterns across PEs and in particular different layer mapping strategies, in its smoother, restriction, and interpolation phases. Geometric Multigrid (GMG) exploits the structured hierarchy of the underlying mesh and operates in a matrix-free fashion, relying on stencil computations rather than storing the full sparse matrix, a property that is both memory-efficient(48KB memory) and compute-friendly [cite: PDE \& discretization slides; Sam slides]. 
-    %\textcolor{red}{The implementation details (like CSL) are too low-level for the intro.  I don't think you should say things like hop-based and window-based either, especially since they are not defined.  This paragraph could summarize the findings, for example: \textit{
+%\textbf{Why GMG, Why Stencils, what's the need to choose it?}
+%\textcolor{red}{This paragraph also starts out too broad.  Mary edited:}
+%Despite these successes in stencils, what remains missing is a demonstration of scientific computing workloads that go a step beyond traditional stencil kernels. 
+In this paper, we present GLOW (Gmg Levels On Wafer).  We build on the lessons from successful use of Cerebras for stencil computations to provide a mapping of an algorithm that is
+%, while important, are now a well explored class of applications on this dataflow machine, and several efforts have replicated or extended these patterns but yet to address a more realistic, end-to-end use case. From the perspective of the Berkeley “Seven Dwarfs” [citeme] taxonomy, \textit{structured grids} represent a key category of scientific workloads that to our knowledge have not been explored on this hardware, particularly in the context of large-scale PDE solvers. This gap highlights the need to push beyond simple 7-point or 25-point stencils towards workloads that are 
+still structured yet significantly more challenging. %Geometric Multigrid (GMG) serves as a manageable proxy application for real-world PDE solvers, %(Adaptive Mesh Refinement(AMR)), 
+%while introducing algorithmic complexity that stresses the architecture in %nontrivial 
+%several ways. GMG incorporates richer loop structures, multi-level communication, data movement patterns across PEs and in particular different layer mapping strategies, in its smoother, restriction, and interpolation phases. Geometric Multigrid (GMG) exploits the structured hierarchy of the underlying mesh and operates in a matrix-free fashion, relying on stencil computations rather than storing the full sparse matrix, a property that is both memory-efficient(48KB memory) and compute-friendly [cite: PDE \& discretization slides; Sam slides]. 
+%\textcolor{red}{The implementation details (like CSL) are too low-level for the intro.  I don't think you should say things like hop-based and window-based either, especially since they are not defined.  This paragraph could summarize the findings, for example: \textit{
 
-    %These results suggest several adaptations of the multigrid algorithm to maintain the benefits of low memory latency within the tile and fast nearest neighbor communication.  %such as ??? shallower levels and more like a W-cycle, lower-order of stencil due to less memory, ...???
-    %In this work, we accelerate the Geometric Multigrid Layers using a distributed-dataflow mapping strategy onto the WSE-3. We have implemented a Geometric Multigrid algorithm using CSL, a low level Zig-based kernel programming language for writing dataflow programs on Cerebras.  Our implementation relies on a hop-based 7-point stencil implementation and a window based reduction pattern. 
+Our paper is centered around an iso-capability (same problem size) study of the WSE (44GB of SRAM) and a GH200 GPU (141GB of HBM DRAM).  We present a dispassionate performance analysis of the WSE-3 focusing on the relevant benefits and pitfalls associated with massive decoupled thread parallelism, and planar network topologies for multi-scale computations.  As compared to a GH200 GPU implementation of the HPGMG benchmark, we achieve significantly improved performance.  At the same time,
+the implementation of GMG must address new challenges on the Cerebras architecture: (1) limitations on problem size that fit on the wafer; (2) relative communication costs growing at deeper levels of the V-Cycle; and, (3) trading off code size and data space in the memory-constrained tile.
 
-    This paper makes the following contributions:
-    \begin{itemize}
-        \item The first implementation of a multigrid algorithm on Cerebras WS-3, to the best of our knowledge.
-        \item A performance model of communication costs, along with a forwarding communication optimization, using the strided distributed solution we propose.
-        \item Extensive performance measurements, including per-operator and per-level cost, along with a comparison with an NVIDIA GH200 running HPGMG that exhibits speedup of up to \(25\times\).
-        \item Lessons regarding GMG algorithm configuration suitable for a tiled architecture with limited memory.
+
+
+%These results suggest several adaptations of the multigrid algorithm to maintain the benefits of low memory latency within the tile and fast nearest neighbor communication.  %such as ??? shallower levels and more like a W-cycle, lower-order of stencil due to less memory, ...???
+%In this work, we accelerate the Geometric Multigrid Layers using a distributed-dataflow mapping strategy onto the WSE-3. We have implemented a Geometric Multigrid algorithm using CSL, a low level Zig-based kernel programming language for writing dataflow programs on Cerebras.  Our implementation relies on a hop-based 7-point stencil implementation and a window based reduction pattern. 
+
+This paper makes the following contributions:
+\begin{itemize}
+	\item The first implementation of a multigrid algorithm on Cerebras WS-3, to the best of our knowledge.
+	\item A performance model of communication costs, along with a forwarding communication optimization, using the strided distributed solution we propose.
+	\item Extensive performance measurements, including
+	      per-operator and per-level cost, along with a comparison with an NVIDIA GH200 running HPGMG that exhibits speedup of up to \(25\times\).
+	      %\textcolor{red}{Summarize what results are in evaluation.  End with GPU performance comparison.}%strong/weak scaling behavior.\textcolor{blue}{We can't do a strong scaling as we can't fit > 1 Pencil on 1 PE. It's a weak study paper but we should somewhere talk about this limitation. Which might be a good learning to design a new way of mapping or even for hardware vendors to have say something like a shared tile say across a group of 8 PE. Both learning for hardware vendors or programming abstraction designer (in GPUs we say \texttt{\_\_shared\_\_} or \texttt{\_\_reg\_\_} someone can think like this by annotating a tile 'memorytile' or 'onlycompute' tile, todo: Need to place this at proper location}
+	\item Lessons regarding GMG algorithm configuration suitable for a tiled architecture with limited memory.
+	      %\item A performance comparison
+	      %We compare our results 
+	      %against the baseline HPGMG[citeme], a high performance proxy for multigrids on GPUs along with [oscar work], showing 13$\times$ speedup over a single-node GPU implementation.
 \end{itemize}
+%Our main contributions are as follows.
+%1. 
 
 \textcolor{red}{
-    Oscar points out we can talk about the software implementation (3.3?). Mary plans to draft a Lessons Learned section.}
+	Oscar points out we can talk about the software implementation (3.3?). Mary plans to draft a Lessons Learned section.}
 
 \section{Background}
 This section summarizes the GMG approach and the key aspects of the Cerebras architecture relevant to this study.
@@ -99,13 +122,13 @@ and the interactions between levels. %\textcolor{red}{OA: rewrite the last sente
 
 
 \begin{figure}[ht]
-    \centering
-    \includegraphics[width=1\linewidth]{figures/WSE2_v2.pdf}
-    \caption{A schematic representation of WSE-3, %. The WSE is 
-        a 2D grid structure where %made up of dies and 
-        each die is made of processing elements (figure left). %Figure shows a virtual concept of colors used to design routing paths, 
-        Figure right shows the hardware machinery inside a PE: router, memory and  Compute Element (CE). The WSE-3 system is a giant 46,255 mm² chip along with the machinery needed to cool, power and provide I/O.} %\textcolor{blue}{Increased font please check if readable}}
-    \label{fig:CS3}
+	\centering
+	\includegraphics[width=1\linewidth]{figures/WSE2_v2.pdf}
+	\caption{A schematic representation of WSE-3, %. The WSE is 
+		a 2D grid structure where %made up of dies and 
+		each die is made of processing elements (figure left). %Figure shows a virtual concept of colors used to design routing paths, 
+		Figure right shows the hardware machinery inside a PE: router, memory and  Compute Element (CE). The WSE-3 system is a giant 46,255 mm² chip along with the machinery needed to cool, power and provide I/O.} %\textcolor{blue}{Increased font please check if readable}}
+	\label{fig:CS3}
 \end{figure}
 
 
@@ -159,113 +182,113 @@ asynchronous fine-grained parallelism, but requires the programmer to manage com
 % %\textcolor{green}{TODO: I have idea of a figure with 3 boxes, python, kernel csl, layout csl side by side a small minimal code example?}
 
 \begin{figure*}[t]
-    \centering
-    \begin{minipage}[t]{0.49\linewidth}
-    \centering
-            \includegraphics[width=\linewidth]{figures/layouts_vertical.pdf}
-            \caption{Different possible layouts for 3 level GMG layers on WSE3 of size 1172x762. Text in red highlights various challenges of each approach. Our approach falls into the distributed category. }
-            \label{fig:VariousLayouts}
-    \end{minipage}
-    \hfill
-    \begin{minipage}[t]{0.49\linewidth}
-        \includegraphics[width=1\linewidth]{figures/spmp_restriction.pdf}
-        \caption{Top: Stencil Operator on WSE-3 2D grid for a \(8^3\) problem with 3 levels. The Highlighted nodes are the Active PEs and remaining Inactive PEs. The Hop distance differs as one keeps going down the levels and the SpMV exchanges halo regions H hops apart }
-        \label{fig:Spmv_and_restriction}
-    \end{minipage}
+	\centering
+	% \begin{minipage}[t]{0.49\linewidth}
+	% \centering
+	%         \includegraphics[width=\linewidth]{figures/layouts_vertical.pdf}
+	%         \caption{Different possible layouts for 3 level GMG layers on WSE3 of size 1172x762. Text in red highlights various challenges of each approach. Our approach falls into the distributed category. }
+	%         \label{fig:VariousLayouts}
+	% \end{minipage}
+	\hfill
+	\begin{minipage}[t]{0.49\linewidth}
+		\includegraphics[width=1\linewidth]{figures/spmp_restriction.pdf}
+		\caption{Top: Stencil Operator on WSE-3 2D grid for a \(8^3\) problem with 3 levels. The Highlighted nodes are the Active PEs and remaining Inactive PEs. The Hop distance differs as one keeps going down the levels and the SpMV exchanges halo regions H hops apart }
+		\label{fig:Spmv_and_restriction}
+	\end{minipage}
 \end{figure*}
 
 \begin{comment}
-    \begin{table*}[t]
-        \centering
-        \caption{Comparison of layout strategies for mapping GMG to WSE-3. Utilization refers to the amount of chip used. Green indicates low overhead, Orange moderate overhead, and Red high overhead.}
-        \label{tab:layout_comparison}
-        \renewcommand{\arraystretch}{1}
-        \setlength{\tabcolsep}{3pt}
+	\begin{table*}[t]
+		\centering
+		\caption{Comparison of layout strategies for mapping GMG to WSE-3. Utilization refers to the amount of chip used. Green indicates low overhead, Orange moderate overhead, and Red high overhead.}
+		\label{tab:layout_comparison}
+		\renewcommand{\arraystretch}{1}
+		\setlength{\tabcolsep}{3pt}
 
-        % \begin{tabular}{@{}lccccccc@{}}
-        %     \toprule
-        %     \textbf{Strategy} 
-        %     & \begin{tabular}[c]{@{}c@{}}\textbf{Memory-Usage}\\\textbf{/PE}\end{tabular} 
-        %     & \begin{tabular}[c]{@{}c@{}}\textbf{Routing-Color}\\\textbf{Complexity}\end{tabular} 
-        %     %& \begin{tabular}[c]{@{}c@{}}\textbf{Stencil}\\\textbf{Library}\\\textbf{Compatible}\end{tabular} 
-        %     & \begin{tabular}[c]{@{}c@{}}\textbf{Halo-Exchange}\\\textbf{Locality}\end{tabular}  
-        %     & \begin{tabular}[c]{@{}c@{}}\textbf{Inter-level/}\\\textbf{Cost}\end{tabular}  
-        %     & \begin{tabular}[c]{@{}c@{}}\textbf{Intra-level/}\\\textbf{Repacking}\\\textbf{Cost}\end{tabular}  
-        %     & \textbf{Utilization} 
-        %     & \begin{tabular}[c]{@{}c@{}}\textbf{Coarse-level}\\\textbf{sensitivity}\end{tabular} \\
-        %     \midrule
-        %     Spatial      & {\color{green} Low} & Low      & High  & Low   & High   & Low         & Low      \\
-        %     Pipeline     & Low   & Low      & High  & Low   & High   & High         & Medium      \\
-        %     One-side overlapped   & High   & High    & High  & Low   & High   & Medium         & Low      \\
-        %     Centered-overlapped & High   & High     & High  & Low   & Medium   & Medium       & Low      \\
-        %     Strided (this paper) & High   & High    & Varies  & High   & Varies   & High         & High      \\
-        %     \bottomrule
-        % \end{tabular}
+		% \begin{tabular}{@{}lccccccc@{}}
+		%     \toprule
+		%     \textbf{Strategy} 
+		%     & \begin{tabular}[c]{@{}c@{}}\textbf{Memory-Usage}\\\textbf{/PE}\end{tabular} 
+		%     & \begin{tabular}[c]{@{}c@{}}\textbf{Routing-Color}\\\textbf{Complexity}\end{tabular} 
+		%     %& \begin{tabular}[c]{@{}c@{}}\textbf{Stencil}\\\textbf{Library}\\\textbf{Compatible}\end{tabular} 
+		%     & \begin{tabular}[c]{@{}c@{}}\textbf{Halo-Exchange}\\\textbf{Locality}\end{tabular}  
+		%     & \begin{tabular}[c]{@{}c@{}}\textbf{Inter-level/}\\\textbf{Cost}\end{tabular}  
+		%     & \begin{tabular}[c]{@{}c@{}}\textbf{Intra-level/}\\\textbf{Repacking}\\\textbf{Cost}\end{tabular}  
+		%     & \textbf{Utilization} 
+		%     & \begin{tabular}[c]{@{}c@{}}\textbf{Coarse-level}\\\textbf{sensitivity}\end{tabular} \\
+		%     \midrule
+		%     Spatial      & {\color{green} Low} & Low      & High  & Low   & High   & Low         & Low      \\
+		%     Pipeline     & Low   & Low      & High  & Low   & High   & High         & Medium      \\
+		%     One-side overlapped   & High   & High    & High  & Low   & High   & Medium         & Low      \\
+		%     Centered-overlapped & High   & High     & High  & Low   & Medium   & Medium       & Low      \\
+		%     Strided (this paper) & High   & High    & Varies  & High   & Varies   & High         & High      \\
+		%     \bottomrule
+		% \end{tabular}
 
 
-        \begin{tabular}{@{}lccccccc@{}}
-                \toprule
-                \textbf{Strategy}
-                 & \begin{tabular}[c]{@{}c@{}}\textbf{Memory-Usage}\\\textbf{/PE}\end{tabular}
-                 & \begin{tabular}[c]{@{}c@{}}\textbf{Routing-Color}\\\textbf{Complexity}\end{tabular}
-                 & \begin{tabular}[c]{@{}c@{}}\textbf{Halo-Exchange}\\\textbf{Locality}\end{tabular}
-                 & \begin{tabular}[c]{@{}c@{}}\textbf{Inter-level}\\\textbf{Cost}\end{tabular}
-                 & \begin{tabular}[c]{@{}c@{}}\textbf{Intra-level}\\\textbf{Repacking}\\\textbf{Cost}\end{tabular}
-                 & \textbf{Utilization}
-                 & \begin{tabular}[c]{@{}c@{}}\textbf{Coarse-level}\\\textbf{sensitivity}\end{tabular}             \\
-                \midrule
-                Spatial
-                 & {\color{green} Low}
-                 & {\color{green} Low}
-                 & {\color{green} High}
-                 & {\color{green} Low}
-                 & {\color{red} High}
-                 & {\color{red} Low}
-                 & {\color{green} Low}                                                                             \\
+		\begin{tabular}{@{}lccccccc@{}}
+			\toprule
+			\textbf{Strategy}
+			 & \begin{tabular}[c]{@{}c@{}}\textbf{Memory-Usage}\\\textbf{/PE}\end{tabular}
+			 & \begin{tabular}[c]{@{}c@{}}\textbf{Routing-Color}\\\textbf{Complexity}\end{tabular}
+			 & \begin{tabular}[c]{@{}c@{}}\textbf{Halo-Exchange}\\\textbf{Locality}\end{tabular}
+			 & \begin{tabular}[c]{@{}c@{}}\textbf{Inter-level}\\\textbf{Cost}\end{tabular}
+			 & \begin{tabular}[c]{@{}c@{}}\textbf{Intra-level}\\\textbf{Repacking}\\\textbf{Cost}\end{tabular}
+			 & \textbf{Utilization}
+			 & \begin{tabular}[c]{@{}c@{}}\textbf{Coarse-level}\\\textbf{sensitivity}\end{tabular}             \\
+			\midrule
+			Spatial
+			 & {\color{green} Low}
+			 & {\color{green} Low}
+			 & {\color{green} High}
+			 & {\color{green} Low}
+			 & {\color{red} High}
+			 & {\color{red} Low}
+			 & {\color{green} Low}                                                                             \\
 
-                Pipeline
-                 & {\color{green} Low}
-                 & {\color{green} Low}
-                 & {\color{green} High}
-                 & {\color{green} Low}
-                 & {\color{red} High}
-                 & {\color{green} High}
-                 & {\color{orange} Medium}                                                                         \\
+			Pipeline
+			 & {\color{green} Low}
+			 & {\color{green} Low}
+			 & {\color{green} High}
+			 & {\color{green} Low}
+			 & {\color{red} High}
+			 & {\color{green} High}
+			 & {\color{orange} Medium}                                                                         \\
 
-                One-side overlapped
-                 & {\color{red} High}
-                 & {\color{red} High}
-                 & {\color{green} High}
-                 & {\color{green} Low}
-                 & {\color{red} High}
-                 & {\color{orange} Medium}
-                 & {\color{green} Low}                                                                             \\
+			One-side overlapped
+			 & {\color{red} High}
+			 & {\color{red} High}
+			 & {\color{green} High}
+			 & {\color{green} Low}
+			 & {\color{red} High}
+			 & {\color{orange} Medium}
+			 & {\color{green} Low}                                                                             \\
 
-                Centered-overlapped
-                 & {\color{red} High}
-                 & {\color{red} High}
-                 & {\color{green} High}
-                 & {\color{green} Low}
-                 & {\color{orange} Medium}
-                 & {\color{orange} Medium}
-                 & {\color{green} Low}                                                                             \\
+			Centered-overlapped
+			 & {\color{red} High}
+			 & {\color{red} High}
+			 & {\color{green} High}
+			 & {\color{green} Low}
+			 & {\color{orange} Medium}
+			 & {\color{orange} Medium}
+			 & {\color{green} Low}                                                                             \\
 
-                Strided (this paper)
-                 & {\color{red} High}
-                 & {\color{red} High}
-                 & {\color{orange} Varies}
-                 & {\color{red} High}
-                 & {\color{orange} Varies}
-                 & {\color{green} High}
-                 & {\color{red} High}                                                                              \\
-                \bottomrule
-        \end{tabular}
-        \vspace{1mm}
+			Strided (this paper)
+			 & {\color{red} High}
+			 & {\color{red} High}
+			 & {\color{orange} Varies}
+			 & {\color{red} High}
+			 & {\color{orange} Varies}
+			 & {\color{green} High}
+			 & {\color{red} High}                                                                              \\
+			\bottomrule
+		\end{tabular}
+		\vspace{1mm}
 
-        %\textit{Notes:} 
-        %``Memory footprint'' considers per-PE storage; ``Routing \& coloring complexity'' reflects implementation effort and configuration overhead; ``Stencil locality'' refers to the spatial proximity of stencil neighbors supporting efficient communication; ``Inter-level'' and ``intra-level'' cost capture data movement between/coarse levels and within a single level, respectively; ``\#Idle PEs'' encodes potential underutilization; ``Coarse-level sensitivity'' relates to mapping efficiency as levels become coarser; ``Repacking cost'' highlights the memory and communication required to move or densify the grid for operator application.
-        %\textcolor{red}{NOT SURE THIS IS NECESSARY, BUT MARKING I: Note: We are talking about stencils by default in all mapping.  We are also talking about iterations, which adds cost.[TODO:fill]}
-    \end{table*}
+		%\textit{Notes:} 
+		%``Memory footprint'' considers per-PE storage; ``Routing \& coloring complexity'' reflects implementation effort and configuration overhead; ``Stencil locality'' refers to the spatial proximity of stencil neighbors supporting efficient communication; ``Inter-level'' and ``intra-level'' cost capture data movement between/coarse levels and within a single level, respectively; ``\#Idle PEs'' encodes potential underutilization; ``Coarse-level sensitivity'' relates to mapping efficiency as levels become coarser; ``Repacking cost'' highlights the memory and communication required to move or densify the grid for operator application.
+		%\textcolor{red}{NOT SURE THIS IS NECESSARY, BUT MARKING I: Note: We are talking about stencils by default in all mapping.  We are also talking about iterations, which adds cost.[TODO:fill]}
+	\end{table*}
 \end{comment}
 
 \section{Mapping GMG to WSE-3}
@@ -310,8 +333,7 @@ their tradeoffs: fully distributed, spatial, and operator pipelined layouts, as
 shown in Figure~\ref{fig:VariousLayouts}. Each approach has tradeoffs
 and implications for memory footprint, data communication distance,
 packing-repacking cost, parallelism, router and coloring code
-complexities, and amount of chip utilization and power consumption.  
-%These are captured in Table~\ref{tab:layout_comparison}.
+complexities, and amount of chip utilization and power consumption.  These are captured in Table~\ref{tab:layout_comparison}.
 With the advent of large-scale spatial-dataflow accelerators, one can
 program the distributed machine as a single device with a single
 programming model. Therefore it amplifies the importance of placement
@@ -319,31 +341,31 @@ as routing and communication is directly tied to layout and resulting
 performance.
 
 \begin{comment}
-    % Compact summary of inter- and intra-level distances for key layout strategies:
-    \begin{table}[h]
-        \caption{Inter- and intra-level communication distance \textcolor{red}{\(D_l\)??? -- need to connect to equation 1 terms} for different layout strategies. We assume the intra level distance is the stencil halo exchange neighbor distance and the inter level distance is the maximum distance required between the two levels.}
-        \centering
-        \renewcommand{\arraystretch}{1}
-        \setlength{\tabcolsep}{5pt}
-        \begin{tabular}{lcc}
-                \toprule
-                \textbf{Layout}      & \textbf{Inter-level}  & \textbf{Intar-level} \\
-                \midrule
-                Spatial              & \(nz_l\) + \(nz_l\)/2 & 1                    \\
-                Left-skew-overlapped & \(nz_l\)              & 1                    \\
-                Centered-overlapped  & \(nz_l\)/2            & 1                    \\
-                Strided (this paper) & 2*\(2^l\)             & \(2^l\)              \\
-                \bottomrule
-        \end{tabular}
-        \label{tab:layout_comparison_distance}
-    \end{table}
+	% Compact summary of inter- and intra-level distances for key layout strategies:
+	\begin{table}[h]
+		\caption{Inter- and intra-level communication distance \textcolor{red}{\(D_l\)??? -- need to connect to equation 1 terms} for different layout strategies. We assume the intra level distance is the stencil halo exchange neighbor distance and the inter level distance is the maximum distance required between the two levels.}
+		\centering
+		\renewcommand{\arraystretch}{1}
+		\setlength{\tabcolsep}{5pt}
+		\begin{tabular}{lcc}
+			\toprule
+			\textbf{Layout}      & \textbf{Inter-level}  & \textbf{Intar-level} \\
+			\midrule
+			Spatial              & \(nz_l\) + \(nz_l\)/2 & 1                    \\
+			Left-skew-overlapped & \(nz_l\)              & 1                    \\
+			Centered-overlapped  & \(nz_l\)/2            & 1                    \\
+			Strided (this paper) & 2*\(2^l\)             & \(2^l\)              \\
+			\bottomrule
+		\end{tabular}
+		\label{tab:layout_comparison_distance}
+	\end{table}
 
-    \begin{figure}[]
-        \centering
-        \includegraphics[width=0.7\linewidth]{figures/mapping_max_distance_manhatten.drawio.png}
-        \caption{Inter level operator communication distance: The figure shows maximum communication distance a wavelet has to travel between 2 levels across various layouts.This distance is directly proportional to the cost of inter level operators. Note weak scaling can make it possible to reuse the zdim}
-        \label{fig:mapping_max_distance_manhatten}
-    \end{figure}
+	\begin{figure}[]
+		\centering
+		\includegraphics[width=0.7\linewidth]{figures/mapping_max_distance_manhatten.drawio.png}
+		\caption{Inter level operator communication distance: The figure shows maximum communication distance a wavelet has to travel between 2 levels across various layouts.This distance is directly proportional to the cost of inter level operators. Note weak scaling can make it possible to reuse the zdim}
+		\label{fig:mapping_max_distance_manhatten}
+	\end{figure}
 \end{comment}
 
 
@@ -351,28 +373,28 @@ performance.
 In this section, we evaluate different level placement strategies and their tradeoffs: fully distributed, spatial, and operator pipelined layouts, as shown in Figure~\ref{fig:VariousLayouts}. Each approach has tradeoffs and implications for memory footprint, data communication distance, packing-repacking cost, parallelism, router and coloring code complexities, and amount of chip utilization and power consumption. With the advent of large-scale spatial-dataflow accelerators, one can program the distributed machine as a single device with a single programming model. Therefore it amplifies the importance of placement as routing and communication is directly tied to layout and resulting performance. Therefore, we model the communication cost for different layout strategies and compare them with our proposed strided layout.
 
 \begin{comment}
-    We leverage the performance model %from the near-optimal paper 
-    of Luczynski et al.\cite{luczynski_reduce}, which focuses on modeling collective communication operations. We are interested in modeling the inter and intra-level communication costs for each operator, since communication cost is the dominant factor in achieving performance for the various mapping strategies; we omit compute costs as we know they shrink geometrically.
+	We leverage the performance model %from the near-optimal paper 
+	of Luczynski et al.\cite{luczynski_reduce}, which focuses on modeling collective communication operations. We are interested in modeling the inter and intra-level communication costs for each operator, since communication cost is the dominant factor in achieving performance for the various mapping strategies; we omit compute costs as we know they shrink geometrically.
 
-    Per Luczynski et al., Equation~\eqref{eq:comm_model} estimates the number of cycles \(T_l\) at level \(l\) for a given problem size.   The model has two terms.   In the first term, \(C\) is the largest number of wavelets a PE sends or receives, a measure of contention.  \(E\) is the total number of hops the network needs to route wavelets; \(N\) is the number of links being used (a PE has 5 bidirectional links); and, \(L\) is the largest number of hops a wavelet has to travel.  Thus, the first term reflects whether contention or routing the communication pattern is dominant.
-    In the second term, \(T_R\) is the router-processor latency (multiplied by 2 for sending and receiving data and an additional cycle for storing the received element), and \(D\) is the longest pipeline sequence of PEs that perform operations depending on previous calculations.  Combining the two terms provides a model for communication costs %on each other's output.  for.   $P$ is the number of PEs.[TODO:I need to shorten can we reference paper instead?]
+	Per Luczynski et al., Equation~\eqref{eq:comm_model} estimates the number of cycles \(T_l\) at level \(l\) for a given problem size.   The model has two terms.   In the first term, \(C\) is the largest number of wavelets a PE sends or receives, a measure of contention.  \(E\) is the total number of hops the network needs to route wavelets; \(N\) is the number of links being used (a PE has 5 bidirectional links); and, \(L\) is the largest number of hops a wavelet has to travel.  Thus, the first term reflects whether contention or routing the communication pattern is dominant.
+	In the second term, \(T_R\) is the router-processor latency (multiplied by 2 for sending and receiving data and an additional cycle for storing the received element), and \(D\) is the longest pipeline sequence of PEs that perform operations depending on previous calculations.  Combining the two terms provides a model for communication costs %on each other's output.  for.   $P$ is the number of PEs.[TODO:I need to shorten can we reference paper instead?]
 
-    \begin{equation}
-        T_l = \max \left( C_l, E_l / N_l + L_l \right) + (2 T_R + 1) D_l
-        \label{eq:comm_model}
-    \end{equation}
+	\begin{equation}
+		T_l = \max \left( C_l, E_l / N_l + L_l \right) + (2 T_R + 1) D_l
+		\label{eq:comm_model}
+	\end{equation}
 
-    Therefore, for the context of this paper, the data that must be communicated is the pencil resident at each PE for a given level, and the number of hops it must be communicated is a function of the level.
-    %we model costs with Equation~\ref{eq:comm_model_2}. \textcolor{red}{What is confusing here is that I think you are trying to apply Equation 1 to your context, and Equation 2 is confusing because it does not directly map.  I think you should omit Equation 2, improve the paragraph describing Equation 1 to be clearer, and use text to describe how Equation 1 applies in this context.  I made an attempt to simplify some of the long names of Equation 2, but I can't figure out how to define all of the terms.  Why introduce $cost_R$ or $PE_l$ rather than use 2$T_R$ and $D_l$?  This model is good, but needs to be cleaner.}
+	Therefore, for the context of this paper, the data that must be communicated is the pencil resident at each PE for a given level, and the number of hops it must be communicated is a function of the level.
+	%we model costs with Equation~\ref{eq:comm_model_2}. \textcolor{red}{What is confusing here is that I think you are trying to apply Equation 1 to your context, and Equation 2 is confusing because it does not directly map.  I think you should omit Equation 2, improve the paragraph describing Equation 1 to be clearer, and use text to describe how Equation 1 applies in this context.  I made an attempt to simplify some of the long names of Equation 2, but I can't figure out how to define all of the terms.  Why introduce $cost_R$ or $PE_l$ rather than use 2$T_R$ and $D_l$?  This model is good, but needs to be cleaner.}
 
-    \begin{equation}
-        \begin{split}
-            T_l & = \max\left( \text{size\_pencil}_l, \frac{\text{size\_pencil}_l \cdot \text{dist}_l}{\text{dirs}_l} + \text{dist}_l \right) \\
-                & \quad + \left( \text{cost}_R \cdot \text{PE}_l \right)
-        \end{split}
-        \label{eq:comm_model_2}
-    \end{equation}
-    [TODO:] If above eqn is hard to grasp, can remove?
+	\begin{equation}
+		\begin{split}
+			T_l & = \max\left( \text{size\_pencil}_l, \frac{\text{size\_pencil}_l \cdot \text{dist}_l}{\text{dirs}_l} + \text{dist}_l \right) \\
+			    & \quad + \left( \text{cost}_R \cdot \text{PE}_l \right)
+		\end{split}
+		\label{eq:comm_model_2}
+	\end{equation}
+	[TODO:] If above eqn is hard to grasp, can remove?
 \end{comment}
 
 
@@ -402,10 +424,10 @@ The GMG input domain is a structured 3D \(nx \times ny \times nz\) grid as shown
 along the z-axis per PE is a finite geometric series with \(|L|\) levels and \(nz\) the size of the finest-level pencil \(l_0\),
 \vspace{5pt}
 \[
-    \text{Allocation} = nz + nz/2  + nz/4  + nz/8 + ...
+	\text{Allocation} = nz + nz/2  + nz/4  + nz/8 + ...
 \]
 \[
-    \text{Allocation} = nz \left( 2 - \frac{1}{2^{\,l-1}} \right)
+	\text{Allocation} = nz \left( 2 - \frac{1}{2^{\,l-1}} \right)
 \]
 \textit{Allocation} represents the amount of data that must fit in 48KB memory along with other intermediate vectors and kernel buffers, and the program code for the PE.
 The finest levels in GMG need the highest amount of data and are computationally expensive; therefore, layer \(l_0\) requires the most memory.
@@ -420,92 +442,92 @@ We synchronize all PEs beforehand so that timers are aligned to the same start t
 The state machine iterates by advancing the states starting from the down cycle. It sets up the level, applies a Jacobi 7-pt stencil operator as a smooth, restricts by reducing residual values within a window to the top-left PE of each window and dividing by 8 (finite-volume). For each level from the coarsest back to the finest the coarse solution in the z-dimension is expanded by duplicating each z-slice to double the z-size. We broadcast the correction from the top-left PE of each restriction window to all PEs in that window, and add the interpolated correction.  The key kernels of the algorithm are 7\_pt\_stencil, reduce\_to\_topleft, and broadcast\_from\_topleft. The latter two are inter-level communication kernels and the former is computed at the current level. Kernels are placed across all PEs of the grid; given the distributed interposing each level can reuse the kernels. \textcolor{red}{I don't understand what this means, but I think it can be omitted: There is no special routing for levels as it is handled by the operators internally.}
 
 {\color{blue}
-    1. coloring
-    2. layout
-    3. tasks, data state
+	1. coloring
+	2. layout
+	3. tasks, data state
 
-    \noindent\textbullet{} The implementation of GMG on WSE-3 requires composing all of the programming model elements described in Section 2.2.3---layout, coloring, routing, tasks, DSDs, and runtime router reconfiguration---into a single coordinated
-    program. The full implementation comprises approximately 8,900 lines of CSL device code and 1,800 lines of Python host code. Table~\ref{tab:code_breakdown} summarizes the code organization.
+	\noindent\textbullet{} The implementation of GMG on WSE-3 requires composing all of the programming model elements described in Section 2.2.3—layout, coloring, routing, tasks, DSDs, and runtime router reconfiguration—into a single coordinated
+	program. The full implementation comprises approximately 8,900 lines of CSL device code and 1,800 lines of Python host code. Table~\ref{tab:code_breakdown} summarizes the code organization.
 
-    \noindent\textbullet{} Layout and coloring. The layout module (\texttt{layout\_gmg\_vcycle.csl}, 157 lines) defines a 2D PE grid on the $762\times1172$ WSE-3 fabric. It allocates 9 colors for inter-PE communication---8 for the stencil operator's directional halo
-    exchanges (east/west/north/south, send and receive) and 1 for the allreduce used in restriction and convergence checking. It also allocates 8 task IDs: 3 for the stencil's send/receive/compute phases, 4 for allreduce
-    stages, and 1 for the V-cycle state machine. These 17 hardware resources must be partitioned without collision across three imported modules (memcpy, stencil, allreduce), each of which has its own internal coloring
-    requirements. The layout then iterates over every PE, generating position-dependent parameters (boundary flags, per-PE stencil routing) and binding them to a single kernel file via \texttt{@set\_tile\_code}.
+	\noindent\textbullet{} Layout and coloring. The layout module (layout_gmg_vcycle.csl, 157 lines) defines a 2D PE grid on the 762×1172 WSE-3 fabric. It allocates 9 colors for inter-PE communication—8 for the stencil operator's directional halo
+	exchanges (east/west/north/south, send and receive) and 1 for the allreduce used in restriction and convergence checking. It also allocates 8 task IDs: 3 for the stencil's send/receive/compute phases, 4 for allreduce
+	stages, and 1 for the V-cycle state machine. These 17 hardware resources must be partitioned without collision across three imported modules (memcpy, stencil, allreduce), each of which has its own internal coloring
+	requirements. The layout then iterates over every PE, generating position-dependent parameters (boundary flags, per-PE stencil routing) and binding them to a single kernel file via @set_tile_code.
 
-    \noindent\textbullet{} Routing and forwarding. Static routing is established at compile time: each PE's comptime block configures 16 \texttt{@set\_local\_color\_config} directives that wire input/output queues to the four cardinal directions via the
-    router's RAMP, EAST, WEST, NORTH, and SOUTH ports. For the strided mapping, where active PEs at level $l$ are $2^l$ hops apart, we modified the upstream SDK stencil and allreduce libraries (3,766 lines) to support runtime
-    route reconfiguration. At each level transition, \texttt{setHopBasedParams} recomputes which PEs are active, which are interior forwarders, and adjusts the send/receive patterns accordingly. The forwarding optimization (Section
-    3.6) uses hardware queues and microthreads to relay wavelets through inactive PEs directly from input queue to output queue, bypassing the memory ramp entirely.
+	\noindent\textbullet{} Routing and forwarding. Static routing is established at compile time: each PE's comptime block configures 16 @set_local_color_config directives that wire input/output queues to the four cardinal directions via the
+	router's RAMP, EAST, WEST, NORTH, and SOUTH ports. For the strided mapping, where active PEs at level \(l\) are \(2^l\) hops apart, we modified the upstream SDK stencil and allreduce libraries (3,766 lines) to support runtime
+	route reconfiguration. At each level transition, setHopBasedParams recomputes which PEs are active, which are interior forwarders, and adjusts the send/receive patterns accordingly. The forwarding optimization (Section
+	3.6) uses hardware queues and microthreads to relay wavelets through inactive PEs directly from input queue to output queue, bypassing the memory ramp entirely.
 
-    \noindent\textbullet{} Kernel and state machine. The V-cycle kernel (\texttt{kernel\_gmg\_vcycle.csl}, 1,103 lines) implements the full multigrid algorithm as an on-device state machine with 28 states. Each GMG operator---smooth, residual, restriction,
-    interpolation, coarse solve, and convergence check---maps to one or more states. Transitions are callback-driven: when an asynchronous stencil or allreduce completes, the library invokes \texttt{f\_callback}, which advances the state
-    variable and reactivates the state machine task via \texttt{@activate}. This design executes the entire V-cycle without returning control to the host between states; the host only intervenes between complete V-cycle iterations to
-    read convergence data.
+	\noindent\textbullet{} Kernel and state machine. The V-cycle kernel (kernel_gmg_vcycle.csl, 1,103 lines) implements the full multigrid algorithm as an on-device state machine with 28 states. Each GMG operator—smooth, residual, restriction,
+	interpolation, coarse solve, and convergence check—maps to one or more states. Transitions are callback-driven: when an asynchronous stencil or allreduce completes, the library invokes f_callback, which advances the state
+	variable and reactivates the state machine task via @activate. This design executes the entire V-cycle without returning control to the host between states; the host only intervenes between complete V-cycle iterations to
+	read convergence data.
 
-    \noindent\textbullet{} Data management within 48KB. Each PE stores the solution vector $u$, right-hand side $f$, residual $r$, and stencil output $Au$ for the current level, plus multi-level save arrays (\texttt{save\_u\_smooth}, \texttt{save\_f\_down}) sized by the
-    geometric series $n_z(2 - 2^{1-L})$. All data access uses DSDs (Data Structure Descriptors)---62 DSD operations configure strided memory access patterns for operations like restriction (even/odd z-pairs) and interpolation
-    (element duplication). The stencil communication libraries add four directional buffers of \texttt{BLOCK\_SIZE} each for halo exchange, bringing per-PE data pressure close to the 48KB limit for the largest problem sizes. At $512^3$
-    with 9 levels, the halo block size must be reduced from 256 to fit within memory alongside the program code, which itself occupies approximately 47\% of SRAM.
+	\noindent\textbullet{} Data management within 48KB. Each PE stores the solution vector u, right-hand side f, residual r, and stencil output Au for the current level, plus multi-level save arrays (save_u_smooth, save_f_down) sized by the
+	geometric series \(n_z(2 - 2^{1-L})\). All data access uses DSDs (Data Structure Descriptors)—62 DSD operations configure strided memory access patterns for operations like restriction (even/odd z-pairs) and interpolation
+	(element duplication). The stencil communication libraries add four directional buffers of BLOCK_SIZE each for halo exchange, bringing per-PE data pressure close to the 48KB limit for the largest problem sizes. At 512\(^3\)
+	with 9 levels, the halo block size must be reduced from 256 to fit within memory alongside the program code, which itself occupies approximately 47% of SRAM.
 
 
-    The key message this conveys to the reader: implementing a single multigrid V-cycle on WSE-3 requires the programmer to manually manage color/task ID allocation, static and dynamic routing, DSD-based memory access
-    patterns, callback-driven asynchronous state machines, and per-PE memory budgeting within 48KB—all concerns that are abstracted away on conventional architectures. The 3,766-line modified communication library alone
-    (forked from the SDK) reflects the engineering cost of adapting existing nearest-neighbor stencil code to the strided multi-level setting.
+	The key message this conveys to the reader: implementing a single multigrid V-cycle on WSE-3 requires the programmer to manually manage color/task ID allocation, static and dynamic routing, DSD-based memory access
+	patterns, callback-driven asynchronous state machines, and per-PE memory budgeting within 48KB—all concerns that are abstracted away on conventional architectures. The 3,766-line modified communication library alone
+	(forked from the SDK) reflects the engineering cost of adapting existing nearest-neighbor stencil code to the strided multi-level setting.
 
-    \begin{table}[t]
-        \caption{Code breakdown of the GLOW implementation.}
-        \label{tab:code_breakdown}
-        \centering
-        \small
-        \begin{tabular}{llr}
-                \toprule
-                \textbf{Component}               & \textbf{Role}            & \textbf{Lines} \\
-                \midrule
-                \multicolumn{3}{l}{\textit{Device (CSL)}}                                    \\[-4pt]
-                \quad kernel\_gmg\_vcycle.csl    & State machine, operators & 1,103          \\
-                \quad layout\_gmg\_vcycle.csl    & PE grid, colors, exports & 157            \\
-                \quad stencil\_3d\_7pts (hops)   & Strided halo exchange    & 2,189          \\
-                \quad allreduce (hops)           & Windowed reduction/bcast & 1,577          \\
-                \quad blas.csl + timer           & Local math, timestamps   & 309            \\
-                \midrule
-                \multicolumn{3}{l}{\textit{Host (Python)}}                                   \\[-4pt]
-                \quad run\_gmg\_vcycle.py        & Orchestration, profiling & 770            \\
-                \quad compile\_and\_run\_wse3.py & Compilation, caching     & 554            \\
-                \quad util.py + cmd\_parser.py   & Data layout, arguments   & 489            \\
-                \midrule
-                \textbf{Total}                   &                          & \textbf{7,148} \\
-                \bottomrule
-        \end{tabular}
-    \end{table}
+	\begin{table}[t]
+		\caption{Code breakdown of the GLOW implementation.}
+		\label{tab:code_breakdown}
+		\centering
+		\small
+		\begin{tabular}{llr}
+			\toprule
+			\textbf{Component}               & \textbf{Role}            & \textbf{Lines} \\
+			\midrule
+			\multicolumn{3}{l}{\textit{Device (CSL)}}                                    \\[-4pt]
+			\quad kernel\_gmg\_vcycle.csl    & State machine, operators & 1,103          \\
+			\quad layout\_gmg\_vcycle.csl    & PE grid, colors, exports & 157            \\
+			\quad stencil\_3d\_7pts (hops)   & Strided halo exchange    & 2,189          \\
+			\quad allreduce (hops)           & Windowed reduction/bcast & 1,577          \\
+			\quad blas.csl + timer           & Local math, timestamps   & 309            \\
+			\midrule
+			\multicolumn{3}{l}{\textit{Host (Python)}}                                   \\[-4pt]
+			\quad run\_gmg\_vcycle.py        & Orchestration, profiling & 770            \\
+			\quad compile\_and\_run\_wse3.py & Compilation, caching     & 554            \\
+			\quad util.py + cmd\_parser.py   & Data layout, arguments   & 489            \\
+			\midrule
+			\textbf{Total}                   &                          & \textbf{7,148} \\
+			\bottomrule
+		\end{tabular}
+	\end{table}
 
 }
 
 \noindent
 \begin{table}[h] \caption{State machine supporting synchronization.} \label{tab:state_machine}
-    \begin{small}
-        \begin{tabular}{|l||p{1.35in}|} \hline
-                \textbf{State name}                       & \textbf{Action}                                                  \\ \hline \hline
-                \multicolumn{2}{|c|}{\textbf{Smooth}}                                                                        \\ \hline \hline
-                \texttt{STATE\_DOWN\_INIT}                & set window and stride parameters                                 \\ \hline
-                \texttt{STATE\_DOWN\_SMOOTH\_APPLY}       & \(Ax_1 \gets \texttt{stencil}(A, x)\)                            \\ \hline
-                \texttt{STATE\_DOWN\_SMOOTH\_UPDATE}      & \(x_{\mathrm{smooth}} \gets x + Ax_1\)                           \\ \hline \hline
-                \multicolumn{2}{|c|}{\textbf{Residual}}                                                                      \\ \hline \hline
-                \texttt{STATE\_DOWN\_RESIDUAL\_APPLY}     & \(Ax_2 \gets \texttt{stencil}(A, x_{\mathrm{smooth}})\)          \\ \hline
-                \texttt{STATE\_DOWN\_RESIDUAL\_COMPUTE}   & \(r \gets b - Ax_2\)                                             \\ \hline
-                \multicolumn{2}{|c|}{\textbf{Restriction}}                                                                   \\ \hline \hline
-                \texttt{STATE\_DOWN\_RESTRICT\_ALLREDUCE} & \(b \gets \texttt{reduce\_to\_topleft}(r)\)                      \\ \hline
-                \texttt{STATE\_DOWN\_RESTRICT\_DIV}       & \(b_{\mathrm{next}} \gets b/8\)                                  \\ \hline \hline
-                \multicolumn{2}{|c|}{\textbf{Interpolation}}                                                                 \\ \hline \hline
-                \texttt{STATE\_UP\_INIT}                  & set level, restore data                                          \\ \hline
-                \texttt{STATE\_UP\_EXPAND\_Z}             & \(x_{\mathrm{coarse}} \gets \texttt{expand}(x_{\mathrm{fine}})\) \\ \hline
-                \texttt{STATE\_UP\_BCAST}                 & \(I \gets \texttt{broadcast\_from\_topleft}(x)\)                 \\ \hline \hline
-                \multicolumn{2}{|c|}{\textbf{Error Correction}}                                                              \\ \hline \hline
-                \texttt{STATE\_INTERP\_ADD}               & \(x \gets x_{\mathrm{smooth}} + I\)                              \\ \hline
-                \multicolumn{2}{|c|}{\textbf{Coarse Solver}}                                                                 \\ \hline \hline
-                \texttt{STATE\_COARSE\_SOLVER\_INIT}      & set level                                                        \\ \hline
-                \texttt{STATE\_COARSE\_SOLVER\_APPLY}     & \(Ax\_coarse \gets \texttt{stencil}(A, x\_coarse)\)              \\ \hline
-        \end{tabular}
-    \end{small}
+	\begin{small}
+		\begin{tabular}{|l||p{1.35in}|} \hline
+			\textbf{State name}                       & \textbf{Action}                                                  \\ \hline \hline
+			\multicolumn{2}{|c|}{\textbf{Smooth}}                                                                        \\ \hline \hline
+			\texttt{STATE\_DOWN\_INIT}                & set window and stride parameters                                 \\ \hline
+			\texttt{STATE\_DOWN\_SMOOTH\_APPLY}       & \(Ax_1 \gets \texttt{stencil}(A, x)\)                            \\ \hline
+			\texttt{STATE\_DOWN\_SMOOTH\_UPDATE}      & \(x_{\mathrm{smooth}} \gets x + Ax_1\)                           \\ \hline \hline
+			\multicolumn{2}{|c|}{\textbf{Residual}}                                                                      \\ \hline \hline
+			\texttt{STATE\_DOWN\_RESIDUAL\_APPLY}     & \(Ax_2 \gets \texttt{stencil}(A, x_{\mathrm{smooth}})\)          \\ \hline
+			\texttt{STATE\_DOWN\_RESIDUAL\_COMPUTE}   & \(r \gets b - Ax_2\)                                             \\ \hline
+			\multicolumn{2}{|c|}{\textbf{Restriction}}                                                                   \\ \hline \hline
+			\texttt{STATE\_DOWN\_RESTRICT\_ALLREDUCE} & \(b \gets \texttt{reduce\_to\_topleft}(r)\)                      \\ \hline
+			\texttt{STATE\_DOWN\_RESTRICT\_DIV}       & \(b_{\mathrm{next}} \gets b/8\)                                  \\ \hline \hline
+			\multicolumn{2}{|c|}{\textbf{Interpolation}}                                                                 \\ \hline \hline
+			\texttt{STATE\_UP\_INIT}                  & set level, restore data                                          \\ \hline
+			\texttt{STATE\_UP\_EXPAND\_Z}             & \(x_{\mathrm{coarse}} \gets \texttt{expand}(x_{\mathrm{fine}})\) \\ \hline
+			\texttt{STATE\_UP\_BCAST}                 & \(I \gets \texttt{broadcast\_from\_topleft}(x)\)                 \\ \hline \hline
+			\multicolumn{2}{|c|}{\textbf{Error Correction}}                                                              \\ \hline \hline
+			\texttt{STATE\_INTERP\_ADD}               & \(x \gets x_{\mathrm{smooth}} + I\)                              \\ \hline
+			\multicolumn{2}{|c|}{\textbf{Coarse Solver}}                                                                 \\ \hline \hline
+			\texttt{STATE\_COARSE\_SOLVER\_INIT}      & set level                                                        \\ \hline
+			\texttt{STATE\_COARSE\_SOLVER\_APPLY}     & \(Ax\_coarse \gets \texttt{stencil}(A, x\_coarse)\)              \\ \hline
+		\end{tabular}
+	\end{small}
 \end{table}
 \subsection{Performance Models of Key Operators}
 \label{sec:perfmodel}
@@ -526,44 +548,44 @@ Per Luczynski et al., Equation (1) %~\ref{eq:comm_model}
 estimates the number of cycles \(T_l\) at level \(l\) for a given problem size. The model has two terms. In the first term, \(C\) is the largest number of wavelets a PE sends or receives, which is a measure of contention. The second term captures the routing cost: \(E\) is the total number of hops the network needs to route wavelets; \(N\) is the number of links being used (a PE has 5 bidirectional links); and, \(L\) is the largest number of hops a wavelet has to travel.  Thus, the first term reflects whether contention or routing the communication pattern is dominant. In the second term, \(T_R\) is the router-processor latency (multiplied by 2 for sending and receiving data and an additional cycle for storing the received element), and \(D\) is the longest pipeline sequence of PEs that perform operations depending on previous calculations.  Combining the two terms provides a model for communication costs, compute and memory access costs.
 
 \begin{equation}\label{eq:comm_model}
-    T_l = \max \left( C_l, E_l / N_l + L_l \right) + (2 T_R + 1) D_l
+	T_l = \max \left( C_l, E_l / N_l + L_l \right) + (2 T_R + 1) D_l
 \end{equation}
 
 Next, we apply this model for each level of a \(16^3\) sized problem for three levels, as shown in Figure~\ref{fig:Spmv_and_restriction}, with varying number of hops at each level. The data that must be communicated is the pencil resident at each PE and \(C_l = C_{l0}/2^l\), where \(C_{l0}=zDim_0\) and the number of hops %it must be communicated 
 is \(L_l = 2^l\). The number of dependent PEs, \(D_l\), is equal to distance between active PEs, as the stencil pattern sends to only one neighbor in each direction,\(N_l = 4\). Hence, we conclude
 \begin{equation}
-    T_l = \max \left( zDim_0/2^l, C_l*L_l / N_l + L_l \right) + (2 T_R + 1) D_l
-    \label{eq:comm_model_applied}
+	T_l = \max \left( zDim_0/2^l, C_l*L_l / N_l + L_l \right) + (2 T_R + 1) D_l
+	\label{eq:comm_model}
 \end{equation}
 
 Therefore, for the context of this paper, the data that must be communicated is the pencil resident at each PE for a given level, and the number of hops it must be communicated is a function of the level.  For our \textit{strided mapping}, the distance between active PEs at level \(l\) is \(D_l = 2^l\), and the pencil size is \(C_l = \texttt{zDim}_0/2^l\).  Then, \(L_l = 2^l\) hops and \(N_l = 4\) directions (stencil sends to one neighbor per direction). Table~\ref{tab:model_communication_costs} instantiates these terms for a \(512^3\) problem across 9 levels.
 
 
 \begin{table}[t]
-    \centering
-    % \caption{Communication model (Eq.~\ref{eq:comm_model}) for strided mapping: $C_l = \texttt{zDim}_0/2^l$, $L_l = D_l = 2^l$, $N_l = 4$; $\texttt{zDim}_0 = 512$, $T_R = 2$. Cost breakdown: \emph{Comm.} = $\max(C_l, 4 + L_l)$; \emph{Latency} = $(2T_R{+}1)D_l = 5D_l$.}
-    \caption{Communication model (Eq.~\ref{eq:comm_model}) for strided mapping: \(C_l = \texttt{zDim}_0/2^l\), \(L_l = D_l = 2^l\), \(N_l = 4\); \(\texttt{zDim}_0 = 512\), \(T_R = 2\). Cost breakdown: \emph{Latency} = \((2T_R{+}1)D_l = 5D_l\).}
-    \label{tab:comm_model_strided_512}
-    \renewcommand{\arraystretch}{1.1}
-    \setlength{\tabcolsep}{4pt} % Slightly increased spacing since column was removed
-    \begin{small}
-        \begin{tabular}{@{}cccccccc@{}}
-                \toprule
-                \textbf{\(l\)} & \textbf{Grid}    & \(C_l\) & \(L_l\) & \(D_l\) & \begin{tabular}[c]{@{}c@{}}\textbf{Comm.}\\\textbf{cost}\end{tabular} & \begin{tabular}[c]{@{}c@{}}\textbf{Latency}\\\textbf{cost}\end{tabular} & \textbf{Total \(T_l\)} \\
-                \midrule
-                0              & \(512\times512\) & 512     & 1       & 1       & 512                                                                   & 5                                                                       & 517                    \\
-                1              & \(256\times256\) & 256     & 2       & 2       & 256                                                                   & 10                                                                      & 266                    \\
-                2              & \(128\times128\) & 128     & 4       & 4       & 128                                                                   & 20                                                                      & 148                    \\
-                3              & \(64\times64\)   & 64      & 8       & 8       & 64                                                                    & 40                                                                      & 104                    \\
-                4              & \(32\times32\)   & 32      & 16      & 16      & 32                                                                    & 80                                                                      & 112                    \\
-                5              & \(16\times16\)   & 16      & 32      & 32      & 36                                                                    & 160                                                                     & 196                    \\
-                6              & \(8\times8\)     & 8       & 64      & 64      & 68                                                                    & 320                                                                     & 388                    \\
-                7              & \(4\times4\)     & 4       & 128     & 128     & 132                                                                   & 640                                                                     & 772                    \\
-                8              & \(2\times2\)     & 2       & 256     & 256     & 260                                                                   & 1280                                                                    & 1540                   \\
-                \bottomrule
-        \end{tabular}
-    \end{small}
-    \label{tab:model_communication_costs}
+	\centering
+	% \caption{Communication model (Eq.~\ref{eq:comm_model}) for strided mapping: $C_l = \texttt{zDim}_0/2^l$, $L_l = D_l = 2^l$, $N_l = 4$; $\texttt{zDim}_0 = 512$, $T_R = 2$. Cost breakdown: \emph{Comm.} = $\max(C_l, 4 + L_l)$; \emph{Latency} = $(2T_R{+}1)D_l = 5D_l$.}
+	\caption{Communication model (Eq.~\ref{eq:comm_model}) for strided mapping: \(C_l = \texttt{zDim}_0/2^l\), \(L_l = D_l = 2^l\), \(N_l = 4\); \(\texttt{zDim}_0 = 512\), \(T_R = 2\). Cost breakdown: \emph{Latency} = \((2T_R{+}1)D_l = 5D_l\).}
+	\label{tab:comm_model_strided_512}
+	\renewcommand{\arraystretch}{1.1}
+	\setlength{\tabcolsep}{4pt} % Slightly increased spacing since column was removed
+	\begin{small}
+		\begin{tabular}{@{}cccccccc@{}}
+			\toprule
+			\textbf{\(l\)} & \textbf{Grid}    & \(C_l\) & \(L_l\) & \(D_l\) & \begin{tabular}[c]{@{}c@{}}\textbf{Comm.}\\\textbf{cost}\end{tabular} & \begin{tabular}[c]{@{}c@{}}\textbf{Latency}\\\textbf{cost}\end{tabular} & \textbf{Total \(T_l\)} \\
+			\midrule
+			0              & \(512\times512\) & 512     & 1       & 1       & 512                                                                   & 5                                                                       & 517                    \\
+			1              & \(256\times256\) & 256     & 2       & 2       & 256                                                                   & 10                                                                      & 266                    \\
+			2              & \(128\times128\) & 128     & 4       & 4       & 128                                                                   & 20                                                                      & 148                    \\
+			3              & \(64\times64\)   & 64      & 8       & 8       & 64                                                                    & 40                                                                      & 104                    \\
+			4              & \(32\times32\)   & 32      & 16      & 16      & 32                                                                    & 80                                                                      & 112                    \\
+			5              & \(16\times16\)   & 16      & 32      & 32      & 36                                                                    & 160                                                                     & 196                    \\
+			6              & \(8\times8\)     & 8       & 64      & 64      & 68                                                                    & 320                                                                     & 388                    \\
+			7              & \(4\times4\)     & 4       & 128     & 128     & 132                                                                   & 640                                                                     & 772                    \\
+			8              & \(2\times2\)     & 2       & 256     & 256     & 260                                                                   & 1280                                                                    & 1540                   \\
+			\bottomrule
+		\end{tabular}
+	\end{small}
+	\label{tab:model_communication_costs}
 \end{table}
 
 \paragraph{Window-based Restriction:}
@@ -584,7 +606,7 @@ Clearly, W dominates the cost and the total time to restrict the data from the f
 Table~\ref{tab:comm_model_strided_512} exposes a key bottleneck in long-distance communication.  We observe that as the data reduces per PE and distance increases, the communication cost term in our model decreases initially and starts increasing again along with the latency cost growing by a factor of 2.
 In the strided mapping, the latency term
 \begin{equation}\label{equation:latency}
-    LatencyCost = (2T_R + 1)D_l = 5D_l
+	LatencyCost = (2T_R + 1)D_l = 5D_l
 \end{equation}
 dominates the communication term from level 5 (\(D_l\)) in Table~\ref{tab:comm_model_strided_512}; it equals the number of pipeline stages (hops) between active processing elements (PEs). This growth occurs because each hop requires access to the ramp and local memory, which can transfer only one wavelet at a time. As a result, wavelets traveling across multiple hops must repeatedly pass through memory, causing serialization in the pipeline and increasing latency.
 
@@ -593,42 +615,42 @@ that we can substantially reduce this communication and latency
 if we bound the number of memory accesses.  This optimization is possible in the strided approach as we can skip the memory access on inactive PEs, leading to a \(D\_l = 2\) for sender and receiver accesses. Using this optimization, we can significantly speedup the time. We achieve this reduction using hardware resources -- microthreads and queues -- so that the incoming wavelets are forwarded directly to the output queue without intermediate memory accesses. This bypasses the ramp and effectively reduces the costly access so that the latency no longer grows with level. We compare our optimized implementation in Section~\ref{sec:impact-of-optimizations-and-memory-constraints}.
 
 \begin{table}[t]
-    \centering
-    % \caption{Communication model with \textbf{Constant Latency}: $C_l = \texttt{zDim}_0/2^l$, $L_l = 2^l$, $N_l = 4$; $\textbf{D}_l = \mathbf{2}$; $\texttt{zDim}_0 = 512$, $T_R = 2$. Cost breakdown: \emph{Comm.} = $\max(C_l, 4 + L_l)$; \emph{Latency} = $5D_l = 10$.}
-    \caption{Communication model with \textbf{Constant Latency}: \(C_l = \texttt{zDim}_0/2^l\), \(L_l = 2^l\), \(N_l = 4\); \(\textbf{D}_l = \mathbf{2}\); \(\texttt{zDim}_0 = 512\), \(T_R = 2\). Cost breakdown:  \emph{Latency} = \(5D_l = 10\).}
-    \label{tab:comm_model_constant_dl}
-    \renewcommand{\arraystretch}{1.1}
-    \setlength{\tabcolsep}{4pt} % Slightly increased spacing since column was removed
-    \begin{small}
-        \begin{tabular}{@{}cccccccc@{}}
-                \toprule
-                \textbf{\(l\)} & \textbf{Grid}    & \(C_l\) & \(L_l\) & \(D_l\) & \begin{tabular}[c]{@{}c@{}}\textbf{Comm.}\\\textbf{cost}\end{tabular} & \begin{tabular}[c]{@{}c@{}}\textbf{Latency}\\\textbf{cost}\end{tabular} & \textbf{Total \(T_l\)} \\
-                \midrule
-                0              & \(512\times512\) & 512     & 1       & 2       & 512                                                                   & 10                                                                      & 522                    \\
-                1              & \(256\times256\) & 256     & 2       & 2       & 256                                                                   & 10                                                                      & 266                    \\
-                2              & \(128\times128\) & 128     & 4       & 2       & 128                                                                   & 10                                                                      & 138                    \\
-                3              & \(64\times64\)   & 64      & 8       & 2       & 64                                                                    & 10                                                                      & 74                     \\
-                4              & \(32\times32\)   & 32      & 16      & 2       & 32                                                                    & 10                                                                      & 42                     \\
-                5              & \(16\times16\)   & 16      & 32      & 2       & 36                                                                    & 10                                                                      & 46                     \\
-                6              & \(8\times8\)     & 8       & 64      & 2       & 68                                                                    & 10                                                                      & 78                     \\
-                7              & \(4\times4\)     & 4       & 128     & 2       & 132                                                                   & 10                                                                      & 142                    \\
-                8              & \(2\times2\)     & 2       & 256     & 2       & 260                                                                   & 10                                                                      & 270                    \\
-                \bottomrule
-        \end{tabular}
-    \end{small}
+	\centering
+	% \caption{Communication model with \textbf{Constant Latency}: $C_l = \texttt{zDim}_0/2^l$, $L_l = 2^l$, $N_l = 4$; $\textbf{D}_l = \mathbf{2}$; $\texttt{zDim}_0 = 512$, $T_R = 2$. Cost breakdown: \emph{Comm.} = $\max(C_l, 4 + L_l)$; \emph{Latency} = $5D_l = 10$.}
+	\caption{Communication model with \textbf{Constant Latency}: \(C_l = \texttt{zDim}_0/2^l\), \(L_l = 2^l\), \(N_l = 4\); \(\textbf{D}_l = \mathbf{2}\); \(\texttt{zDim}_0 = 512\), \(T_R = 2\). Cost breakdown:  \emph{Latency} = \(5D_l = 10\).}
+	\label{tab:comm_model_constant_dl}
+	\renewcommand{\arraystretch}{1.1}
+	\setlength{\tabcolsep}{4pt} % Slightly increased spacing since column was removed
+	\begin{small}
+		\begin{tabular}{@{}cccccccc@{}}
+			\toprule
+			\textbf{\(l\)} & \textbf{Grid}    & \(C_l\) & \(L_l\) & \(D_l\) & \begin{tabular}[c]{@{}c@{}}\textbf{Comm.}\\\textbf{cost}\end{tabular} & \begin{tabular}[c]{@{}c@{}}\textbf{Latency}\\\textbf{cost}\end{tabular} & \textbf{Total \(T_l\)} \\
+			\midrule
+			0              & \(512\times512\) & 512     & 1       & 2       & 512                                                                   & 10                                                                      & 522                    \\
+			1              & \(256\times256\) & 256     & 2       & 2       & 256                                                                   & 10                                                                      & 266                    \\
+			2              & \(128\times128\) & 128     & 4       & 2       & 128                                                                   & 10                                                                      & 138                    \\
+			3              & \(64\times64\)   & 64      & 8       & 2       & 64                                                                    & 10                                                                      & 74                     \\
+			4              & \(32\times32\)   & 32      & 16      & 2       & 32                                                                    & 10                                                                      & 42                     \\
+			5              & \(16\times16\)   & 16      & 32      & 2       & 36                                                                    & 10                                                                      & 46                     \\
+			6              & \(8\times8\)     & 8       & 64      & 2       & 68                                                                    & 10                                                                      & 78                     \\
+			7              & \(4\times4\)     & 4       & 128     & 2       & 132                                                                   & 10                                                                      & 142                    \\
+			8              & \(2\times2\)     & 2       & 256     & 2       & 260                                                                   & 10                                                                      & 270                    \\
+			\bottomrule
+		\end{tabular}
+	\end{small}
 \end{table}
 
 
 \section{Evaluation}
 
 \begin{comment}
-    {\color{blue}
-        \textbf{Outline:}
-        \begin{enumerate}
-            \item[1.] Missing experiments: Roofline and power draw numbers.
-            \item[2.] Description of figures and tables and cross references<missing>
-        \end{enumerate}
-    }
+	{\color{blue}
+		\textbf{Outline:}
+		\begin{enumerate}
+			\item[1.] Missing experiments: Roofline and power draw numbers.
+			\item[2.] Description of figures and tables and cross references<missing>
+		\end{enumerate}
+	}
 \end{comment}
 
 %Cleaned up to use acronyms already defined.  
@@ -670,8 +692,8 @@ implemented entirely on the device. All experiments solve the constant-coefficie
 %\textcolor{red}{The following paragraph is hard to read -- a lot of detail and formulas inlined into the text.  Perhaps you could put the configuration information into a table?}
 The right hand side of Ax=b is initialized to:
 \begin{center}
-    %$f(x,y,z)=\sin(\pi x)\sin(\pi y)\sin(\pi z)$\\
-    \(b=\sin(\pi x)\sin(\pi y)\sin(\pi z)\)\\
+	%$f(x,y,z)=\sin(\pi x)\sin(\pi y)\sin(\pi z)$\\
+	\(b=\sin(\pi x)\sin(\pi y)\sin(\pi z)\)\\
 \end{center}
 where \(x, y\) and \(z\) are spatial locations.
 The initial solution \(x\) initialized to 10.0, and the stencil coefficients are: \(\alpha = -6.0\), \(\beta = 1.0\). Jacobi relaxation with \(\omega=2/3\) is used as the smoother. The coarsest level goes to a domain size of 2x2, except for shallow V-cycle experiments. Convergence is determined based on the maximum norm of the residual at the finest level, and solver iterations terminate once a prescribed tolerance \textcolor{red}{still true?: (\(\epsilon = 10^{-5}\))} is reached or a maximum number of V-cycles is reached.
@@ -693,10 +715,10 @@ The \(x\)-axis denotes the 2D PE grid size under weak scaling; the \(z\)-dimensi
 % Move this figure here to ensure it appears immediately before the following paragraph,
 % not at the top of the page.
 \begin{figure}[h!]
-    \centering
-    \includegraphics[width=0.95\linewidth]{figures/hpgmg_speedup_barplot_big.pdf}
-    \caption{Speedup comparison between Cerebras CS-3 and NVIDIA GH200 using HPGMG/Glow across various problem sizes. The bar plot shows relative performance (higher is better). The \% increase indicated on top of 6/6/6(Shallow)(purple) is the relative speedup against the 6/6/6(red), }
-    \label{fig:hpgmg-speedup}
+	\centering
+	\includegraphics[width=0.95\linewidth]{figures/hpgmg_speedup_barplot_big.pdf}
+	\caption{Speedup comparison between Cerebras CS-3 and NVIDIA GH200 using HPGMG/Glow across various problem sizes. The bar plot shows relative performance (higher is better). The \% increase indicated on top of 6/6/6(Shallow)(purple) is the relative speedup against the 6/6/6(red), }
+	\label{fig:hpgmg-speedup}
 \end{figure}
 
 %Several trends explain these results. 
@@ -746,10 +768,10 @@ We compare analytical predictions in \ref{tab:model_communication_costs} and Tab
 %We ran the upstream SDK 7-point stencil (hop-based) and saw similar trends with the turning point shifted toward finer levels.
 
 \begin{figure}[h!]
-    \centering
-    \includegraphics[width=\linewidth]{figures/per_operation_timing_512x512x512.png}
-    \caption{Per-operator time per level for one V-cycle on a \(512^3\) problem (GLOW on CS-3). Down and up phases are summed at each level. \(x\)-axis: level 0 (finest) to 8 (coarsest). \(y\)-axis: time (log scale; higher is slower). Config: \(4/4/6\) pre/post/coarse, 9 levels, FP32, 7-point stencil.}
-    \label{fig:per-operation-timing}
+	\centering
+	\includegraphics[width=\linewidth]{figures/per_operation_timing_512x512x512.png}
+	\caption{Per-operator time per level for one V-cycle on a \(512^3\) problem (GLOW on CS-3). Down and up phases are summed at each level. \(x\)-axis: level 0 (finest) to 8 (coarsest). \(y\)-axis: time (log scale; higher is slower). Config: \(4/4/6\) pre/post/coarse, 9 levels, FP32, 7-point stencil.}
+	\label{fig:per-operation-timing}
 \end{figure}
 
 \textbf{Residual.} The residual operator uses the same 7-point stencil as smoothing and follows a similar performance trend. Differences in absolute time come from the absence of multiple smoothing iterations.
@@ -766,29 +788,29 @@ We compare analytical predictions in \ref{tab:model_communication_costs} and Tab
 %     \label{fig:spmv-internal}
 % \end{figure}
 \begin{figure*}[t]
-    \centering
-    \includegraphics[width=\textwidth]{figures/spmv_internal.png}
-    \caption{Internal speedup of smooth on Cerebras CS-3 and NVIDIA GH200 using HPGMG and GLOW across various problem sizes. The bar plot shows relative performance (higher is better).}
-    \label{fig:spmv-internal}
+	\centering
+	\includegraphics[width=\textwidth]{figures/spmv_internal.png}
+	\caption{Internal speedup of smooth on Cerebras CS-3 and NVIDIA GH200 using HPGMG and GLOW across various problem sizes. The bar plot shows relative performance (higher is better).}
+	\label{fig:spmv-internal}
 \end{figure*}
 
 
 % interpolation internal:
 \begin{figure*}[t]
-    \centering
-    \includegraphics[width=\linewidth]{figures/interpolation_internal.png}
-    \caption{Internal speedup of interpolation on Cerebras CS-3 and NVIDIA GH200 using HPGMG/Glow across various problem sizes. The bar plot shows relative performance (higher is better).}
-    \label{fig:interpolation-internal}
+	\centering
+	\includegraphics[width=\linewidth]{figures/interpolation_internal.png}
+	\caption{Internal speedup of interpolation on Cerebras CS-3 and NVIDIA GH200 using HPGMG/Glow across various problem sizes. The bar plot shows relative performance (higher is better).}
+	\label{fig:interpolation-internal}
 \end{figure*}
 
 \textbf{Coarse solver.} The coarse solver applies weighted Jacobi relaxation on the coarsest grid. Its cost is very high compared to fine-level operators and grows with the number of coarse iterations. We showed experiments in Figure~\ref{fig:hpgmg-speedup} with varying coarse iterations, significantly impacting overall performance in deep V-cycles.
 
 % metrics_compare.png
 \begin{figure*}[t]
-    \centering
-    \includegraphics[width=\linewidth]{figures/metrics_comparison_big.pdf}
-    \caption{Performance of HPGMG/Glow on Cerebras CS-3 and NVIDIA GH200 using a \(512^3\) grid with 9 multigrid levels, up to 100 iterations, a convergence tolerance of \(1\times10^{-5}\), \(4/4/6\) pre-, post-, and bottom-smoothing steps, float32 precision, Jacobi relaxation \(\omega=0.6667\), a 7-point stencil with \(\alpha = -6.0\), \(\beta = 1.0\), 16 channels, 256 block size, and a \(762\times1172\) wafer fabric.}
-    \label{fig:metrics-compare}
+	\centering
+	\includegraphics[width=\linewidth]{figures/metrics_comparison_big.pdf}
+	\caption{Performance of HPGMG/Glow on Cerebras CS-3 and NVIDIA GH200 using a \(512^3\) grid with 9 multigrid levels, up to 100 iterations, a convergence tolerance of \(1\times10^{-5}\), \(4/4/6\) pre-, post-, and bottom-smoothing steps, float32 precision, Jacobi relaxation \(\omega=0.6667\), a 7-point stencil with \(\alpha = -6.0\), \(\beta = 1.0\), 16 channels, 256 block size, and a \(762\times1172\) wafer fabric.}
+	\label{fig:metrics-compare}
 \end{figure*}
 
 \subsection{Forwarding Communication Optimization}
@@ -805,17 +827,17 @@ The bottom-right panel of Figure 10 shows the breakdown of memory usage within a
 \textcolor{red}{You should revisit the 512-cubed case needing a different implementation.}
 
 \textcolor{red}{This should be in a Lessons Learned section, probably: These observations highlight an important design trade-off for wafer-scale implementations for multilayered algorithms/applications. %, one such could be CNNs from the AI world. 
-    Future approaches may benefit from hybrid mapping strategies that decouple computation and storage, such as assigning subsets of PEs primarily as memory resources while others focus on computation, or employing more dynamic coloring and routing schemes to reduce code replication and improve memory utilization across levels.}
+	Future approaches may benefit from hybrid mapping strategies that decouple computation and storage, such as assigning subsets of PEs primarily as memory resources while others focus on computation, or employing more dynamic coloring and routing schemes to reduce code replication and improve memory utilization across levels.}
 
 \section{Lessons Learned and Next Steps}
 \textcolor{red}{Grabbed from above:
-    SOME INTRO PARAGRAPH...
-    \paragraph{Further improvements to forwarding optimization.}
-    To further reduce the cost, we believe even more
-    sophisticated techniques to change the routing might be useful, one
-    such is demonstrated by Mathias et al.~\cite{mathias} using control wavelets and runtime coloring reconfiguration.
-    \paragraph{Addressing constrained memory size.}
-    Revisit 512-cubed...Future approaches may benefit from hybrid mapping strategies that decouple computation and storage, such as assigning subsets of PEs primarily as memory resources while others focus on computation, or employing more dynamic coloring and routing schemes to reduce code replication and improve memory utilization across levels.}
+	SOME INTRO PARAGRAPH...
+	\paragraph{Further improvements to forwarding optimization.}
+	To further reduce the cost, we believe even more
+	sophisticated techniques to change the routing might be useful, one
+	such is demonstrated by Mathias et al.~\cite{mathias} using control wavelets and runtime coloring reconfiguration.
+	\paragraph{Addressing constrained memory size.}
+	Revisit 512-cubed...Future approaches may benefit from hybrid mapping strategies that decouple computation and storage, such as assigning subsets of PEs primarily as memory resources while others focus on computation, or employing more dynamic coloring and routing schemes to reduce code replication and improve memory utilization across levels.}
 
 1. Various mapping (???), localized based on application as much as possible, memory constraints.
 2. Conventional distributed mappings,
@@ -824,14 +846,10 @@ The bottom-right panel of Figure 10 shows the breakdown of memory usage within a
 5. Mppaing, memory, distance of communication, convergence(HPC low radix machines for larger distances and cerebras needs to think about it), uniform communication patterns.
 6.
 
-    {\color{blue}
-        We chose to investigate only the V-cycle in this paper, because it is by far the most common multigrid schedule in practice and because our per-level performance analysis lets the reader translate our findings directly to F-, W-, or \(\mu\)-cycle variants. From a computational-efficiency standpoint, all parallel    architectures favour the V-cycle: it hides coarse-grid latency and overheads behind the throughput-limited, bandwidth-bound fine grids. On the WSE, however, this effect is far more pronounced because coarse-grid operations pay a communication cost that grows with level rather than shrinking: the active-PE stride doubles per level, the inter-PE hop distance grows with it, and the network is low-radix, so each SpMV/reduction/broadcast at level \(\ell\) is increasingly latency-dominated. On a \(256^3\) problem implemented using W cycle with 8 levels, and (\(\gamma=2\)) we see the time per 1 cycle increases from 483.1 useconds(V-cycle) to 15,103.9 useconds(W-cycle), which is almost a 31x slowdown for W cycle. W-cycle visits level L exactly \(2^L\) times, accounting for the penalty.
+	{\color{blue}
+		We chose to investigate only the V-cycle in this paper, because it is by far the most common multigrid schedule in practice and because our per-level performance analysis lets the reader translate our findings directly to F-, W-, or \(\mu\)-cycle variants. From a computational-efficiency standpoint, all parallel    architectures favour the V-cycle: it hides coarse-grid latency and overheads behind the throughput-limited, bandwidth-bound fine grids. On the WSE, however, this effect is far more pronounced because coarse-grid operations pay a communication cost that grows with level rather than shrinking: the active-PE stride doubles per level, the inter-PE hop distance grows with it, and the network is low-radix, so each SpMV/reduction/broadcast at level \(\ell\) is increasingly latency-dominated. On a \(256^3\) problem implemented using W cycle with 8 levels, and (\(\gamma=2\)) we see the time per 1 cycle increases from 483.1 useconds(V-cycle) to 15,103.9 useconds(W-cycle), which is almost a 31x slowdown for W cycle. W-cycle visits level L exactly \(2^L\) times, accounting for the penalty.
 
-    }
-    {\color{blue}
-    \textcolor{red}{Summarize what results are in evaluation.  End with GPU performance comparison.}
-    strong/weak scaling behavior.\textcolor{blue}{We can't do a strong scaling as we can't fit > 1 Pencil on 1 PE. It's a weak study paper but we should somewhere talk about this limitation. Which might be a good learning to design a new way of mapping or even for hardware vendors to have say something like a shared tile say across a group of 8 PE. Both learning for hardware vendors or programming abstraction designer (in GPUs we say \texttt{\_\_shared\_\_} or \texttt{\_\_reg\_\_} someone can think like this by annotating a tile 'memorytile' or 'onlycompute' tile, todo: Need to place this at proper location}
-    }
+	}
 \section{Related Work}
 %\paragraph{Stencils and GMG}
 Historically, operations on large structured grids could easily be bound by capacity misses in cache, leading to a variety of studies on blocking and tiling optimizations to improve cache reuse on CPUs%[6, 8, 15, 19, 20, 27, 28].
@@ -858,17 +876,17 @@ network bandwidth.
 %~\cite{Nguyen:2010:BOS:1884643.1884658,Zhou:2012,Yount:2016:YSK:3019129.3019133,Unat2016,Devito}. 
 
 \begin{comment}
-    \paragraph{Wafer-Scale Computing for Scientific Applications}
-    Several studies have ported scientific applications to wafer-scale architectures.
-    (add links)  Purely stencil. Larger applications. Programming stacks.
-    \begin{itemize}
-        \item High-order stencil computations achieving near-perfect weak scaling~\cite{Sai,sai2}.
-        \item Matrix-free finite-volume solvers for subsurface flow.
-        \item Molecular dynamics simulations breaking timescale barriers.
-        \item Monte Carlo particle transport kernels with over 100× GPU speedup.
-        \item Communication collectives (Reduce/AllReduce) optimized for wafer-scale fabrics.
-    \end{itemize}
-    No published work has yet demonstrated GMG on Cerebras, making this study the first exploration.
+	\paragraph{Wafer-Scale Computing for Scientific Applications}
+	Several studies have ported scientific applications to wafer-scale architectures.
+	(add links)  Purely stencil. Larger applications. Programming stacks.
+	\begin{itemize}
+		\item High-order stencil computations achieving near-perfect weak scaling~\cite{Sai,sai2}.
+		\item Matrix-free finite-volume solvers for subsurface flow.
+		\item Molecular dynamics simulations breaking timescale barriers.
+		\item Monte Carlo particle transport kernels with over 100× GPU speedup.
+		\item Communication collectives (Reduce/AllReduce) optimized for wafer-scale fabrics.
+	\end{itemize}
+	No published work has yet demonstrated GMG on Cerebras, making this study the first exploration.
 \end{comment}
 A growing body of work has demonstrated the effectiveness of wafer-scale systems for scientific computing. Early studies showed near-ideal weak scaling for high-order stencil computations and structured finite-difference operators on the WSE~\cite{scalable_25pt_stencil,Rocki,mathias,Sai,sai2}. Subsequent work extended these ideas to matrix-free finite-volume solvers for subsurface flow and seismic applications, highlighting the advantages of spatial data placement and explicit communication control~\cite{sai_fv_arxiv,Ltaief}. Larger application studies include molecular dynamics simulations that overcome traditional timescale barriers~\cite{perez_md_sc24,perez-journal} and Monte Carlo particle transport kernels achieving substantial speedups over GPU-based implementations~\cite{Tramm24,Yoshii26}. Communication-intensive primitives such as reductions and all-reductions have also been studied in isolation, with near-optimal collective implementations demonstrated on wafer-scale fabrics~\cite{luczynski_reduce}.
 
@@ -880,44 +898,44 @@ To the best of our knowledge, no prior work has demonstrated a complete geometri
 
 
 \begin{comment}
-    I am commenting this out -- it breaks the flow, and it will be more work to do this well.
-    \textcolor{blue}{
-        Question: Is it worth to point what's happening in AI world for mapping layers on GPUs/WSE3?  This can connect AI layered mappings on Multigrid and show connection. Discard if not.
-    }
-    %* CNN mapping can be related work/any layered mapping application/algorithm.
-    * CNN mapping can be related work/any layered mapping application/algorithm.
-    * Distributed training of AI models and types of parallelism used - data parallel, model parallel, pipeline parallel, etc.
-    https://towardsdatascience.com/distributed-parallel-training-data-parallelism-and-model-parallelism-ec2d234e3214/
+	I am commenting this out -- it breaks the flow, and it will be more work to do this well.
+	\textcolor{blue}{
+		Question: Is it worth to point what's happening in AI world for mapping layers on GPUs/WSE3?  This can connect AI layered mappings on Multigrid and show connection. Discard if not.
+	}
+	%* CNN mapping can be related work/any layered mapping application/algorithm.
+	* CNN mapping can be related work/any layered mapping application/algorithm.
+	* Distributed training of AI models and types of parallelism used - data parallel, model parallel, pipeline parallel, etc.
+	https://towardsdatascience.com/distributed-parallel-training-data-parallelism-and-model-parallelism-ec2d234e3214/
 \end{comment}
 
 \begin{comment}
-    \section{Lessons Learned}
-    \begin{itemize}
-        \item Stencil-style, matrix-free kernels align best with CS-3; use them when structure allows.
-        \item AMG coarse operators generally require explicit sparse storage; use CSR/block-CSR within a PE and communicate only among nonzero-owning PEs.
-        \item Colors and custom routing schedules are indispensable to avoid contention and ensure determinism.
-        \item Developers must embrace matrix-free, fused-kernel approaches rather than porting sparse matrix libraries directly.
-        \item AMG represents the next step toward evaluating the architecture’s ability to handle irregular, graph-like scientific computations.
-    \end{itemize}
-    \textcolor{blue}{
-        \textbf{Lessons Learned:(dump, maybe not suitable here}
-        * Hardware fast, hard to program.
-        * Programming async and dataflow a new way of thinking compared to GPU(threadbased)
-        * Using AI for non-AI
-        * Tiled baseds hardwares and tiled based IR/Languges.
-        * Not right hardware for some type of applications.
-        * Memory is issue, need a shared + Distributed way to program this machine.
-        * Tooling debugger, profilers essential to have.
-        * shallower V-cycles are better matched to the wafer-scale architecture
-        \subsection*{Key Discussion/Take aways from results:}
-        \begin{itemize}
-            \item We observe the GLOW is compute bound on finer levels and communication bound on coarser levels.
-            \item We observe having deep V cycles versus shallower V cycles yields significantly higher speedups with the cost of increased iterations to reach convergence.
-            \item We think this application might not be a right fit for this architecture, we believe having a scaled out parallelism benefits from this machine rather than a distance dominating.
-            \item We found having locality of data across PEs is the equivalent of data movement cost or cache equivalent costs in GPUs/CPUs. - Rewrite this
-        \end{itemize}
+	\section{Lessons Learned}
+	\begin{itemize}
+		\item Stencil-style, matrix-free kernels align best with CS-3; use them when structure allows.
+		\item AMG coarse operators generally require explicit sparse storage; use CSR/block-CSR within a PE and communicate only among nonzero-owning PEs.
+		\item Colors and custom routing schedules are indispensable to avoid contention and ensure determinism.
+		\item Developers must embrace matrix-free, fused-kernel approaches rather than porting sparse matrix libraries directly.
+		\item AMG represents the next step toward evaluating the architecture’s ability to handle irregular, graph-like scientific computations.
+	\end{itemize}
+	\textcolor{blue}{
+		\textbf{Lessons Learned:(dump, maybe not suitable here}
+		* Hardware fast, hard to program.
+		* Programming async and dataflow a new way of thinking compared to GPU(threadbased)
+		* Using AI for non-AI
+		* Tiled baseds hardwares and tiled based IR/Languges.
+		* Not right hardware for some type of applications.
+		* Memory is issue, need a shared + Distributed way to program this machine.
+		* Tooling debugger, profilers essential to have.
+		* shallower V-cycles are better matched to the wafer-scale architecture
+		\subsection*{Key Discussion/Take aways from results:}
+		\begin{itemize}
+			\item We observe the GLOW is compute bound on finer levels and communication bound on coarser levels.
+			\item We observe having deep V cycles versus shallower V cycles yields significantly higher speedups with the cost of increased iterations to reach convergence.
+			\item We think this application might not be a right fit for this architecture, we believe having a scaled out parallelism benefits from this machine rather than a distance dominating.
+			\item We found having locality of data across PEs is the equivalent of data movement cost or cache equivalent costs in GPUs/CPUs. - Rewrite this
+		\end{itemize}
 
-    }
+	}
 \end{comment}
 \section{Conclusion}
 We presented a mapping of GMG to WSE-3, achieving up to a \(25\times\) speedup over a single node NVIDIA H200 GPU.  As this is, to our knowledge, the first mapping of GMG to WSE-3, this work exposes the challenges of achieving efficiency for layered algorithms, especially when memory size is so constrained. As a result of this work, we make a number of observations regarding mapping multigrid algorithms to tiled architectures.  First, the compute time dominates for the fine grids, but communication time dominates and increases execution time for coarser grids due to the strided communication.  Therefore, shallow versus deep V-cycles or W-cycles are better suited for this architecture. The communication pattern required to skip over inactive PEs was optimized with a forwarding optimization that lead to significant speedups for coarse grids.
@@ -926,43 +944,85 @@ In spite of these challenges, deterministic, high-bandwidth memory access times 
 
 %that balances matrix-free efficiency with matrix-based generality. %Conceptual tables and figures clarify the programming model and architectural trade-offs. Future work will add empirical results, refine placement/routing for coarse levels, and explore portable abstractions for dataflow multigrid. AMG poses both opportunities and challenges on wafer-scale architectures. By reinterpreting its sparse, memory-bound kernels as streaming dataflow, we can leverage the WSE’s massive bandwidth and low-latency interconnect. Our analysis shows potential for compute-bound SpMV, efficient fine-level scaling, and bottlenecks at coarse levels. Future work will complete performance evaluation, explore adaptive coarsening layouts, and develop portable abstractions for AMG on dataflow hardware.
 \begin{comment}
-        \item \textbf{Sparsity representation:} AMG is well suited for unstructured problems,
-              where PDE discretizations\cite{b12} generate sparse matrices with highly irregular patterns.
-              Mapping such irregular sparsity efficiently onto WSE is non-trivial.
+	\section{Notes/thoughts/reviewer questions might be:}
 
-        \item \textbf{Communication bottlenecks:} Although the hardware fabric is low-latency,
-              AMG relies heavily on SpMV kernels. These can become communication-bound as both the
-              problem size and the PE grid size scale up, leading to potential bottlenecks across the wafer.
+	\textbf{Q. Why is AMG not considered a good fit for WSE?}
+	We do not claim that AMG is inherently a poor fit for WSE, but rather that it remains unexplored.
+	The complexity of the algorithm and the nature of sparsity in AMG present several implementation
+	and performance challenges on a wafer-scale engine (WSE):
+	\begin{itemize}
+		\item \textbf{Sparsity representation:} AMG is well suited for unstructured problems,
+		      where PDE discretizations\cite{b12} generate sparse matrices with highly irregular patterns.
+		      Mapping such irregular sparsity efficiently onto WSE is non-trivial.
 
-        \item \textbf{Routing limitations:} On WSE, communication links must pass through intermediate PEs.
-              Skipping over PEs that correspond to zero entries (as might be desirable in sparse operations)
-              is not feasible given hardware constraints.
+		\item \textbf{Communication bottlenecks:} Although the hardware fabric is low-latency,
+		      AMG relies heavily on SpMV kernels. These can become communication-bound as both the
+		      problem size and the PE grid size scale up, leading to potential bottlenecks across the wafer.
 
-        \item \textbf{Sparse matrix mapping challenge:} The problem essentially reduces to mapping a
-              sparse matrix across the wafer. While a local PE submatrix could use formats like BlockCSR
-              to reduce intra-PE operations, the irregular nature of input sparsity remains a major obstacle.
+		\item \textbf{Routing limitations:} On WSE, communication links must pass through intermediate PEs.
+		      Skipping over PEs that correspond to zero entries (as might be desirable in sparse operations)
+		      is not feasible given hardware constraints.
 
-        \item \textbf{Irregular access and communication:} AMG is a general solver, but its irregular
-              communication and data access patterns conflict with the mesh-based organization of WSE.
+		\item \textbf{Sparse matrix mapping challenge:} The problem essentially reduces to mapping a
+		      sparse matrix across the wafer. While a local PE submatrix could use formats like BlockCSR
+		      to reduce intra-PE operations, the irregular nature of input sparsity remains a major obstacle.
 
-        \item \textbf{Open research direction:} Mapping irregular sparsity efficiently on WSE may
-              require revisiting older sparse data structures (previously deemed obsolete) or developing
-              entirely new ones tailored to large-scale, distributed wafer architectures.
-    \end{itemize}
+		\item \textbf{Irregular access and communication:} AMG is a general solver, but its irregular
+		      communication and data access patterns conflict with the mesh-based organization of WSE.
 
-    \textbf{Matrix way partitioning strategy}
-    Instead of giving a processor a full row or column (which would require a lot of memory), checkerboard partitioning divides the sparse matrix into a grid of submatrices. A processor at location (i,j) in your PE grid is responsible for the submatrix Aij and the corresponding parts of the input vector xj and output vector yi.
-    Load Balancing: A simple uniform checkerboard might not work well for an irregular sparse matrix. To ensure even work distribution, you should use graph partitioning algorithms (like those from the Mondriaan or ParMETIS libraries) to cut the matrix into blocks that have roughly the same number of non-zero elements.
-    Memory Efficiency: By distributing the matrix non-zeros and vector elements across a million PEs, the memory requirement per PE becomes minimal. This is the only way to handle a large matrix on hardware with very little memory per processing unit.
-    2. Communication Strategy
-    The SpMV operation on a 2D grid involves two communication phases:
-    Column-wise Communication (Gather): Each processor (i,j) needs its part of the input vector xj. This means that all PEs in a given column of the processor grid must receive the same portion of the input vector. A broadcast or a collective gather operation along the processor columns is ideal for this. The PE that ``owns'' the j-th part of the vector x sends it to all PEs in its column.
-    Row-wise Communication (Accumulation): After each PE computes its partial result (Aijxj), these partial results must be summed up to form the final output vector y. This requires each PE (i,j) to send its partial result to all other PEs in its processor row. The final result yi is the sum of all partial results from the PEs in row i of the processor grid. This is typically done using a reduction or all-reduce operation along the processor rows.
+		\item \textbf{Open research direction:} Mapping irregular sparsity efficiently on WSE may
+		      require revisiting older sparse data structures (previously deemed obsolete) or developing
+		      entirely new ones tailored to large-scale, distributed wafer architectures.
+	\end{itemize}
+
+	\textbf{Matrix way partitioning strategy}
+	Instead of giving a processor a full row or column (which would require a lot of memory), checkerboard partitioning divides the sparse matrix into a grid of submatrices. A processor at location (i,j) in your PE grid is responsible for the submatrix Aij and the corresponding parts of the input vector xj and output vector yi.
+	Load Balancing: A simple uniform checkerboard might not work well for an irregular sparse matrix. To ensure even work distribution, you should use graph partitioning algorithms (like those from the Mondriaan or ParMETIS libraries) to cut the matrix into blocks that have roughly the same number of non-zero elements.
+	Memory Efficiency: By distributing the matrix non-zeros and vector elements across a million PEs, the memory requirement per PE becomes minimal. This is the only way to handle a large matrix on hardware with very little memory per processing unit.
+	2. Communication Strategy
+	The SpMV operation on a 2D grid involves two communication phases:
+	Column-wise Communication (Gather): Each processor (i,j) needs its part of the input vector xj. This means that all PEs in a given column of the processor grid must receive the same portion of the input vector. A broadcast or a collective gather operation along the processor columns is ideal for this. The PE that ``owns'' the j-th part of the vector x sends it to all PEs in its column.
+	Row-wise Communication (Accumulation): After each PE computes its partial result (Aijxj), these partial results must be summed up to form the final output vector y. This requires each PE (i,j) to send its partial result to all other PEs in its processor row. The final result yi is the sum of all partial results from the PEs in row i of the processor grid. This is typically done using a reduction or all-reduce operation along the processor rows.
 \end{comment}
+
+\begin{IEEEkeywords}
+	Spatial dataflow architecture, Geometric multigrid, Wafer-Scale Engine
+\end{IEEEkeywords}
+
 
 
 \section*{References}
-\bibliographystyle{IEEEtran}
-\bibliography{references}
+
+Please number citations consecutively within brackets \cite{b1}. The
+sentence punctuation follows the bracket \cite{b2}. Refer simply to the reference
+number, as in \cite{b3}---do not use ``Ref. \cite{b3}'' or ``reference \cite{b3}'' except at
+the beginning of a sentence: ``Reference \cite{b3} was the first \(\ldots\)''
+
+Number footnotes separately in superscripts. Place the actual footnote at
+the bottom of the column in which it was cited. Do not put footnotes in the
+abstract or reference list. Use letters for table footnotes.
+
+Unless there are six authors or more give all authors' names; do not use
+``et al.''. Papers that have not been published, even if they have been
+submitted for publication, should be cited as ``unpublished'' \cite{b4}. Papers
+that have been accepted for publication should be cited as ``in press'' \cite{b5}.
+Capitalize only the first word in a paper title, except for proper nouns and
+element symbols.
+
+For papers published in translation journals, please give the English
+citation first, followed by the original foreign-language citation \cite{b6}.
+
+\begin{thebibliography}{00}
+	\bibitem{b1} G. Eason, B. Noble, and I. N. Sneddon, ``On certain integrals of Lipschitz-Hankel type involving products of Bessel functions,'' Phil. Trans. Roy. Soc. London, vol. A247, pp. 529--551, April 1955.
+	\bibitem{b2} J. Clerk Maxwell, A Treatise on Electricity and Magnetism, 3rd ed., vol. 2. Oxford: Clarendon, 1892, pp.68--73.
+	\bibitem{b3} I. S. Jacobs and C. P. Bean, ``Fine particles, thin films and exchange anisotropy,'' in Magnetism, vol. III, G. T. Rado and H. Suhl, Eds. New York: Academic, 1963, pp. 271--350.
+	\bibitem{b4} K. Elissa, ``Title of paper if known,'' unpublished.
+	\bibitem{b5} R. Nicole, ``Title of paper with only first word capitalized,'' J. Name Stand. Abbrev., in press.
+	\bibitem{b6} Y. Yorozu, M. Hirano, K. Oka, and Y. Tagawa, ``Electron spectroscopy studies on magneto-optical media and plastic substrate interface,'' IEEE Transl. J. Magn. Japan, vol. 2, pp. 740--741, August 1987 [Digests 9th Annual Conf. Magnetics Japan, p. 301, 1982].
+	\bibitem{b7} M. Young, The Technical Writer's Handbook. Mill Valley, CA: University Science, 1989.
+\end{thebibliography}
 \vspace{12pt}
+\color{red}
+IEEE conference templates contain guidance text for composing and formatting conference papers. Please ensure that all template text is removed from your conference paper prior to submission to the conference. Failure to remove the template text from your paper may result in your paper not being published.
+
 \end{document}

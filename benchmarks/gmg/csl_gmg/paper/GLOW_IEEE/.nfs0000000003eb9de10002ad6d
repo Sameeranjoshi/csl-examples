@@ -160,12 +160,12 @@ asynchronous fine-grained parallelism, but requires the programmer to manage com
 
 \begin{figure*}[t]
     \centering
-    \begin{minipage}[t]{0.49\linewidth}
-    \centering
-            \includegraphics[width=\linewidth]{figures/layouts_vertical.pdf}
-            \caption{Different possible layouts for 3 level GMG layers on WSE3 of size 1172x762. Text in red highlights various challenges of each approach. Our approach falls into the distributed category. }
-            \label{fig:VariousLayouts}
-    \end{minipage}
+    % \begin{minipage}[t]{0.49\linewidth}
+    % \centering
+    %         \includegraphics[width=\linewidth]{figures/layouts_vertical.pdf}
+    %         \caption{Different possible layouts for 3 level GMG layers on WSE3 of size 1172x762. Text in red highlights various challenges of each approach. Our approach falls into the distributed category. }
+    %         \label{fig:VariousLayouts}
+    % \end{minipage}
     \hfill
     \begin{minipage}[t]{0.49\linewidth}
         \includegraphics[width=1\linewidth]{figures/spmp_restriction.pdf}
@@ -310,8 +310,7 @@ their tradeoffs: fully distributed, spatial, and operator pipelined layouts, as
 shown in Figure~\ref{fig:VariousLayouts}. Each approach has tradeoffs
 and implications for memory footprint, data communication distance,
 packing-repacking cost, parallelism, router and coloring code
-complexities, and amount of chip utilization and power consumption.  
-%These are captured in Table~\ref{tab:layout_comparison}.
+complexities, and amount of chip utilization and power consumption.  These are captured in Table~\ref{tab:layout_comparison}.
 With the advent of large-scale spatial-dataflow accelerators, one can
 program the distributed machine as a single device with a single
 programming model. Therefore it amplifies the importance of placement
@@ -424,28 +423,28 @@ The state machine iterates by advancing the states starting from the down cycle.
     2. layout
     3. tasks, data state
 
-    \noindent\textbullet{} The implementation of GMG on WSE-3 requires composing all of the programming model elements described in Section 2.2.3---layout, coloring, routing, tasks, DSDs, and runtime router reconfiguration---into a single coordinated
+    \noindent\textbullet{} The implementation of GMG on WSE-3 requires composing all of the programming model elements described in Section 2.2.3—layout, coloring, routing, tasks, DSDs, and runtime router reconfiguration—into a single coordinated
     program. The full implementation comprises approximately 8,900 lines of CSL device code and 1,800 lines of Python host code. Table~\ref{tab:code_breakdown} summarizes the code organization.
 
-    \noindent\textbullet{} Layout and coloring. The layout module (\texttt{layout\_gmg\_vcycle.csl}, 157 lines) defines a 2D PE grid on the $762\times1172$ WSE-3 fabric. It allocates 9 colors for inter-PE communication---8 for the stencil operator's directional halo
+    \noindent\textbullet{} Layout and coloring. The layout module (layout_gmg_vcycle.csl, 157 lines) defines a 2D PE grid on the 762×1172 WSE-3 fabric. It allocates 9 colors for inter-PE communication—8 for the stencil operator's directional halo
     exchanges (east/west/north/south, send and receive) and 1 for the allreduce used in restriction and convergence checking. It also allocates 8 task IDs: 3 for the stencil's send/receive/compute phases, 4 for allreduce
     stages, and 1 for the V-cycle state machine. These 17 hardware resources must be partitioned without collision across three imported modules (memcpy, stencil, allreduce), each of which has its own internal coloring
-    requirements. The layout then iterates over every PE, generating position-dependent parameters (boundary flags, per-PE stencil routing) and binding them to a single kernel file via \texttt{@set\_tile\_code}.
+    requirements. The layout then iterates over every PE, generating position-dependent parameters (boundary flags, per-PE stencil routing) and binding them to a single kernel file via @set_tile_code.
 
-    \noindent\textbullet{} Routing and forwarding. Static routing is established at compile time: each PE's comptime block configures 16 \texttt{@set\_local\_color\_config} directives that wire input/output queues to the four cardinal directions via the
-    router's RAMP, EAST, WEST, NORTH, and SOUTH ports. For the strided mapping, where active PEs at level $l$ are $2^l$ hops apart, we modified the upstream SDK stencil and allreduce libraries (3,766 lines) to support runtime
-    route reconfiguration. At each level transition, \texttt{setHopBasedParams} recomputes which PEs are active, which are interior forwarders, and adjusts the send/receive patterns accordingly. The forwarding optimization (Section
+    \noindent\textbullet{} Routing and forwarding. Static routing is established at compile time: each PE's comptime block configures 16 @set_local_color_config directives that wire input/output queues to the four cardinal directions via the
+    router's RAMP, EAST, WEST, NORTH, and SOUTH ports. For the strided mapping, where active PEs at level \(l\) are \(2^l\) hops apart, we modified the upstream SDK stencil and allreduce libraries (3,766 lines) to support runtime
+    route reconfiguration. At each level transition, setHopBasedParams recomputes which PEs are active, which are interior forwarders, and adjusts the send/receive patterns accordingly. The forwarding optimization (Section
     3.6) uses hardware queues and microthreads to relay wavelets through inactive PEs directly from input queue to output queue, bypassing the memory ramp entirely.
 
-    \noindent\textbullet{} Kernel and state machine. The V-cycle kernel (\texttt{kernel\_gmg\_vcycle.csl}, 1,103 lines) implements the full multigrid algorithm as an on-device state machine with 28 states. Each GMG operator---smooth, residual, restriction,
-    interpolation, coarse solve, and convergence check---maps to one or more states. Transitions are callback-driven: when an asynchronous stencil or allreduce completes, the library invokes \texttt{f\_callback}, which advances the state
-    variable and reactivates the state machine task via \texttt{@activate}. This design executes the entire V-cycle without returning control to the host between states; the host only intervenes between complete V-cycle iterations to
+    \noindent\textbullet{} Kernel and state machine. The V-cycle kernel (kernel_gmg_vcycle.csl, 1,103 lines) implements the full multigrid algorithm as an on-device state machine with 28 states. Each GMG operator—smooth, residual, restriction,
+    interpolation, coarse solve, and convergence check—maps to one or more states. Transitions are callback-driven: when an asynchronous stencil or allreduce completes, the library invokes f_callback, which advances the state
+    variable and reactivates the state machine task via @activate. This design executes the entire V-cycle without returning control to the host between states; the host only intervenes between complete V-cycle iterations to
     read convergence data.
 
-    \noindent\textbullet{} Data management within 48KB. Each PE stores the solution vector $u$, right-hand side $f$, residual $r$, and stencil output $Au$ for the current level, plus multi-level save arrays (\texttt{save\_u\_smooth}, \texttt{save\_f\_down}) sized by the
-    geometric series $n_z(2 - 2^{1-L})$. All data access uses DSDs (Data Structure Descriptors)---62 DSD operations configure strided memory access patterns for operations like restriction (even/odd z-pairs) and interpolation
-    (element duplication). The stencil communication libraries add four directional buffers of \texttt{BLOCK\_SIZE} each for halo exchange, bringing per-PE data pressure close to the 48KB limit for the largest problem sizes. At $512^3$
-    with 9 levels, the halo block size must be reduced from 256 to fit within memory alongside the program code, which itself occupies approximately 47\% of SRAM.
+    \noindent\textbullet{} Data management within 48KB. Each PE stores the solution vector u, right-hand side f, residual r, and stencil output Au for the current level, plus multi-level save arrays (save_u_smooth, save_f_down) sized by the
+    geometric series \(n_z(2 - 2^{1-L})\). All data access uses DSDs (Data Structure Descriptors)—62 DSD operations configure strided memory access patterns for operations like restriction (even/odd z-pairs) and interpolation
+    (element duplication). The stencil communication libraries add four directional buffers of BLOCK_SIZE each for halo exchange, bringing per-PE data pressure close to the 48KB limit for the largest problem sizes. At 512\(^3\)
+    with 9 levels, the halo block size must be reduced from 256 to fit within memory alongside the program code, which itself occupies approximately 47% of SRAM.
 
 
     The key message this conveys to the reader: implementing a single multigrid V-cycle on WSE-3 requires the programmer to manually manage color/task ID allocation, static and dynamic routing, DSD-based memory access
@@ -533,7 +532,7 @@ Next, we apply this model for each level of a \(16^3\) sized problem for three l
 is \(L_l = 2^l\). The number of dependent PEs, \(D_l\), is equal to distance between active PEs, as the stencil pattern sends to only one neighbor in each direction,\(N_l = 4\). Hence, we conclude
 \begin{equation}
     T_l = \max \left( zDim_0/2^l, C_l*L_l / N_l + L_l \right) + (2 T_R + 1) D_l
-    \label{eq:comm_model_applied}
+    \label{eq:comm_model}
 \end{equation}
 
 Therefore, for the context of this paper, the data that must be communicated is the pencil resident at each PE for a given level, and the number of hops it must be communicated is a function of the level.  For our \textit{strided mapping}, the distance between active PEs at level \(l\) is \(D_l = 2^l\), and the pencil size is \(C_l = \texttt{zDim}_0/2^l\).  Then, \(L_l = 2^l\) hops and \(N_l = 4\) directions (stencil sends to one neighbor per direction). Table~\ref{tab:model_communication_costs} instantiates these terms for a \(512^3\) problem across 9 levels.
@@ -963,6 +962,6 @@ In spite of these challenges, deterministic, high-bandwidth memory access times 
 
 \section*{References}
 \bibliographystyle{IEEEtran}
-\bibliography{references}
+\bibliography{sample-base}
 \vspace{12pt}
 \end{document}
