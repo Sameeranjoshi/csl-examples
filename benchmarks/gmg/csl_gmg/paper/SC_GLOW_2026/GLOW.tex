@@ -40,6 +40,7 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
         This paper presents and evaluates the implications of mapping GMG to the Cerebras Wafer-Scale Engine (WSE), a radically different architectural model~\cite{Cerebras,Lauterbach}. By integrating nearly one million processing elements (PEs) and tens of gigabytes of on-wafer SRAM onto a single wafer-scale chip, the WSE provides single-cycle access to local memory and 21 petabytes-per-second of memory bandwidth, along with 214 petabits-per-second of fabric bandwidth through a 2D mesh interconnect. 
         As a result, algorithms that are typically memory-bound on CPUs and GPUs frequently become compute-bound when ported to the WSE.  Prior work has demonstrated this shift for diverse workloads such as stencil computations~\cite{Sai,sai2,Rocki,scalable_25pt_stencil,mathias}, seismic analysis~\cite{Ltaief}, molecular dynamics~\cite{perez_md_sc24,perez-journal}, and Monte Carlo particle transport kernels~\cite{Tramm24,Yoshii26}.
         In this paper, we present GLOW (Gmg Levels On Wafer).  We build on the lessons from successful use of Cerebras for stencil computations to provide a mapping of an algorithm that is still structured yet significantly more challenging.
+        
         Our paper is centered around an iso-capability (same problem size) study of the WSE (44GB of SRAM) and a GH200 GPU (141GB of HBM DRAM).  We present a dispassionate performance analysis of the WSE-3 focusing on the relevant benefits and pitfalls associated with massive decoupled thread parallelism, and planar network topologies for multi-scale computations.  As compared to a GH200 GPU implementation of the HPGMG benchmark, we achieve significantly improved performance.  At the same time,
         the implementation of GMG must address new challenges on the Cerebras architecture: (1) limitations on problem size that fit on the wafer; (2) relative communication costs growing at deeper levels of the V-Cycle; and, (3) trading off code size and data space in the memory-constrained tile.
         %This fine-grained distributed-memory architecture eliminates traditional cache hierarchies and drastically reduces memory latency both on PE and across PEs.
@@ -60,9 +61,6 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
             \item Extensive performance measurements, including per-operator and per-level cost, along with a comparison with an NVIDIA GH200 running HPGMG that exhibits speedup of up to \(25\times\).
             \item Lessons regarding GMG algorithm configuration suitable for a tiled architecture with limited memory.
         \end{itemize}
-
-        \textcolor{red}{
-        Oscar points out we can talk about the software implementation (3.3?). Mary plans to draft a Lessons Learned section.}
 
     \section{Background}
         This section summarizes the GMG approach and the key aspects of the Cerebras architecture relevant to this study.
@@ -273,27 +271,34 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
             We briefly describe the alternatives here.
 
 
-            \paragraph{\textit{Pipelined Mapping of Operators:}}
+            \paragraph{\textit{Pipelined Mapping of Operators}}
             In an operator-pipelined layout, one can place operators
             along the vertical dimension next to each other. At a finer granularity, the multigrid levels could also be pipelined.
-            A pipelined spatial mapping is useful for data parallel and feedforward kinds of workloads.  For example, Song et al.~\cite{song_ceresz} map to WSE-3 various compression operators in a pipeline{\color{blue}, and Cerebras uses layer pipelining for deep learning training~\cite{cerebras_execution_modes,cerebras_pipeline_dl}}. GMG, however, is ill-suited to a pipelined layout
-            {\color{blue} as the levels have irregular data sizes, dependencies across levels, and multiple iteration loops}.
-            We must load all of initial grid onto the wafer to perform the computation.  Pipelining operators requires storing and communicating intermediate data of the same size. Due to limited on-chip memory, the storage of intermediate data in the finest grid will limit the problem size that can be supported, and will introduce significant
-            communication between operators and layers to reorganize the data.
-            {\color{blue} Furthermore, some layers may become idle, waiting for computationally-expensive layers to finish, causing pipeline bubbles. The operator code must also be duplicated across pipeline stages, reducing PE parallelism.}
+            A pipelined spatial mapping is useful for data parallel and feedforward kinds of workloads.  As examples, mapping to WSE-3 
+            %Song et al.~\cite{song_ceresz} map to WSE-3
+            various compression operators~\cite{song_ceresz} %{\color{blue}, and Cerebras uses layer pipelining for 
+            and deep learning operators for ML training~\cite{cerebras_execution_modes,cerebras_pipeline_dl}. GMG, however, is ill-suited to a pipelined layout as the levels have irregular data sizes, dependences across levels, and multiple iteration loops.
+            \textcolor{red}{I think we could end this paragraph here.  Pipelining is obviously bad, and doesn't need so much convincing. Rest of this paragraph is commented out.}
+            %We must load all of initial grid onto the wafer to perform the computation.  Pipelining operators requires storing and communicating intermediate data of the same size. Due to limited on-chip memory, the storage of intermediate data in the finest grid will limit the problem size that can be supported, and will introduce significant communication between operators and layers to reorganize the data.
+            %{\color{blue} Furthermore, some layers may become idle, waiting for computationally-expensive layers to finish, causing pipeline bubbles. The operator code must also be duplicated across pipeline stages, reducing PE parallelism.}
 
 
-            \paragraph{\textit{Spatial Mapping of Multigrid Levels:}} Suppose that different levels of the multigrid computation utilize adjacent portions of the wafer. {\color{blue} This provides low per-PE memory usage and high stencil locality since neighbors are 1 hop apart. One such approach has been studied for mapping neural networks on WSE in the past~\cite{cerebras_execution_modes,cerebras_pipeline_dl}.} As the finest grid performs the bulk of the computation, most of the wafer will hold the fine grid, and remaining PEs will mostly be idle.  While under-utilization of idle PEs is a concern, the main flaw in this approach, similar to the pipelined strategy, is the significant communication of output/input data between levels
+            \paragraph{\textit{Spatial Mapping of Multigrid Levels}} Suppose that different levels of the multigrid computation utilize adjacent portions of the wafer. 
+            One such approach has been studied for mapping neural networks on WSE in the past~\cite{cerebras_execution_modes,cerebras_pipeline_dl}.  %{\color{blue} This provides low per-PE memory usage and high stencil locality since neighbors are 1 hop apart. MARY: These things haven't been defined yet -- rewrote with more words.
+            The stencils at each level can be highly parallelized given their nearest-neighbor halo exchanges, and the memories can hold the data for a single level.  As the finest grid performs the bulk of the computation, most of the wafer will hold the fine grid, and remaining PEs will mostly be idle.  While under-utilization of idle PEs is a potential concern, the main flaw in this approach %, similar to the pipelined strategy, 
+            is the significant and complex, irregularly-structured communication of data between levels
             at each level transition.
 
             \paragraph{\textit{Distributed Computation Mapping with Spatial Level Mapping}}
             The distributed mapping approach inspired by traditional MPI domain decomposition, superimposes layers on top of each other, such that each PE can perform all the operations.
-            The finest grid level occupies the full region of the wafer.  We call this spatial level mapping because data from coarser levels are either mapped towards one side or towards the center of the wafer. The stencils at each level can be highly parallelized given their nearest neighbor halo exchanges.{\color{blue} REMOVE THIS: "This mapping across the whole wafer also avoids the under-utilization of the other solutions."}
-            This mapping aligns closely with WSE-3's wavelet-triggered dataflow execution model along with static color configurations to overlap communication and computations which can work across layers. Moreover, one can reuse stencil implementations such as~\cite{Rocki,mathias}.  As with the spatial mapping above, the downside of this approach is the significant data communication and packing/unpacking costs as the GMG levels get coarser.
+            The finest grid level occupies the full region of the wafer.  We call this spatial level mapping because data from coarser levels are either mapped towards one side or towards the center of the wafer. The stencils at each level can be highly parallelized given their nearest neighbor halo exchanges.
+            %{\color{blue} REMOVE THIS: "This mapping across the whole wafer also avoids the under-utilization of the other solutions."}
+            This mapping aligns closely with WSE-3's wavelet-triggered dataflow execution model along with static color configurations to overlap communication and computations which can work across layers. %Moreover, one can reuse stencil implementations such as~\cite{Rocki,mathias}.  
+            As with the spatial mapping above, the downside of this approach is the significant and complex, irregularly-structured data communication and packing/unpacking costs between levels.
 
             \paragraph{\textit{Strided Distributed Mapping (this paper)}}
             Multi-grids typically have more compute and data at the finer grids, so solving them fast is important. Also reducing the inter-layer cost is essential. The strided distributed mapping
-            increases the distance between layers by powers of 2. Meaning a PE \(2^l\) hops apart is the grid point for that level \(l\). {\color{blue} This avoids the bulk data movement between levels required by other distributed mappings, at the cost of increasing the halo exchange distance at coarser levels.}
+            increases the distance between layers by powers of 2. Meaning a PE \(2^l\) hops apart is the grid point for that level \(l\). This solution avoids the bulk data movement between levels required by other distributed mappings, at the cost of increasing the halo exchange distance at coarser levels.
             We describe in detail the strided distributed mapping used in this experiment in the remaining subsections.
 
         \subsection{From 3D problem domain to 2D wafer} \label{sec:data_layout}
@@ -669,7 +674,7 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
             % \begin{figure*}[t]
             %     \centering
             %     \includegraphics[width=\linewidth]{figures/metrics_comparison_big.pdf}
-            %     \caption{Performance of HPGMG/Glow on Cerebras CS-3 and NVIDIA GH200 using a \(512^3\) grid with 9 multigrid levels, up to 100 iterations, a convergence tolerance of \(1\times10^{-5}\), \(4/4/6\) pre-, post-, and bottom-smoothing steps, float32 precision, Jacobi relaxation \(\omega=0.6667\), a 7-point stencil with \(\alpha = -6.0\), \(\beta = 1.0\), 16 channels, 256 block size, and a \(762\times1172\) wafer fabric.}
+            %     \caption{Performance of HPGMG/GLOW on Cerebras CS-3 and NVIDIA GH200 using a $512^3$ grid with 9 multigrid levels, up to 100 iterations, a convergence tolerance of $1\times10^{-5}$, $4/4/6$ pre-, post-, and bottom-smoothing steps, float32 precision, Jacobi relaxation $\omega=0.6667$, a 7-point stencil with $\alpha = -6.0$, $\beta = 1.0$, 16 channels, 256 block size, and a $762\times1172$ wafer fabric.}
             %     \label{fig:metrics-compare}
             % \end{figure*}
 
@@ -681,12 +686,8 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
             %our \textcolor{red}{You should have a name for this optimization in the Mapping section, and then you can refer to it by the name.} optimizations 
             in Figure~\ref{fig:metrics-compare}. The forwarding optimization shines as the number of inactive PEs start increasing.  We see almost 8.45\(\times\) speedup over the unoptimized/inactive PE memory accessing implementation. This leads to a 3.94\(\times\) speedup over the whole application shown in the bottom left corner. Compute time reduces since unnecessary computation on inactive PEs is also eliminated.
 
-        \subsection{Memory Constraints: Code vs. Data Tradeoff}
-            The bottom-right panel of Figure 10 shows the breakdown of memory usage within a single processing element (PE), comparing the total available local memory against the size of the binary ELF image loaded on each PE. As shown, the code section alone occupies nearly 47\% of the available 48 KB SRAM and remains constant across multigrid levels. This is largely driven by aggressive function inlining performed by the backend LLVM compiler within the state-machine implementation, as well as the inclusion of stencil and collective-reduction library kernels. In contrast, the data section scales with problem size and the number of multigrid levels, reflecting the storage required for solution vectors, residuals, and intermediate buffers. Under the distributed superimposed mapping strategy adopted in this work, these memory constraints impose a practical limit on scalability. In particular, the fixed code footprint combined with per-level data storage restricts the ability to reduce per-PE data volume, effectively limiting experiments to weak scaling. Moreover, multigrid algorithms inherently require retaining data from finer levels during traversal, further constraining memory reuse under a distributed mapping.
-
-            {\color{blue}
-            Table~\ref{tab:memory_utilization} quantifies this tradeoff across all problem sizes. Code size remains fixed at ${\sim}$23KB (47\%) regardless of problem size. Data grows from 2.9\% at $4^3$ to 50.7\% at $512^3$, where the PE is 98\% full. Wafer utilization ranges from 0.002\% ($4^3$, 16 PEs) to 29.4\% ($512^3$, 262K PEs), showing that even the largest problem we can fit uses less than a third of the wafer.
-
+        \subsection{Memory Constraints: Code vs.\ Data Tradeoff}
+            Table~\ref{tab:memory_utilization} quantifies per-PE memory usage across all problem sizes. The code section occupies a fixed ${\sim}$23KB (47\%) of the 48KB SRAM and almost remains constant across problem sizes, this is driven by aggressive function inlining performed by the backend LLVM compiler as well as the inclusion of stencil and collectives library kernels. The data section, which stores solution vectors, residuals, intermediate buffers, and multi-level save arrays, grows from 2.9\% at $4^3$ to 50.7\% at $512^3$, where the PE reaches 98\% capacity. This fixed code footprint combined with geometrically growing per-level data imposes a practical scalability limit: the $512^3$ problem is the largest that fits. Wafer utilization ranges from 0.002\% ($4^3$) to 29.4\% ($512^3$), showing that even our largest problem uses less than a third of the 893,064 available PEs.
             \begin{table}[t]
                 \caption{Per-PE memory breakdown and wafer utilization across problem sizes (48KB SRAM per PE, 893,064 total PEs).}
                 \label{tab:memory_utilization}
@@ -705,8 +706,35 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
                     $512^3$ & 23,272 (47.3\%) & 24,908 (50.7\%) & 98.0\% & 29.4\%  \\ \hline
                 \end{tabular}
             \end{table}
-            }
 
+        {
+        \subsection{On V, W and F cycles}
+            We chose to investigate only the V-cycle in this paper because it is by far the most common multigrid schedule in practice, and our per-level performance analysis lets the reader translate findings to F-, W-, or $\mu$-cycle variants. From a computational-efficiency standpoint, all parallel architectures favour the V-cycle: it hides coarse-grid latency behind the throughput of fine grids. On the WSE this effect is more pronounced because coarse-grid operations pay a communication cost that grows with level: the active-PE stride doubles per level, the hop distance grows with it, and the low-radix network makes each operation at level $\ell$ increasingly latency-dominated.
+
+            \begin{table}[t]
+                \caption{V-cycle vs.\ W-cycle on $256^3$, 8 levels, 6/6/6 (pre/post/coarse) smoothing, $\gamma=2$. Both converge in 10 iterations.}
+                \label{tab:vcycle_vs_wcycle}
+                \centering
+                \footnotesize
+                \setlength{\tabcolsep}{3pt}
+                \begin{tabular}{|l||r|r|r|} \hline
+                    \textbf{Metric} & \textbf{V-cycle} & \textbf{W-cycle} & \textbf{Ratio} \\ \hline \hline
+                    Avg cycle time ($\mu$s)       &    483.1 & 15,103.9 & 31.3$\times$ \\ \hline
+                    Time to solution ($\mu$s)     &  5,445.6 &151,651.9 & 27.8$\times$ \\ \hline
+                    Convergence rate (dec/iter)    &     1.24 &     1.32 &  1.1$\times$ \\ \hline
+                \end{tabular}
+            \end{table}
+            
+            As shown in Table~\ref{tab:vcycle_vs_wcycle}, the W-cycle is $31.3\times$ slower per 1 cycle and $27.8\times$ slower to solution as it repeatedly pays coarse-level communication penalty. This confirms that deeper cycle schedules are poorly matched to the strided mapping on WSE also supplemented by our shallow cycle experiments.
+        
+        }
+
+        {
+            \subsection{On Higher-Order Stencils}
+            The 7-point constant coefficient stencil is ubiquitous in the computer science performance optimization community. As such, it acts as a necessary first step when analyzing emerging architectures. Sophisticated stencils like 7-point variable coefficient stencils are common in real world applications and 27-point stencils can provide 4th order accuracy, however they might end up with significantly more memory and complicated inter-PE communication patterns. This work uses 7-point constant coefficient stencil which is ubiquitous in computer science performance optimization community. As such, it acts as a necessary first step when analyzing emerging architectures. Given the current state of CSL tooling and library support, a 27-point stencil implementation on WSE is itself a significant contribution as previously highlighted in ~\cite{mathias}.
+        }
+        
+        
         {\color{blue}
         \subsection{Roofline Analysis}
             Figure~\ref{fig:roofline} presents a roofline analysis for a $512^3$ problem with 9 levels using 262,144 active PEs. The left panel shows the per-PE (0,0) performance: finer levels (L0, L1) reach 43\% and 18\% of the 1.75 GFLOP/s per-PE peak respectively, operating in the compute-bound region. As levels coarsen, performance drops and shifts toward the memory/fabric-bound region due to growing communication distance and shrinking local computation. The right panel shows the active-PE system view, where the per-level peak scales with the number of active PEs at each level. L0 achieves 43\% of its 458.8 TFLOP/s system peak. The roofline confirms that GLOW is compute-bound at fine levels and transitions to communication-bound at coarse levels, consistent with our per-operator analysis.TODO: Write methodology, and talk about the table<todo add me>
@@ -786,26 +814,7 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
         5. Mppaing, memory, distance of communication, convergence(HPC low radix machines for larger distances and cerebras needs to think about it), uniform communication patterns.
         6.
 
-        {\color{blue}
-        \paragraph{Why V-cycle.}
-        We chose to investigate only the V-cycle in this paper because it is by far the most common multigrid schedule in practice, and our per-level performance analysis lets the reader translate findings to F-, W-, or $\mu$-cycle variants. From a computational-efficiency standpoint, all parallel architectures favour the V-cycle: it hides coarse-grid latency behind the throughput of fine grids. On the WSE this effect is more pronounced because coarse-grid operations pay a communication cost that grows with level: the active-PE stride doubles per level, the hop distance grows with it, and the low-radix network makes each operation at level $\ell$ increasingly latency-dominated.
 
-        To quantify this, Table~\ref{tab:vcycle_vs_wcycle} compares V-cycle and W-cycle on a $256^3$ problem with 8 levels and 6/6/6 smoothing. Both converge in 10 iterations, but the W-cycle's average cycle time is $31.3\times$ slower because it visits level $L$ exactly $2^L$ times ($\gamma=2$), repeatedly paying the coarse-level communication penalty. The time to solution is $27.8\times$ worse despite a marginally better convergence rate (1.32 vs.\ 1.24 decades/iteration). This confirms that deeper cycle schedules are poorly matched to the strided mapping on WSE.
-
-            \begin{table}[t]
-                \caption{V-cycle vs.\ W-cycle on $256^3$, 8 levels, 6/6/6 smoothing.}
-                \label{tab:vcycle_vs_wcycle}
-                \centering
-                \footnotesize
-                \setlength{\tabcolsep}{3pt}
-                \begin{tabular}{|l||r|r|r|} \hline
-                    \textbf{Metric} & \textbf{V-cycle} & \textbf{W-cycle} & \textbf{Ratio} \\ \hline \hline
-                    Avg cycle time ($\mu$s)       &    483.1 & 15,103.9 & 31.3$\times$ \\ \hline
-                    Time to solution ($\mu$s)     &  5,445.6 &151,651.9 & 27.8$\times$ \\ \hline
-                    Convergence rate (dec/iter)    &     1.24 &     1.32 &  1.1$\times$ \\ \hline
-                \end{tabular}
-            \end{table}
-        }
     \section{Related Work}
         %\paragraph{Stencils and GMG}
         Historically, operations on large structured grids could easily be bound by capacity misses in cache, leading to a variety of studies on blocking and tiling optimizations to improve cache reuse on CPUs%[6, 8, 15, 19, 20, 27, 28].
@@ -935,7 +944,7 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
 \end{comment}
 
 
-\section*{References}
+%\section*{References}
 \bibliographystyle{IEEEtran}
 \bibliography{references}
 \vspace{12pt}
