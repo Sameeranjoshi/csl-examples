@@ -111,125 +111,38 @@ def parse_rho_history(filepath):
     return results
 
 
-def plot_convergence_by_size(all_data, output_dir):
-    """One subplot per grid size, overlaying configs."""
-    # Only plot sizes with interesting data (128+)
-    plot_sizes = ['16x16', '32x32', '64x64', '128x128', '256x256', '512x512']
+def plot_convergence_512(all_data, output_dir):
+    """Single figure: 512³ with 6/6/6 config."""
+    grid = '512x512'
+    config_label = '6/6/6'
+    data = all_data.get(config_label, {}).get(grid)
+    if not data or not data['rho_history']:
+        print(f"No data for {config_label} {grid}")
+        return
 
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-    axes = axes.flatten()
+    rho = data['rho_history']
+    iters = list(range(1, len(rho) + 1))
 
-    for idx, grid in enumerate(plot_sizes):
-        ax = axes[idx]
+    fig, ax = plt.subplots(figsize=(7, 5))
 
-        for config_label, _ in WSE3_CONFIGS:
-            data = all_data.get(config_label, {}).get(grid)
-            if data and data['rho_history']:
-                rho = data['rho_history']
-                iters = list(range(1, len(rho) + 1))
-                ax.semilogy(iters, rho, CONFIG_MARKERS[config_label] + '-',
-                            color=CONFIG_COLORS[config_label],
-                            label=config_label, linewidth=2, markersize=6)
+    ax.semilogy(iters, rho, 'o-', color='#2196F3', linewidth=2.5, markersize=8,
+                markeredgecolor='black', markeredgewidth=1, label=f'{config_label}')
 
-                # Draw tolerance line
-                if data['tolerance']:
-                    ax.axhline(y=data['tolerance'], color='gray', linestyle='--',
-                               linewidth=1, alpha=0.7)
+    if data['tolerance']:
+        ax.axhline(y=data['tolerance'], color='gray', linestyle='--',
+                   linewidth=1.5, alpha=0.7)
+        ax.text(max(iters) * 0.65, data['tolerance'] * 2,
+                f'tolerance = {data["tolerance"]:.1e}', fontsize=11, color='gray')
 
-        ax.set_title(f'{grid} ({grid.split("x")[0]}³ domain)', fontsize=14)
-        ax.set_xlabel('V-Cycle Iteration', fontsize=12)
-        ax.set_ylabel('|rho|_inf (residual)', fontsize=12)
-        ax.grid(alpha=0.3)
-        ax.tick_params(axis='both', labelsize=10)
+    ax.set_title(f'Convergence: 512³ (6/6/6)', fontsize=16, fontweight='bold')
+    ax.set_xlabel('V-Cycle Iteration', fontsize=14)
+    ax.set_ylabel('Residual $||r||_\\infty$', fontsize=14)
+    ax.grid(alpha=0.3)
+    ax.tick_params(axis='both', labelsize=12)
+    ax.set_xticks(iters)
 
-        if idx == 0:
-            ax.legend(fontsize=9, loc='upper right')
-
-    plt.suptitle('Convergence: Residual vs V-Cycle Iteration (WSE-3)', fontsize=16, y=1.01)
     plt.tight_layout()
-    outpath = os.path.join(output_dir, 'convergence_by_size.png')
-    plt.savefig(outpath, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"Saved: {outpath}")
-
-
-def plot_convergence_by_config(all_data, output_dir):
-    """One subplot per config, overlaying grid sizes."""
-    size_colors = {
-        '16x16': '#E91E63', '32x32': '#FF5722', '64x64': '#FF9800',
-        '128x128': '#4CAF50', '256x256': '#2196F3', '512x512': '#673AB7',
-    }
-
-    configs_to_plot = ['6/6/6', '6/6/6(Shallow)', '6/6/100', '4/4/6', '4/4/100']
-    fig, axes = plt.subplots(1, len(configs_to_plot), figsize=(24, 5))
-
-    for idx, config_label in enumerate(configs_to_plot):
-        ax = axes[idx]
-        config_data = all_data.get(config_label, {})
-
-        for grid, color in size_colors.items():
-            data = config_data.get(grid)
-            if data and data['rho_history']:
-                rho = data['rho_history']
-                iters = list(range(1, len(rho) + 1))
-                ax.semilogy(iters, rho, 'o-', color=color, label=grid,
-                            linewidth=2, markersize=5)
-
-        ax.set_title(f'Config: {config_label}', fontsize=14)
-        ax.set_xlabel('V-Cycle Iteration', fontsize=12)
-        if idx == 0:
-            ax.set_ylabel('|rho|_inf (residual)', fontsize=12)
-        ax.grid(alpha=0.3)
-        ax.tick_params(axis='both', labelsize=10)
-        ax.legend(fontsize=8, loc='upper right')
-
-    plt.suptitle('Convergence by Configuration (WSE-3)', fontsize=16, y=1.02)
-    plt.tight_layout()
-    outpath = os.path.join(output_dir, 'convergence_by_config.png')
-    plt.savefig(outpath, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"Saved: {outpath}")
-
-
-def plot_convergence_key_sizes(all_data, output_dir):
-    """Publication-quality single figure: 128³, 256³, 512³ side by side."""
-    key_sizes = ['128x128', '256x256', '512x512']
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5.5))
-
-    for idx, grid in enumerate(key_sizes):
-        ax = axes[idx]
-        for config_label, _ in WSE3_CONFIGS:
-            data = all_data.get(config_label, {}).get(grid)
-            if data and data['rho_history']:
-                rho = data['rho_history']
-                iters = list(range(1, len(rho) + 1))
-                ax.semilogy(iters, rho, CONFIG_MARKERS[config_label] + '-',
-                            color=CONFIG_COLORS[config_label],
-                            label=config_label, linewidth=2.5, markersize=7)
-
-                if data['tolerance']:
-                    ax.axhline(y=data['tolerance'], color='gray', linestyle='--',
-                               linewidth=1, alpha=0.5)
-                    if idx == 0:
-                        ax.text(max(iters) * 0.6, data['tolerance'] * 1.5,
-                                'tolerance', fontsize=10, color='gray')
-
-        size_num = grid.split('x')[0]
-        ax.set_title(f'{size_num}³ domain ({grid} PEs)', fontsize=14)
-        ax.set_xlabel('V-Cycle Iteration', fontsize=13)
-        if idx == 0:
-            ax.set_ylabel('Residual |rho|_inf', fontsize=13)
-        ax.grid(alpha=0.3)
-        ax.tick_params(axis='both', labelsize=11)
-
-    # Single legend on right
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='center right', fontsize=11,
-               bbox_to_anchor=(1.12, 0.5))
-
-    plt.suptitle('Convergence of GMG V-Cycle on WSE-3', fontsize=16)
-    plt.tight_layout(rect=[0, 0, 0.9, 0.95])
-    outpath = os.path.join(output_dir, 'convergence_key_sizes.png')
+    outpath = os.path.join(output_dir, 'convergence.png')
     plt.savefig(outpath, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Saved: {outpath}")
@@ -265,10 +178,8 @@ def main():
     # Print table
     print_convergence_table(all_data)
 
-    # Generate plots
-    plot_convergence_by_size(all_data, SCRIPT_DIR)
-    plot_convergence_by_config(all_data, SCRIPT_DIR)
-    plot_convergence_key_sizes(all_data, SCRIPT_DIR)
+    # Generate plot
+    plot_convergence_512(all_data, SCRIPT_DIR)
 
     print("\nDone!")
 

@@ -19,6 +19,10 @@ CSL_GMG_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 cd "${CSL_GMG_DIR}" || exit 1
 
+# Single log file for all script output
+LOGFILE="${SCRIPT_DIR}/GENERATEFIGURES.log"
+> "${LOGFILE}"  # truncate
+
 # ----------------------------------------------------------------------------
 # Step 1: aggregate response.txt files into all_responses_*.txt
 # ----------------------------------------------------------------------------
@@ -95,16 +99,16 @@ echo "=========================================="
 
 if [ -f out_6_6_6.txt ] && [ -f out_6_6_6_unoptimized.txt ]; then
     echo "  optimized_vs_unoptimized.py -> metrics_comparison.png"
-    python optimized_vs_unoptimized.py out_6_6_6.txt out_6_6_6_unoptimized.txt
+    { echo "--- optimized_vs_unoptimized.py ---"; python optimized_vs_unoptimized.py out_6_6_6.txt out_6_6_6_unoptimized.txt 2>&1; echo; } | tee -a "${LOGFILE}"
 else
     echo "  SKIP optimized_vs_unoptimized.py: missing out_6_6_6*.txt"
 fi
 
-if [ -f h200_vs_cs3_feb7.csv ]; then
+if [ -f h200_vs_cs3_april6.csv ]; then
     echo "  h200_vs_cs3.py -> hpgmg_speedup_barplot.pdf"
-    python h200_vs_cs3.py h200_vs_cs3_feb7.csv
+    { echo "--- h200_vs_cs3.py ---"; python h200_vs_cs3.py h200_vs_cs3_april6.csv 2>&1; echo; } | tee -a "${LOGFILE}"
 else
-    echo "  SKIP h200_vs_cs3.py: missing h200_vs_cs3_feb7.csv"
+    echo "  SKIP h200_vs_cs3.py: missing h200_vs_cs3_april6.csv"
 fi
 
 # ----------------------------------------------------------------------------
@@ -115,21 +119,26 @@ echo "=========================================="
 echo "Step 4: Standalone plots"
 echo "=========================================="
 
-echo "  time_to_solution.py -> time_to_solution.png + iterations_comparison.png"
-python time_to_solution.py 2>&1 | tail -3
+# echo "  time_to_solution.py -> time_to_solution.png + iterations_comparison.png"
+# { echo "--- time_to_solution.py ---"; python time_to_solution.py 2>&1; echo; } | tee -a "${LOGFILE}"
 
 echo "  spider_plot.py -> spider_plot.png"
-python spider_plot.py 2>&1 | tail -3
+{ echo "--- spider_plot.py ---"; python spider_plot.py 2>&1; echo; } | tee -a "${LOGFILE}"
 
-echo "  wafer_utilization.py -> wafer_utilization.png"
-python wafer_utilization.py 2>&1 | tail -2
+# echo "  wafer_utilization.py -> wafer_utilization.png"
+# { echo "--- wafer_utilization.py ---"; python wafer_utilization.py 2>&1; echo; } | tee -a "${LOGFILE}"
 
-echo "  fixed_tolerance_analysis.py -> fixed_tolerance_convergence.png"
-python fixed_tolerance_analysis.py 2>&1 | tail -3
+# echo "  fixed_tolerance_analysis.py -> fixed_tolerance_convergence.png"
+# { echo "--- fixed_tolerance_analysis.py ---"; python fixed_tolerance_analysis.py 2>&1; echo; } | tee -a "${LOGFILE}"
 
-echo "  plot_convergence.py -> convergence_*.png"
-python plot_convergence.py 2>&1 | tail -3
+# echo "  plot_convergence.py -> convergence_*.png"
+# { echo "--- plot_convergence.py ---"; python plot_convergence.py 2>&1; echo; } | tee -a "${LOGFILE}"
 
+echo "  v_vs_w_cycle.py -> W vs V cycle plot"
+{ echo "--- v_vs_w_cycle.py ---"; python v_vs_w_cycle.py 2>&1; echo; } | tee -a "${LOGFILE}"
+
+echo "  tts_comparison.py -> time-per-V-cycle table"
+{ echo "--- tts_comparison.py ---"; python tts_comparison.py 2>&1; echo; } | tee -a "${LOGFILE}"
 # ----------------------------------------------------------------------------
 # Step 5: roofline analysis (one per sample problem)
 # ----------------------------------------------------------------------------
@@ -141,7 +150,7 @@ echo "=========================================="
 ROOFLINE_SAMPLE="${CSL_GMG_DIR}/build/out_dir_S512x_L9_M100_P6_P6_B6/response.txt"
 if [ -s "${ROOFLINE_SAMPLE}" ]; then
     echo "  roofline_analysis.py <- 512³ 6/6/6 -> roofline_plot.png"
-    python roofline_analysis.py "${ROOFLINE_SAMPLE}" > /dev/null
+    { echo "--- roofline_analysis.py ---"; python roofline_analysis.py "${ROOFLINE_SAMPLE}" 2>&1; echo; } | tee -a "${LOGFILE}"
 else
     echo "  SKIP roofline_analysis.py: no 512³ 6/6/6 response.txt"
 fi

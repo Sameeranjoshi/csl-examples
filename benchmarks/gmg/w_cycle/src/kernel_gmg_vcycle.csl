@@ -508,10 +508,20 @@ fn f_residual() void {
     }
 }
 
-// Calculate rho: rho = MAX|r| at level 0 (for convergence checking).
+// Calculate rho: rho = ||r||_inf at level 0 (for convergence checking).
+// Each PE holds a z-pencil; find local max|r[i]| then global max across PEs.
 // This ONLY runs during convergence — counters always go to dummy slots.
 fn f_compute_rho() void {
-        rho[0] = math_lib.abs(r[0]);
+        // Local max over ALL z-elements on this PE
+        rho[0] = 0.0;
+        var i: i16 = 0;
+        while (i < n) : (i += 1) {
+            const abs_val = math_lib.abs(r[i]);
+            if (abs_val > rho[0]) {
+                rho[0] = abs_val;
+            }
+        }
+        // Global max across all PEs
         reduce_mod.setCounterPtrs(&dummy_count_fadd, &dummy_count_fmax, &dummy_count_fmov_zero, &dummy_count_fmov32);
         reduce_mod.allreduce(1, &rho, reduce_mod.TYPE_BINARY_OP.MAX);
 }

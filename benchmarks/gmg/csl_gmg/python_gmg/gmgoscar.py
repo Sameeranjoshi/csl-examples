@@ -164,6 +164,8 @@ class SimpleGMG:
         self.omega = 2.0/3.0  # Jacobi relaxation parameter
 
         self.nrm_b = np.linalg.norm(self.grids[0]['f'].ravel(), np.inf)
+        #print norm
+        print("Norm of B =", self.nrm_b)
         self.abs_tolerance = abs_tolerance
         self.rel_tolerance = self.abs_tolerance * self.nrm_b
         self.ALPHA = -6.0

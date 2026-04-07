@@ -410,18 +410,18 @@ def _setup_paper_style():
     """Configure matplotlib for paper-quality figures."""
     plt.rcParams.update({
         'font.family': 'serif',
-        'font.size': 12,
-        'axes.labelsize': 14,
-        'axes.titlesize': 15,
-        'xtick.labelsize': 11,
-        'ytick.labelsize': 11,
-        'legend.fontsize': 10,
-        'lines.linewidth': 2,
+        'font.size': 14,
+        'axes.labelsize': 15,
+        'axes.titlesize': 16,
+        'xtick.labelsize': 13,
+        'ytick.labelsize': 13,
+        'legend.fontsize': 11,
+        'lines.linewidth': 2.0,
         'axes.linewidth': 1.2,
         'xtick.major.width': 1.0,
         'ytick.major.width': 1.0,
         'xtick.minor.width': 0.6,
-        'ytick.minor.width': 0.6,
+        'ytick.minor.width': 0.8,
         'grid.linewidth': 0.6,
     })
 
@@ -444,31 +444,29 @@ def _draw_roofline_ceiling(ax, peak_flops, mem_bw, label_peak, ai_range,
         ax.loglog(ai_range, fab_ceiling, '-', color='darkorange', linewidth=1, alpha=0.2)
 
 
-def _style_axis(ax, xlabel, ylabel, title, xlim=(0.01, 10), ylim_lo=1e3, ylim_hi=None):
+def _style_axis(ax, xlabel, ylabel, title, xlim=(0.01, 10), ylim_lo=None, ylim_hi=None):
     """Apply consistent styling to a roofline axis."""
-    ax.set_xlabel(xlabel, fontsize=14, fontweight='bold')
-    ax.set_ylabel(ylabel, fontsize=14, fontweight='bold')
-    ax.set_title(title, fontsize=15, fontweight='bold', pad=10)
+    ax.set_xlabel(xlabel, fontsize=15, fontweight='bold')
+    ax.set_ylabel(ylabel, fontsize=15, fontweight='bold')
+    ax.set_title(title, fontsize=16, fontweight='bold', pad=8)
     ax.grid(True, alpha=0.25, which='both', linewidth=0.5)
     ax.grid(True, alpha=0.15, which='minor', linewidth=0.3)
     ax.set_xlim(xlim)
-    if ylim_hi:
+    if ylim_lo is not None and ylim_hi is not None:
         ax.set_ylim(ylim_lo, ylim_hi)
-    ax.tick_params(axis='both', which='major', labelsize=11, width=1.0, length=5)
+    ax.tick_params(axis='both', which='major', labelsize=13, width=1.0, length=5)
     ax.tick_params(axis='both', which='minor', width=0.6, length=3)
 
 
 def plot_roofline(summary, output_dir):
-    """Plot 4-panel roofline for paper.
+    """Plot 2-panel roofline for paper.
 
     (a) Per PE(0,0) across levels. Ceiling = 1 PE peak.
     (b) Active-PE system with per-level ceilings.
-    (c) Full-grid system with fixed ceiling = grid_size^2 PEs.
-    (d) Combined overlay of (a) + (c).
     """
     _setup_paper_style()
-    fig, axes = plt.subplots(2, 2, figsize=(20, 16))
-    fig.subplots_adjust(hspace=0.30, wspace=0.25)
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
+    fig.subplots_adjust(wspace=0.22, left=0.09, right=0.99, top=0.86, bottom=0.15)
 
     sorted_grids = sorted(summary.keys(), key=lambda g: int(g.split('x')[0]))
     largest_grid = sorted_grids[-1] if sorted_grids else None
@@ -489,60 +487,82 @@ def plot_roofline(summary, output_dir):
     fine_peak = fine_pes * PE_PEAK
     fine_bw = fine_pes * PE_MEM_BW
     fine_fab_bw = fine_pes * PE_FABRIC_BW
-    MARKER_SIZE = 12
-    MARKER_EDGE = 1.5
+    MARKER_SIZE = 9
+    MARKER_EDGE = 1.2
+
+    # Compute y-axis lower bound from data: one decade below the weakest level
+    pe_perfs = [ld['achieved_vcycle'] for ld in levels if ld['achieved_vcycle'] > 0]
+    min_pe_perf = min(pe_perfs) if pe_perfs else 1e3
+    pe_ylim_lo = 10 ** (np.floor(np.log10(min_pe_perf)) - 1)
+
+    sys_perfs = []
+    for ld in levels:
+        active = ld['active_pes']
+        vcycle_s = ld['vcycle_us'] * 1e-6 if ld.get('vcycle_us', 0) > 0 else 0
+        sp = (ld['flops'] * active) / vcycle_s if vcycle_s > 0 else 0
+        if sp > 0:
+            sys_perfs.append(sp)
+    min_sys_perf = min(sys_perfs) if sys_perfs else 1e3
+    sys_ylim_lo = 10 ** (np.floor(np.log10(min_sys_perf)) - 1)
+
+    # Config text (top center)
+    cfg_text = f"{grid_size}\u00b3  |  {n_levels} levels  |  {fine_pes:,} PEs"
+    fig.text(0.5, 0.96, cfg_text, ha='center', va='top', fontsize=13,
+             fontstyle='italic', color='#333333')
 
     # ===================================================================
     # Panel (a): Per PE(0,0) — across levels
     # ===================================================================
-    ax1 = axes[0, 0]
+    ax1 = axes[0]
     _draw_roofline_ceiling(ax1, PE_PEAK, PE_MEM_BW,
                            f'{PE_PEAK_GFLOPS} GFLOP/s', ai_range,
                            fabric_bw=PE_FABRIC_BW)
 
     for i, (ld, color) in enumerate(zip(levels, colors_level)):
-        perf = ld['achieved_vcycle']  # V-cycle only (no convergence overhead)
+        perf = ld['achieved_vcycle']
         pct = 100 * perf / PE_PEAK if perf > 0 else 0
         if perf > 0 and ld['ai'] > 0:
             # Memory AI dot (square)
             ax1.plot(ld['ai'], perf, 's', color=color, markersize=MARKER_SIZE,
                      markeredgecolor='black', markeredgewidth=MARKER_EDGE, zorder=5)
-            x_off = 14 if i % 2 == 0 else -105
-            ax1.annotate(f"L{ld['level']} nz={ld['nz']} ({pct:.1f}%)",
+            # Alternate labels left/right to avoid vertical overlap
+            if i % 2 == 0:
+                x_off, ha = (16, 'left')
+            else:
+                x_off, ha = (-16, 'right')
+            ax1.annotate(f"L{ld['level']} ({pct:.0f}%)",
                          (ld['ai'], perf),
-                         textcoords="offset points", xytext=(x_off, 0), fontsize=9,
-                         color=color, fontweight='bold', va='center')
-            # Fabric AI dot (circle) — same achieved FLOP/s, different AI
+                         textcoords="offset points", xytext=(x_off, 0), fontsize=10,
+                         color=color, fontweight='bold', va='center', ha=ha)
+            # Fabric AI dot (circle)
             fab_ai = ld.get('fabric_ai', 0)
             if fab_ai > 0:
                 ax1.plot(fab_ai, perf, 'o', color=color, markersize=MARKER_SIZE - 2,
                          markeredgecolor='black', markeredgewidth=MARKER_EDGE, zorder=5,
                          alpha=0.8)
 
-    # Shape legend
     ax1.plot([], [], 's', color='gray', markersize=8, markeredgecolor='black', label='Memory AI')
     ax1.plot([], [], 'o', color='gray', markersize=8, markeredgecolor='black', label='Fabric AI')
-    ax1.legend(fontsize=9, loc='lower right', framealpha=0.9)
+    ax1.legend(fontsize=11, loc='lower right', framealpha=0.9)
     _style_axis(ax1, 'Arithmetic Intensity (FLOP/Byte)', 'Performance (FLOP/s)',
-                f'(a) Per PE(0,0): {largest_grid}', ylim_hi=PE_PEAK * 10)
+                f'(a) Per PE(0,0)',
+                ylim_lo=pe_ylim_lo, ylim_hi=PE_PEAK * 10)
 
     # ===================================================================
     # Panel (b): Active-PE system — per-level ceilings
     # ===================================================================
-    ax2 = axes[0, 1]
+    ax2 = axes[1]
 
     for i, (ld, color) in enumerate(zip(levels, colors_level)):
         active = ld['active_pes']
         active_peak = active * PE_PEAK
         active_bw = active * PE_MEM_BW
 
-        # Solid roofline ceiling per level
         level_roofline = np.minimum(active_bw * ai_range,
                                     np.full_like(ai_range, active_peak))
         ax2.loglog(ai_range, level_roofline, '-', color=color,
                    linewidth=2.5, alpha=0.75)
 
-        # System achieved (V-cycle only)
         sys_flops = ld['flops'] * active
         sys_mem = ld['mem'] * active
         sys_ai = sys_flops / sys_mem if sys_mem > 0 else 0
@@ -554,115 +574,17 @@ def plot_roofline(summary, output_dir):
         if sys_perf > 0 and sys_ai > 0:
             ax2.plot(sys_ai, sys_perf, 's', color=color, markersize=MARKER_SIZE,
                      markeredgecolor='black', markeredgewidth=MARKER_EDGE, zorder=5)
-            x_off = 14 if i % 2 == 0 else -155
-            ax2.annotate(f"L{ld['level']}  {active:,} PEs  pk={peak_str}  ({pct:.1f}%)",
+            ax2.annotate(f"L{ld['level']}  pk={peak_str}  ({pct:.0f}%)",
                          (sys_ai, sys_perf),
-                         textcoords="offset points", xytext=(x_off, 0), fontsize=8,
+                         textcoords="offset points", xytext=(12, 0), fontsize=10,
                          color=color, fontweight='bold', va='center',
                          bbox=dict(boxstyle='round,pad=0.15', facecolor='white',
                                    edgecolor='none', alpha=0.85),
                          zorder=6)
 
-    _style_axis(ax2, 'Arithmetic Intensity (FLOP/Byte)', 'Performance (FLOP/s)',
-                f'(b) Active-PE System (per-level peak): {largest_grid}',
-                ylim_hi=fine_peak * 10)
-
-    # ===================================================================
-    # Panel (c): Full-grid system — fixed ceiling
-    # ===================================================================
-    ax3 = axes[1, 0]
-    _draw_roofline_ceiling(ax3, fine_peak, fine_bw,
-                           f'{fine_pes:,} PEs = {fine_peak/1e12:.1f} TFLOP/s', ai_range,
-                           fabric_bw=fine_fab_bw)
-
-    for i, (ld, color) in enumerate(zip(levels, colors_level)):
-        active = ld['active_pes']
-        sys_flops = ld['flops'] * active
-        sys_mem = ld['mem'] * active
-        sys_ai = sys_flops / sys_mem if sys_mem > 0 else 0
-        sys_fab = ld.get('fabric_bytes', 0) * active
-        sys_fab_ai = sys_flops / sys_fab if sys_fab > 0 else 0
-        vcycle_s = ld['vcycle_us'] * 1e-6 if ld.get('vcycle_us', 0) > 0 else 0
-        sys_perf = sys_flops / vcycle_s if vcycle_s > 0 else 0
-        pct = 100 * sys_perf / fine_peak if fine_peak > 0 and sys_perf > 0 else 0
-
-        if sys_perf > 0 and sys_ai > 0:
-            # Memory AI dot
-            ax3.plot(sys_ai, sys_perf, 's', color=color, markersize=MARKER_SIZE,
-                     markeredgecolor='black', markeredgewidth=MARKER_EDGE, zorder=5)
-            x_off = 14 if i % 2 == 0 else -120
-            ax3.annotate(f"L{ld['level']}  {active:,} PEs  ({pct:.1f}%)",
-                         (sys_ai, sys_perf),
-                         textcoords="offset points", xytext=(x_off, 0), fontsize=9,
-                         color=color, fontweight='bold', va='center')
-            # Fabric AI dot
-            if sys_fab_ai > 0:
-                ax3.plot(sys_fab_ai, sys_perf, 'o', color=color, markersize=MARKER_SIZE - 2,
-                         markeredgecolor='black', markeredgewidth=MARKER_EDGE, zorder=5,
-                         alpha=0.8)
-
-    ax3.plot([], [], 's', color='gray', markersize=8, markeredgecolor='black', label='Memory AI')
-    ax3.plot([], [], 'o', color='gray', markersize=8, markeredgecolor='black', label='Fabric AI')
-    ax3.legend(fontsize=9, loc='lower right', framealpha=0.9)
-    _style_axis(ax3, 'Arithmetic Intensity (FLOP/Byte)', 'Performance (FLOP/s)',
-                f'(c) Full-Grid System (fixed peak): {largest_grid}',
-                ylim_hi=fine_peak * 10)
-
-    # ===================================================================
-    # Panel (d): Combined — PE(0,0) + Full-grid system
-    # ===================================================================
-    ax4 = axes[1, 1]
-
-    # PE ceiling (solid)
-    pe_roofline = np.minimum(PE_MEM_BW * ai_range, np.full_like(ai_range, PE_PEAK))
-    ax4.loglog(ai_range, pe_roofline, 'k-', linewidth=3,
-               label=f'1-PE peak ({PE_PEAK_GFLOPS} GFLOP/s)')
-
-    # Full-grid ceiling (dashed)
-    fg_roofline = np.minimum(fine_bw * ai_range, np.full_like(ai_range, fine_peak))
-    ax4.loglog(ai_range, fg_roofline, 'k--', linewidth=2, alpha=0.5,
-               label=f'{fine_pes:,}-PE peak ({fine_peak/1e12:.1f} TFLOP/s)')
-
-    for i, (ld, color) in enumerate(zip(levels, colors_level)):
-        active = ld['active_pes']
-        pe_perf = ld['achieved_vcycle']  # V-cycle only
-        pe_ai = ld['ai']
-        sys_flops = ld['flops'] * active
-        sys_mem = ld['mem'] * active
-        sys_ai = sys_flops / sys_mem if sys_mem > 0 else 0
-        vcycle_s = ld['vcycle_us'] * 1e-6 if ld.get('vcycle_us', 0) > 0 else 0
-        sys_perf = sys_flops / vcycle_s if vcycle_s > 0 else 0
-
-        if pe_perf > 0 and pe_ai > 0:
-            ax4.plot(pe_ai, pe_perf, 's', color=color, markersize=10,
-                     markeredgecolor='black', markeredgewidth=MARKER_EDGE, zorder=5)
-        if sys_perf > 0 and sys_ai > 0:
-            ax4.plot(sys_ai, sys_perf, 'D', color=color, markersize=10,
-                     markeredgecolor='black', markeredgewidth=MARKER_EDGE, zorder=5)
-
-        # Label select levels to avoid clutter
-        if ld['level'] in [0, 2, 5, 7]:
-            if pe_perf > 0:
-                ax4.annotate(f"L{ld['level']}",
-                             (pe_ai, pe_perf),
-                             textcoords="offset points", xytext=(10, 5), fontsize=9,
-                             color=color, fontweight='bold')
-            if sys_perf > 0:
-                ax4.annotate(f"L{ld['level']}",
-                             (sys_ai, sys_perf),
-                             textcoords="offset points", xytext=(10, -8), fontsize=9,
-                             color=color, fontweight='bold')
-
-    # Shape legend
-    ax4.plot([], [], 's', color='gray', markersize=10, markeredgecolor='black',
-             markeredgewidth=MARKER_EDGE, label='PE(0,0)')
-    ax4.plot([], [], 'D', color='gray', markersize=10, markeredgecolor='black',
-             markeredgewidth=MARKER_EDGE, label='Full-grid system')
-
-    ax4.legend(fontsize=9, loc='lower right', framealpha=0.9, ncol=2)
-    _style_axis(ax4, 'Arithmetic Intensity (FLOP/Byte)', 'Performance (FLOP/s)',
-                f'(d) Combined (a)+(c): {largest_grid}',
-                ylim_hi=fine_peak * 10)
+    _style_axis(ax2, 'Arithmetic Intensity (FLOP/Byte)', '',
+                f'(b) Active-PE System (per-level peak)',
+                ylim_lo=sys_ylim_lo, ylim_hi=fine_peak * 10)
 
     outpath = os.path.join(output_dir, 'roofline_plot.png')
     plt.savefig(outpath, dpi=300, bbox_inches='tight')
