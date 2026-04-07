@@ -154,21 +154,19 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
                 %\textcolor{red}{I commented out most of the paragraph that is supposed to connect to GMG, as it does not currently do that.  But I like the suggestion below of a small code example so I left the first sentence.  It could also be deleted.}
                 % %\textcolor{green}{TODO: I have idea of a figure with 3 boxes, python, kernel csl, layout csl side by side a small minimal code example?}
 
-                \begin{figure*}[t]
+                \begin{figure}[t]
                     \centering
-                    \begin{minipage}[t]{0.49\linewidth}
-                        \centering
-                        \includegraphics[width=\linewidth]{figures/layouts_vertical.pdf}
-                        \caption{Different possible layouts for 3 level GMG layers on WSE3 of size 1172x762. Text in red highlights various challenges of each approach. Our approach falls into the distributed category. }
-                        \label{fig:VariousLayouts}
-                    \end{minipage}
-                    \hfill
-                    \begin{minipage}[t]{0.49\linewidth}
-                        \includegraphics[width=1\linewidth]{figures/spmp_restriction.pdf}
-                        \caption{Top: Stencil Operator on WSE-3 2D grid for a \(8^3\) problem with 3 levels. The Highlighted nodes are the Active PEs and remaining Inactive PEs. The Hop distance differs as one keeps going down the levels and the SpMV exchanges halo regions H hops apart }
-                        \label{fig:Spmv_and_restriction}
-                    \end{minipage}
-                \end{figure*}
+                    \includegraphics[width=0.9\linewidth]{figures/layouts_vertical.pdf}
+                    \caption{Different possible layouts for 3 level GMG layers on WSE3 of size 1172x762. Text in red highlights various challenges of each approach. Our approach falls into the distributed category. }
+                    \label{fig:VariousLayouts}
+                \end{figure}
+
+                \begin{figure}[t]
+                    \centering
+                    \includegraphics[width=0.95\linewidth]{figures/spmp_restriction.pdf}
+                    \caption{Top: Stencil Operator on WSE-3 2D grid for a \(8^3\) problem with 3 levels. The Highlighted nodes are the Active PEs and remaining Inactive PEs. The Hop distance differs as one keeps going down the levels and the SpMV exchanges halo regions H hops apart }
+                    \label{fig:Spmv_and_restriction}
+                \end{figure}
 
 \begin{comment}
                     \begin{table*}[t]
@@ -270,129 +268,33 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
         We describe the layout of the multi-grid data in Section~\ref{sec:data_layout}. %We describe the implementations of the operators, and discuss optimization opportunities.  
         Task activation is managed with a State Machine, as described in Section~\ref{sec:statemachine}.  The design of key operators and a model of their communication are presented in Section~\ref{sec:perfmodel}.  We conclude with Section~\ref{sec:forwarding} by describing a forwarding optimization that optimizes the communication of data by bypassing the memory of nodes that do not participate in the communication.
 
-        \subsection{Alternate Section 3.1: Computation Placement}
-            \textcolor{red}{I propose we use only text to describe alternatives that we found suboptimal, and eliminate all but the bottom row of Figure 3 and also eliminate Table 1 (Table 1 is now enclosed in comment environment).  Here is my attempt at a shortened text.}
-            Mapping different multigrid levels onto a spatial accelerator with thousands of independent PEs introduces an opportunity for spatial placement of operators and levels across the wafer.  We considered a number of alternative designs, some placing different operators in different areas of the wafer, and others spatially mapping the levels of the V-cycle.
+        \subsection{Alternate Section 3.1: Computation Placement({\color{blue} Name is not convincing})} \label{sec:mapping_alternatives}
+            Mapping different multigrid levels onto a spatial accelerator with thousands of independent PEs introduces an opportunity for spatial placement of operators and levels across the wafer. {\color{blue} Along with domain (data) sharding, placement and routing amongst levels.} We considered a number of alternative designs, some placing different operators in different areas of the wafer, and others spatially mapping the levels of the V-cycle.
             We briefly describe the alternatives here.
-
-
-
 
 
             \paragraph{\textit{Pipelined Mapping of Operators:}}
             In an operator-pipelined layout, one can place operators
             along the vertical dimension next to each other. At a finer granularity, the multigrid levels could also be pipelined.
-            A pipelined spatial mapping is useful for data parallel and feedforward kinds of workloads.  For example, Song et al.~\cite{song_ceresz} map to CSE-3 various compression operators in a pipeline. \textcolor{red}{And isn't there a deep learning reference?} \textcolor{blue}{https://training-api.cerebras.ai/en/rel-2.3.1/original/cerebras-basics/cerebras-execution-modes.html and https://dl.acm.org/doi/10.1145/3372780.3380846 how about these? } GMG, however, is ill-suited to a pipelined layout.  We must load all of initial grid onto the wafer to perform the computation.  Pipelining operators requires storing and communicating intermediate data of the same size. Due to limited on-chip memory, the storage of intermediate data in the finest grid will limit the problem size that can be supported, and will introduce significant
+            A pipelined spatial mapping is useful for data parallel and feedforward kinds of workloads.  For example, Song et al.~\cite{song_ceresz} map to WSE-3 various compression operators in a pipeline{\color{blue}, and Cerebras uses layer pipelining for deep learning training~\cite{cerebras_execution_modes,cerebras_pipeline_dl}}. GMG, however, is ill-suited to a pipelined layout
+            {\color{blue} as the levels have irregular data sizes, dependencies across levels, and multiple iteration loops}.
+            We must load all of initial grid onto the wafer to perform the computation.  Pipelining operators requires storing and communicating intermediate data of the same size. Due to limited on-chip memory, the storage of intermediate data in the finest grid will limit the problem size that can be supported, and will introduce significant
             communication between operators and layers to reorganize the data.
+            {\color{blue} Furthermore, some layers may become idle, waiting for computationally-expensive layers to finish, causing pipeline bubbles. The operator code must also be duplicated across pipeline stages, reducing PE parallelism.}
 
 
-            \paragraph{\textit{Spatial Mapping of Multigrid Levels:}} Suppose that different levels of the multigrid computation utilize adjacent portions of the wafer.  As the finest grid performs the bulk of the computation, most of the wafer will hold the fine grid, and remaining PEs will mostly be idle.  While under-utilization of idle PEs is a concern, the main flaw in this approach, similar to the pipelined strategy, is the significant communication of output/input data between levels
+            \paragraph{\textit{Spatial Mapping of Multigrid Levels:}} Suppose that different levels of the multigrid computation utilize adjacent portions of the wafer. {\color{blue} This provides low per-PE memory usage and high stencil locality since neighbors are 1 hop apart. One such approach has been studied for mapping neural networks on WSE in the past~\cite{cerebras_execution_modes,cerebras_pipeline_dl}.} As the finest grid performs the bulk of the computation, most of the wafer will hold the fine grid, and remaining PEs will mostly be idle.  While under-utilization of idle PEs is a concern, the main flaw in this approach, similar to the pipelined strategy, is the significant communication of output/input data between levels
             at each level transition.
 
             \paragraph{\textit{Distributed Computation Mapping with Spatial Level Mapping}}
             The distributed mapping approach inspired by traditional MPI domain decomposition, superimposes layers on top of each other, such that each PE can perform all the operations.
-            The finest grid level occupies the full region of the wafer.  We call this spatial level mapping because data from coarser levels are either mapped towards one side or towards the center of the wafer. The stencils at each level can be highly parallelized given their nearest neighbor halo exchanges. This mapping across the whole wafer also avoids the under-utilization of the other solutions.  This mapping aligns closely with WSE-3's wavelet-triggered dataflow execution model along with static color configurations to overlap communication and computations which can work across layers. Moreover, one can reuse stencil implementations such as~\cite{Rocki,mathias}.  As with the spatial mapping above, the downside of this approach is the significant data communication and packing/unpacking costs as the GMG levels get coarser.
+            The finest grid level occupies the full region of the wafer.  We call this spatial level mapping because data from coarser levels are either mapped towards one side or towards the center of the wafer. The stencils at each level can be highly parallelized given their nearest neighbor halo exchanges.{\color{blue} REMOVE THIS: "This mapping across the whole wafer also avoids the under-utilization of the other solutions."}
+            This mapping aligns closely with WSE-3's wavelet-triggered dataflow execution model along with static color configurations to overlap communication and computations which can work across layers. Moreover, one can reuse stencil implementations such as~\cite{Rocki,mathias}.  As with the spatial mapping above, the downside of this approach is the significant data communication and packing/unpacking costs as the GMG levels get coarser.
 
             \paragraph{\textit{Strided Distributed Mapping (this paper)}}
             Multi-grids typically have more compute and data at the finer grids, so solving them fast is important. Also reducing the inter-layer cost is essential. The strided distributed mapping
-            increases the distance between layers by powers of 2. Meaning a PE \(2^l\) hops apart is the grid point for that level \(l\). This reduces the inter-layer communication cost as compared to the two previous distributed mappings as the distance between layers increases.
+            increases the distance between layers by powers of 2. Meaning a PE \(2^l\) hops apart is the grid point for that level \(l\). {\color{blue} This avoids the bulk data movement between levels required by other distributed mappings, at the cost of increasing the halo exchange distance at coarser levels.}
             We describe in detail the strided distributed mapping used in this experiment in the remaining subsections.
-
-        \subsection{Alternative approaches for level placement}
-            \label{sec:mapping_alternatives}
-            Mapping different multigrid levels onto a spatial accelerator with thousands of independent PEs introduces an interesting design challenge. In addition to domain (i.e., data) partitioning, one has to also perform spatial partitioning and layout of the computation (operators and levels), and routing of data amongst levels. GMG's V-cycle poses unique challenges as the levels have irregular data sizes, and there are data dependences across levels in the iterative algorithm. All of these factors must be considered to arrive at the GMG mapping strategy.
-
-            In this subsection, we discuss different level placement strategies and
-            their tradeoffs: fully distributed, spatial, and operator pipelined layouts, as
-            shown in Figure~\ref{fig:VariousLayouts}. Each approach has tradeoffs
-            and implications for memory footprint, data communication distance,
-            packing-repacking cost, parallelism, router and coloring code
-            complexities, and amount of chip utilization and power consumption.  
-            %These are captured in Table~\ref{tab:layout_comparison}.
-            With the advent of large-scale spatial-dataflow accelerators, one can
-            program the distributed machine as a single device with a single
-            programming model. Therefore it amplifies the importance of placement
-            as routing and communication is directly tied to layout and resulting
-            performance.
-
-\begin{comment}
-                % Compact summary of inter- and intra-level distances for key layout strategies:
-                \begin{table}[h]
-                \caption{Inter- and intra-level communication distance \textcolor{red}{\(D_l\)??? -- need to connect to equation 1 terms} for different layout strategies. We assume the intra level distance is the stencil halo exchange neighbor distance and the inter level distance is the maximum distance required between the two levels.}
-                \centering
-                \renewcommand{\arraystretch}{1}
-                \setlength{\tabcolsep}{5pt}
-                \begin{tabular}{lcc}
-                \toprule
-                \textbf{Layout}      & \textbf{Inter-level}  & \textbf{Intar-level} \\
-                \midrule
-                Spatial              & \(nz_l\) + \(nz_l\)/2 & 1                    \\
-                Left-skew-overlapped & \(nz_l\)              & 1                    \\
-                Centered-overlapped  & \(nz_l\)/2            & 1                    \\
-                Strided (this paper) & 2*\(2^l\)             & \(2^l\)              \\
-                \bottomrule
-                \end{tabular}
-                \label{tab:layout_comparison_distance}
-                \end{table}
-
-                \begin{figure}[]
-                \centering
-                \includegraphics[width=0.7\linewidth]{figures/mapping_max_distance_manhatten.drawio.png}
-                \caption{Inter level operator communication distance: The figure shows maximum communication distance a wavelet has to travel between 2 levels across various layouts.This distance is directly proportional to the cost of inter level operators. Note weak scaling can make it possible to reuse the zdim}
-                \label{fig:mapping_max_distance_manhatten}
-                \end{figure}
-\end{comment}
-
-
-
-            In this section, we evaluate different level placement strategies and their tradeoffs: fully distributed, spatial, and operator pipelined layouts, as shown in Figure~\ref{fig:VariousLayouts}. Each approach has tradeoffs and implications for memory footprint, data communication distance, packing-repacking cost, parallelism, router and coloring code complexities, and amount of chip utilization and power consumption. With the advent of large-scale spatial-dataflow accelerators, one can program the distributed machine as a single device with a single programming model. Therefore it amplifies the importance of placement as routing and communication is directly tied to layout and resulting performance. Therefore, we model the communication cost for different layout strategies and compare them with our proposed strided layout.
-
-\begin{comment}
-                We leverage the performance model %from the near-optimal paper 
-                of Luczynski et al.\cite{luczynski_reduce}, which focuses on modeling collective communication operations. We are interested in modeling the inter and intra-level communication costs for each operator, since communication cost is the dominant factor in achieving performance for the various mapping strategies; we omit compute costs as we know they shrink geometrically.
-
-                Per Luczynski et al., Equation~\eqref{eq:comm_model} estimates the number of cycles \(T_l\) at level \(l\) for a given problem size.   The model has two terms.   In the first term, \(C\) is the largest number of wavelets a PE sends or receives, a measure of contention.  \(E\) is the total number of hops the network needs to route wavelets; \(N\) is the number of links being used (a PE has 5 bidirectional links); and, \(L\) is the largest number of hops a wavelet has to travel.  Thus, the first term reflects whether contention or routing the communication pattern is dominant.
-                In the second term, \(T_R\) is the router-processor latency (multiplied by 2 for sending and receiving data and an additional cycle for storing the received element), and \(D\) is the longest pipeline sequence of PEs that perform operations depending on previous calculations.  Combining the two terms provides a model for communication costs %on each other's output.  for.   $P$ is the number of PEs.[TODO:I need to shorten can we reference paper instead?]
-
-                \begin{equation}
-                T_l = \max \left( C_l, E_l / N_l + L_l \right) + (2 T_R + 1) D_l
-                \label{eq:comm_model}
-                \end{equation}
-
-                Therefore, for the context of this paper, the data that must be communicated is the pencil resident at each PE for a given level, and the number of hops it must be communicated is a function of the level.
-                %we model costs with Equation~\ref{eq:comm_model_2}. \textcolor{red}{What is confusing here is that I think you are trying to apply Equation 1 to your context, and Equation 2 is confusing because it does not directly map.  I think you should omit Equation 2, improve the paragraph describing Equation 1 to be clearer, and use text to describe how Equation 1 applies in this context.  I made an attempt to simplify some of the long names of Equation 2, but I can't figure out how to define all of the terms.  Why introduce $cost_R$ or $PE_l$ rather than use 2$T_R$ and $D_l$?  This model is good, but needs to be cleaner.}
-
-                \begin{equation}
-                \begin{split}
-                T_l & = \max\left( \text{size\_pencil}_l, \frac{\text{size\_pencil}_l \cdot \text{dist}_l}{\text{dirs}_l} + \text{dist}_l \right) \\
-                & \quad + \left( \text{cost}_R \cdot \text{PE}_l \right)
-                \end{split}
-                \label{eq:comm_model_2}
-                \end{equation}
-                [TODO:] If above eqn is hard to grasp, can remove?
-\end{comment}
-
-
-            % \textcolor{red}{Explain how this information will be used in the remainder of this section?}
-
-            \subsubsection{Spatial Mapping}
-                In the spatial layout shown in Figure~\ref{fig:VariousLayouts}, each level of multigrid is spatially mapped either next to each other or far apart but connected via data paths. Each level uses a different set of PEs. This approach provides a low-per PE memory usage, and high locality for stencils as neighbors are 1 hop apart. But it suffers from high repacking and communication costs across levels. This mapping results in low overall utilization as many PEs remain idle while waiting for neighboring levels to complete. %Also the iteration loop becomes an overhead.
-
-            \subsubsection{Operator Pipelined Mapping}
-                In operator pipelined layout, one can place layers all along the vertical dimension next to each other or even at a finer granularity to pipeline the layers along with their operators shown in the Figure~\ref{fig:VariousLayouts}. The depth of the pipeline will be \(\mathrm{depth} = 2 * \log_2 N * iter_{\mathrm{smooth}}\), where \(N\) is the size of one dimension of the input problem. The wavelets carry intermediate results from one level to the next and keep feeding the pipeline for the next iteration as they exit the other end of the chip. The closest related work that uses an operator pipelining
-                is by Song et al.~\cite{song_ceresz}, where the authors map various compression operators in a pipeline. This strategy is useful for data parallel and feedforward kinds of workloads. GMG, however, has data dependences from intermediate data which creates a lot of communication overhead on the fabric when transitioning between layers. Some layers/operators can be idle waiting for data from other computationally-expensive layers/operators to finish causing pipeline bubbles and synchronization stalls. In addition, the PE parallelism decreases due to dividing layers along the horizontal dimension. The operator code must be duplicated, and the implementation of placement and routing might also become complex.
-
-            \subsubsection{Distributed Mapping: centered-overlapped and one-sided overlapped}
-                The distributed mapping approach inspired by traditional MPI domain decomposition, superimposes layers on top of each other, such that each PE can perform all the operations, as shown in the Figure~\ref{fig:VariousLayouts}.
-                %\textcolor{red}{OA: in the text, it reads column of 3, what is it?? the figure 3 or table 3}. 
-                The finest level occupies the full region of the wafer, while coarser levels are either mapped towards one side (top left) or towards the center (middle left). The stencils can be highly parallelized given their nearest neighbor halo exchanges. This mapping across the whole wafer also avoids the under-utilization of the other solutions.  This mapping aligns closely with WSE-3's wavelet-triggered dataflow execution model along with static color configurations to overlap communication and computations which can work across layers. Moreover, one can reuse stencil implementations such as~\cite{Rocki,mathias}.  %which are mapped on this device reusing the previous work. However it can likely go out of memory due to superimposing of all data.  This is where 
-                There can be significant data communication costs as the GMG layers get coarser. %This mapping could either be skewed to either side or a better approach to minimize distance could be a centered layout.
-
-            \subsubsection{Strided Distributed Mapping (this paper)}
-                Multi-grids typically have more compute and data at the finer grids, so solving them fast is important. Also reducing the inter-layer cost is essential. The strided distributed mapping
-                increases the distance between layers by powers of 2. Meaning a PE \(2^l\) hops apart is the grid point for that level \(l\). This reduces the inter-layer cost as compared to the two previous distributed mappings as the distance between layers increases. %Instead of moving the complete data we instead making the operators stride aware.
-                % memory usage/pe, implementation efforts, compatability with stencil library, stencil-locality, inter-level cost, intra-level/repacking cost, idle PEs, coarse-grid sensitivity 
-                We describe in detail the strided distributed mapping used in this experiment in the remaining subsections. %\textcolor{red}{*With the current spatial systems we can see this trend where we have to decide the right mapping strategy onto the PEs. Unsolved and open problem. Various options autotuning/modelling can be open directions. ?TODO}
 
         \subsection{From 3D problem domain to 2D wafer} \label{sec:data_layout}
             The GMG input domain is a structured 3D \(nx \times ny \times nz\) grid as shown in Figure~\ref{fig 1:V-cycle in GMG}. We map a 3D problem onto a 2D grid by storing the entire z-dimension (\(nz\) elements) on each PE for a fixed value of \(x\) and \(y\); i.e., a \textit{pencil}. Given the 48KB memory on each PE, this decomposition enables us to scale the problem by using more PEs. All data accesses along the \(z\) dimension are local and do not require communication. This approach has been studied in previous stencil mappings on WSE~\cite{Rocki,Sai,sai2,mathias}. Given the multi-grid dimensions halve at each level, we have to maintain in memory multiple \textit{pencils} from different levels as we superimpose levels. The total amount of data that will fit is a function of levels, \(L\), and pencil size \(nz_l\) for each level \(l \in L\). The total allocation %$A$ \textcolor{red}{OA: then you never use "A", or delete it or use it in the equation}
@@ -805,6 +707,10 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
             Future approaches may benefit from hybrid mapping strategies that decouple computation and storage, such as assigning subsets of PEs primarily as memory resources while others focus on computation, or employing more dynamic coloring and routing schemes to reduce code replication and improve memory utilization across levels.}
 
     \section{Lessons Learned and Next Steps}
+        {\color{blue}
+        \paragraph{Mapping layered algorithms to spatial architectures.(moved from top)}
+        Mapping a multi-level algorithm like GMG onto a spatial dataflow architecture requires balancing several competing concerns: memory footprint per PE, communication distance between levels, packing/repacking cost, stencil locality, chip utilization, and routing/coloring complexity. No single layout strategy dominates across all of these dimensions; the strided distributed mapping we chose prioritizes stencil parallelism and avoids bulk inter-level data movement, but at the cost of growing communication distance at coarser levels.}
+
         \textcolor{red}{Grabbed from above:
         SOME INTRO PARAGRAPH...
         \paragraph{Further improvements to forwarding optimization.}
