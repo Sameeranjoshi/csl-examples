@@ -1,0 +1,127 @@
+// 1D rowReduceReverse timing test kernel
+// Iterates through levels 0..NUM_LEVELS-1, running one row reduce per level,
+// measuring cycle count per level.
+
+param memcpyParams: comptime_struct;
+param reduceParams: comptime_struct;
+param width: i16;
+param height: i16;
+param NUM_LEVELS: i16;
+param EN_TEST_STATE: local_task_id;
+
+const MAX_PENCIL: i16 = 512;
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpyParams);
+const layout_mod = @import_module("<layout>");
+const timer = @import_module("timer_modified.csl", .{ .timerCount = 1 });
+
+const reduce_mod = @import_module("src_copy/modified_csl_lib_hops/allreduce/pe.csl", @concat_structs(reduceParams, .{
+    .f_callback = f_on_reduce_done,
+    .queues = [1]u16{2},
+    .dest_dsr_ids = [1]u16{1},
+    .src0_dsr_ids = [1]u16{1},
+    .src1_dsr_ids = [1]u16{1},
+    .MAX_PENCIL_DIM = MAX_PENCIL
+}));
+
+// Data arrays: each PE holds `n` floats
+var data = @zeros([MAX_PENCIL]f32);
+var results = @zeros([NUM_LEVELS]f32);  // reduced value from receiver PE per level
+var timing_u16 = @zeros([NUM_LEVELS * timer.tsc_size_words]u16);  // internal: 3 u16 per level
+var timing = @zeros([NUM_LEVELS * 2]u32);  // export: 2 u32 per level (packs 3 u16 with pad)
+
+var ptr_data: [*]f32 = &data;
+var ptr_results: [*]f32 = &results;
+var ptr_timing: [*]u32 = &timing;
+
+// Roofline-style dummy counters (stencil/reduce modules require pointers)
+var dummy_u32: u32 = 0;
+
+// Per-test state
+var current_level: i16 = 0;
+var current_n: i16 = 1;  // z-length for this test
+var num_levels_local: i16 = 0;
+
+const TIMER_ID: u16 = 0;
+
+fn save_timestamp_start() void {
+    timer.start(TIMER_ID);
+}
+
+fn save_timestamp_end(level: i16) void {
+    timer.stop(TIMER_ID);
+    const offset: i16 = level * timer.tsc_size_words;
+    timer.accumulate_elapsed(TIMER_ID, @ptrcast(*[timer.tsc_size_words]u16, &timing_u16[offset]));
+    // Pack 3 u16 words into 2 u32 words for export
+    const out_offset: i16 = level * 2;
+    timing[out_offset]     = @as(u32, timing_u16[offset])     | (@as(u32, timing_u16[offset + 1]) << 16);
+    timing[out_offset + 1] = @as(u32, timing_u16[offset + 2]);
+}
+
+fn f_enable_timer() void {
+    timer.enable();
+    sys_mod.unblock_cmd_stream();
+}
+
+// Test orchestrator: runs one reduce per level
+task f_test_state() void {
+    if (current_level >= num_levels_local) {
+        // All levels done — save reduced result to host-readable array
+        // Only the receiver PE (boundary_x_start of its window) has a valid result
+        // For simplicity, we save the first element of data[] after reduce
+        sys_mod.unblock_cmd_stream();
+        return;
+    }
+
+    // Configure reduce for current level
+    // factor = 2^level, window_width = 2*factor = 2^(level+1)
+    const level_u: u16 = @as(u16, current_level);
+    const factor: u16 = @as(u16, 1) << level_u;
+    const window_w: u16 = @as(u16, 1) << (level_u + 1);
+    const window_h: u16 = 1;  // 1D test — row-only
+
+    // setWindowedReductionParams takes i16 for width/height
+    reduce_mod.setWindowedReductionParams(
+        @as(i16, window_w), @as(i16, window_h),
+        factor, 2, 1, level_u
+    );
+
+    // Also set counter pointers (required by reduce module)
+    reduce_mod.setCounterPtrs(&dummy_u32, &dummy_u32, &dummy_u32, &dummy_u32);
+
+    // Reset data to known pattern: active PE stores 1.0, inactive stores 0 (handled by reduce)
+    var i: i16 = 0;
+    while (i < current_n) : (i += 1) {
+        data[i] = 1.0;
+    }
+
+    // Start timer, fire reduce, callback ends timer
+    save_timestamp_start();
+    reduce_mod.reduce_row_only_top_left(current_n, &data, reduce_mod.TYPE_BINARY_OP.ADD);
+}
+
+// Called when a reduce completes
+fn f_on_reduce_done() void {
+    save_timestamp_end(current_level);
+    // Save the first element of result (only meaningful for receiver PEs)
+    results[current_level] = data[0];
+    current_level += 1;
+    @activate(EN_TEST_STATE);
+}
+
+// Host entry point: run test with pencil length n
+fn f_run_test(n: i16) void {
+    current_n = n;
+    current_level = 0;
+    num_levels_local = NUM_LEVELS;
+    @activate(EN_TEST_STATE);
+}
+
+comptime {
+    @bind_local_task(f_test_state, EN_TEST_STATE);
+    @export_symbol(ptr_data, "data");
+    @export_symbol(ptr_results, "results");
+    @export_symbol(ptr_timing, "timing");
+    @export_symbol(f_run_test);
+    @export_symbol(f_enable_timer);
+}
