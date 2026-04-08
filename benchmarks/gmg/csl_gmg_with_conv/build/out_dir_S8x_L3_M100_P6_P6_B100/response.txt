@@ -1,0 +1,232 @@
+Output directory: out_dir_S8x_L3_M100_P6_P6_B100
+########################################################
+Parameters: size=8, levels=3, channels=8
+Run parameters: max_ite=100, pre_iter=6, post_iter=6, bottom_iter=100
+Fabric dims: 762,1172
+Compile command: --arch=wse3 --fabric-dims=762,1172 --fabric-offsets=4,1 --params=width:8,height:8,MAX_ZDIM:8,LEVELS:3 --params=BLOCK_SIZE:8 --memcpy --channels=8 --width-west-buf=0 --width-east-buf=0 -o out_vcycle8 --llvm-option=--inline-threshold=256 --llvm-option=--unroll-threshold=256
+Run command: cs_python run_gmg_vcycle.py -m=8 -n=8 -k=8 --latestlink out_vcycle8 --channels=8 --width-west-buf=0 --width-east-buf=0 --zDim=8 --run-only --levels=3 --max-ite=100 --blockSize=8 --pre-iter=6 --post-iter=6 --bottom-iter=100 --tolerance=0.01 --cmaddr %CMADDR%
+########################################################
+
+Compile time (s): 40.313138
+
+======================================================================
+Run output:
+======================================================================
+Matplotlib created a temporary cache directory at /tmp/matplotlib-cl9nbfe7 because the default path (/.config/matplotlib) is not a writable directory; it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+Fontconfig error: Cannot load default config file: No such file: (null)
+WARNING: The message system is being used before initialization.
+         Messages will still be printed, but with limited support.
+COUT034   Latest HIOLIB used
+COUT034  TCP connect to: 10.254.2.65:9000
+COUT034  No credentials found, disabling TLS
+COUT034  TLS is disabled
+COUT034  TLS disabled
+COUT034  Poll
+COUT034  TCP connected
+COUT034  Connection successful
+COUT034  Local addr: 10.125.9.150:53064
+COUT034  hio_ctl:HRQ_HANDSHAKE 54482 us
+COUT034  TCP connect to: 10.254.2.65:9000
+COUT034  TLS disabled
+COUT034  Poll
+COUT034  TCP connected
+COUT034  Connection successful
+COUT034  Local addr: 10.125.9.150:53080
+COUT034  hio_ctl:HRQ_HANDSHAKE 102493 us
+COUT034  hio_ctl:HRQ_GETFABRIC 210 us
+HAAP425 09:00:49 GMT  WARNING: hio_group_program is deprecated, use hio_flows_program
+COUT002 09:00:49 GMT  ERROR: LOGGER NOT INITIALIZED:
+COUT002 09:00:49 GMT  ERROR: 		wio_groups.json is deprecated, use wio_flows.json instead
+HWKA425 09:01:17 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 8 streamer 0 P:1 C:58 (10.254.3.4:60, 10.254.3.10:60, 10.254.3.16:60, 10.254.3.22:60) mode: RoCE
+HWKA425 09:01:18 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 0 streamer 0 P:2 C:9 (10.254.3.6:11, 10.254.3.12:11, 10.254.3.18:11, 10.254.3.24:11) mode: RoCE
+HWKA425 09:01:18 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 1 streamer 0 P:0 C:48 (10.254.3.2:50, 10.254.3.8:50, 10.254.3.14:50, 10.254.3.20:50) mode: RoCE
+HWKA425 09:01:19 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 2 streamer 0 P:1 C:46 (10.254.3.4:48, 10.254.3.10:48, 10.254.3.16:48, 10.254.3.22:48) mode: RoCE
+HWKA425 09:01:19 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 3 streamer 0 P:2 C:52 (10.254.3.6:54, 10.254.3.12:54, 10.254.3.18:54, 10.254.3.24:54) mode: RoCE
+HWKA425 09:01:20 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 4 streamer 0 P:0 C:8 (10.254.3.2:10, 10.254.3.8:10, 10.254.3.14:10, 10.254.3.20:10) mode: RoCE
+HWKA425 09:01:20 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 5 streamer 0 P:1 C:16 (10.254.3.4:18, 10.254.3.10:18, 10.254.3.16:18, 10.254.3.22:18) mode: RoCE
+HWKA425 09:01:21 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 6 streamer 0 P:2 C:21 (10.254.3.6:23, 10.254.3.12:23, 10.254.3.18:23, 10.254.3.24:23) mode: RoCE
+HWKA425 09:01:22 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 7 streamer 0 P:0 C:53 (10.254.3.2:55, 10.254.3.8:55, 10.254.3.14:55, 10.254.3.20:55) mode: RoCE
+HWKA425 09:01:22 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened ingress stream flow 17 streamer 0 P:1 C:0 (10.254.3.4:2, 10.254.3.10:2, 10.254.3.16:2, 10.254.3.22:2) mode: RoCE
+HWKA425 09:01:23 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 9 streamer 0 P:0 C:109 (10.254.3.2:111, 10.254.3.8:111, 10.254.3.14:111, 10.254.3.20:111) mode: RoCE
+HWKA425 09:01:23 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 10 streamer 0 P:1 C:95 (10.254.3.4:97, 10.254.3.10:97, 10.254.3.16:97, 10.254.3.22:97) mode: RoCE
+HWKA425 09:01:24 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 11 streamer 0 P:2 C:121 (10.254.3.6:123, 10.254.3.12:123, 10.254.3.18:123, 10.254.3.24:123) mode: RoCE
+HWKA425 09:01:24 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 12 streamer 0 P:0 C:114 (10.254.3.2:116, 10.254.3.8:116, 10.254.3.14:116, 10.254.3.20:116) mode: RoCE
+HWKA425 09:01:25 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 13 streamer 0 P:1 C:101 (10.254.3.4:103, 10.254.3.10:103, 10.254.3.16:103, 10.254.3.22:103) mode: RoCE
+HWKA425 09:01:25 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 14 streamer 0 P:2 C:72 (10.254.3.6:74, 10.254.3.12:74, 10.254.3.18:74, 10.254.3.24:74) mode: RoCE
+HWKA425 09:01:26 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+Opened egress stream flow 15 streamer 0 P:0 C:117 (10.254.3.2:119, 10.254.3.8:119, 10.254.3.14:119, 10.254.3.20:119) mode: RoCE
+HWKA425 09:01:27 GMT  WARNING: src_ip_addr is not set, using routing table to figure out the source IP address
+out_vcycle8 already exists
+
+============================================================
+Creating reference solver on host...
+============================================================
+Norm of B = 0.7885807
+
+============================================================
+Device calculations...
+============================================================
+1. Warmup(3 iterations) + reset...
+2. Copying initial data to device...
+Grid spacing and Jacobi coefficients:
+  Level 0: hx=0.125000, 1/hx=8.000000, jacobi=-1.736111e-03
+  Level 1: hx=0.250000, 1/hx=4.000000, jacobi=-6.944444e-03
+  Level 2: hx=0.500000, 1/hx=2.000000, jacobi=-2.777778e-02
+3. Enabling timer...
+4. Synchronizing PEs...
+5. Tic total...
+6. Running GMG V-cycle(max_iter=100, levels=3) on device...
+7. Toc total...
+8. Copying timers and counters from device...
+9. Checking convergence...
+
+============================================================
+Rho values after each iteration
+============================================================
+Total iterations performed: 2
+Iteration    |rho|_max           
+------------------------------------------------------------
+1                   1.870614e-02
+2                   3.828406e-04
+[GMG] rho = |b-A*x|_inf = 3.828406e-04
+  Tolerance = 7.885807e-03
+  Converged: Yes
+10. Profiling...
+
+============================================================
+Performance Timing
+============================================================
+PE(0,0) only. Phase timers (smooth, residual, …) ACCUMULATE across all V-cycles.
+Convergence (L0 only) is separated; see summary block below the tables for per-V-cycle averages.
+
+Time per operation and level (us[cycles]), first V-cycle:
++====================+====================+====================+====================+====================+====================+====================+====================+
+|       level        |       smooth       |      residual      |    restriction     |   interpolation    |       setup        |    convergence     |       total        |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         0          | 60.939us(  53322)  |  4.453us(   3896)  |  3.538us(   3096)  |  2.711us(   2372)  |  2.417us(   2115)  | 12.505us(  10942)  | 86.563us(  75743)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         1          | 59.081us(  51696)  |  4.325us(   3784)  |  3.497us(   3060)  |  2.699us(   2362)  |  1.671us(   1462)  |  0.000us(      0)  | 71.273us(  62364)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         2          | 487.401us( 426476) |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |  0.891us(    780)  |  0.000us(      0)  | 488.293us( 427256) |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|       total        | 607.422us( 531494) |  8.777us(   7680)  |  7.035us(   6156)  |  5.410us(   4734)  |  4.979us(   4357)  | 12.505us(  10942)  | 646.129us( 565363) |
++====================+====================+====================+====================+====================+====================+====================+====================+
+
+7-pt Stencil: SpMV vs smoothing (us[cycles]), per level, scaled to one V-cycle:
+  SpMV Total / Communication / Compute ÷ 2 (iterations); smooth_* from first V-cycle only.
++====================+====================+====================+====================+====================+====================+====================+====================+
+|       level        |  Total SpMV Time   | Communication Time |    Compute Time    |    smooth_apply    |   smooth_update    |    smooth_total    |  smooth_overhead   |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         0          | 25.144us(  22001)  | 10.040us(   8785)  |  7.344us(   6426)  | 48.249us(  42218)  |  4.073us(   3564)  | 60.939us(  53322)  |  8.617us(   7540)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         1          | 22.422us(  19619)  |  9.139us(   7997)  |  6.091us(   5330)  | 46.665us(  40832)  |  3.799us(   3324)  | 59.081us(  51696)  |  8.617us(   7540)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         2          | 167.262us( 146354) | 67.376us(  58954)  | 44.571us(  39000)  | 381.381us( 333708) | 30.857us(  27000)  | 487.401us( 426476) | 75.163us(  65768)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|       total        | 214.827us( 187974) | 86.555us(  75736)  | 58.007us(  50756)  | 476.295us( 416758) | 38.729us(  33888)  | 607.422us( 531494) | 92.398us(  80848)  |
++====================+====================+====================+====================+====================+====================+====================+====================+
+
+Interpolation micro-benchmark (us[cycles]), PE(0,0), first V-cycle only:
++====================+====================+====================+====================+====================+====================+====================+
+|       level        |    expand_z(T1)    |  bcast_total(T2)   | reset_routes(T2.1) |  send_data(T2.2)   |   interp_add(T3)   |interp_total(T1+T2+T3)|
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         0          |  0.217us(    190)  |  1.397us(   1222)  |  0.174us(    152)  |  0.382us(    334)  |  0.199us(    174)  |  2.711us(   2372)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         1          |  0.213us(    186)  |  1.394us(   1220)  |  0.174us(    152)  |  0.379us(    332)  |  0.194us(    170)  |  2.699us(   2362)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|         2          |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |  0.000us(      0)  |
++--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+
+|       total        |  0.430us(    376)  |  2.791us(   2442)  |  0.347us(    304)  |  0.761us(    666)  |  0.393us(    344)  |  5.410us(   4734)  |
++====================+====================+====================+====================+====================+====================+====================+
+====================================================================================================
+Time to Solution (TTS, all 2 V-cycles, inc. convergence):                  652.525 us (    570959 cycles)
+Convergence diagnostic time (total, 2 checks, only at L0):                   12.505 us (     10942 cycles)
+Avg V-cycle time (TTS / 2 iters, inc. convergence):                         326.262 us (    285480 cycles)
+====================================================================================================
+
+========================================================================================================================
+ROOFLINE — PE(0,0) only; totals accumulated across ALL V-cycles (convergence-check ops excluded)
+  Per-level 'active PEs' is the 2D PE count used at that multigrid level (for scaling).
+  FLOP/Mem/Fab rows below are not summed over the wafer — they are one PE's counts.
+  Divide counts by 'Device iterations to converge' (2) to get per-V-cycle values.
+========================================================================================================================
+
+Level 0 (nz=8, active PEs: 64, stride: 1):
+Operation         Count
+-------------------------
+FSUB                208
+FMAC              1,648
+FMUL                  8
+FADD                 56
+FNEG                416
+FMOV_MEM             88
+FMOV_ZERO           240
+FMOV32              449
+
+Level 1 (nz=4, active PEs: 16, stride: 2):
+Operation         Count
+-------------------------
+FSUB                104
+FMAC                824
+FMUL                  4
+FADD                 28
+FNEG                208
+FMOV_MEM             40
+FMOV_ZERO           128
+FMOV32              224
+
+Level 2 (nz=2, active PEs: 4, stride: 4):
+Operation         Count
+-------------------------
+FSUB                400
+FMAC              3,200
+FNEG                800
+FMOV_MEM              4
+FMOV_ZERO           408
+FMOV32              800
+
+Device iterations to converge: 2
+Total solver time (all iters): 652.525 us
+
+Run: python plots/roofline_analysis.py <response.txt> for full roofline analysis and plots.
+========================================================================================================================
+
+============================================================
+Configuration Summary
+============================================================
+HeightxWidthxZDim               : 8x8x8
+Levels                          : 3
+Max iterations                  : 100
+Tolerance (abs)                 : 1.00e-02
+Tolerance (rel)                 : 7.89e-03
+Pre/Post/Bottom iter            : 6/6/100
+Datatype                        : float32
+Jacobi omega                    : 0.666667
+Stencil alpha/beta              : -6.0/1.0
+Channels                        : 8
+Block size                      : 8
+West/East buffer width          : 0/0
+Total solver wall time (us[cycles]):    652.525us(    570959)
+Device iterations               : 2
+Avg V-cycle time (inc. conv)    :    326.262us
+Device final |rho|_inf          : 3.828e-04
+11. Stopping simulator...
+Opened egress stream flow 16 streamer 0 P:1 C:121 (10.254.3.4:123, 10.254.3.10:123, 10.254.3.16:123, 10.254.3.22:123) mode: RoCE
+
+Run time (s): 95.323962

@@ -156,7 +156,7 @@ class SimpleGMG:
         self.grids = self._create_grids()
         
         # Initialize solution x
-        self._init_x(10.0)
+        self._init_x(0.0)
         # Initialize RHS
         self._init_rhs()
         
@@ -333,20 +333,18 @@ class SimpleGMG:
         for level, grid in enumerate(self.grids):
             nx, ny, nz = grid['nx'], grid['ny'], grid['nz']
             
-            # Create coordinate arrays
-            x = np.linspace(0, 1, nx, dtype=DTYPE)
-            y = np.linspace(0, 1, ny, dtype=DTYPE)
-            z = np.linspace(0, 1, nz, dtype=DTYPE)
-            X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
-            
-            # Simple test function: f = sin(πx)sin(πy)sin(πz)
-            pi = DTYPE(np.pi)
+            # Cell-centered coordinates: (i+0.5)*h, matching HPGMG FV
             hx = grid['hx']
             hy = grid['hy']
             hz = grid['hz']
-            #print(f"X: {X}")
-            #print(f"hx: {hx}")
-            grid['f'] = np.sin(2*pi * ((X+0.5)*hx)) * np.sin(2*pi * ((Y+0.5)*hy)) * np.sin(2*pi * ((Z+0.5)*hz))
+            x = (np.arange(nx, dtype=DTYPE) + 0.5) * hx
+            y = (np.arange(ny, dtype=DTYPE) + 0.5) * hy
+            z = (np.arange(nz, dtype=DTYPE) + 0.5) * hz
+            X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
+
+            # HPGMG-matching: f = sin(2πx)·sin(2πy)·sin(2πz)
+            pi = DTYPE(np.pi)
+            grid['f'] = np.sin(2*pi * X) * np.sin(2*pi * Y) * np.sin(2*pi * Z)
             #print(f"f: {grid['f']}")
 
     def calculate_rho(self, residual_3d):
