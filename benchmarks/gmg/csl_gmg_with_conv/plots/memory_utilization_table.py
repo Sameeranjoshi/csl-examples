@@ -12,7 +12,7 @@ def main(filepath):
         content = f.read()
 
     pattern = re.compile(
-        r"(\d+)x\1x\1\s+[\d,]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+\d+\s+[\d.]+\s+"
+        r"(\d+)x\1x\1\s+[\d,]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+\d+\s+\S+\s+"
         r"[\d.e+-]+\s+\w+\s+[\d.]+\s+[\d.]+\s+([\d,]+)\s+([\d,]+)"
     )
 

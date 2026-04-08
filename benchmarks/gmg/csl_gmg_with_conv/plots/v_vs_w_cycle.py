@@ -59,10 +59,10 @@ def parse_response(path):
     m = re.search(r'Converged:\s*(Yes|No)', content)
     data['converged'] = m.group(1) if m else '?'
 
-    # Avg cycle time (pure operators, no conv)
-    m = re.search(r'Average (?:V|W)-cycle time.*?:\s*([\d.]+)\s*us', content)
+    # Avg cycle time — match any "Avg V-cycle time" or "Average V-cycle time" variant
+    m = re.search(r'Avg (?:V|W)-cycle time.*?:\s*([\d.]+)\s*us', content)
     if not m:
-        m = re.search(r'Avg (?:V|W)-cycle time \(no conv\)\s*:\s*([\d.]+)\s*us', content)
+        m = re.search(r'Average (?:V|W)-cycle time.*?:\s*([\d.]+)\s*us', content)
     data['avg_cycle_us'] = float(m.group(1)) if m else None
 
     # Total solver wall time

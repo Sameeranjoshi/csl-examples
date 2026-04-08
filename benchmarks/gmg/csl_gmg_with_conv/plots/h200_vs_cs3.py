@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-Plot HPGMG benchmark speedup (WSE-3 over H200) from CSV data.
-Reads CSV via command line; outputs publication-quality figures.
+Plot HPGMG benchmark speedup (WSE-3 over H200) from gpu_numbers.txt and wse_numbers.txt.
+Reads the "WITH convergence check" tables; outputs publication-quality figures.
 """
 
 import argparse
-import csv
 import os
 import re
 
@@ -28,73 +27,119 @@ plt.rcParams['savefig.dpi'] = 300
 plt.rcParams['savefig.bbox'] = 'tight'
 
 
-def parse_csv(csv_path: str):
+def _parse_table(filepath):
+    """Parse the WITH convergence check table from gpu_numbers.txt or wse_numbers.txt.
+
+    Returns {config: {grid_size: {'tts': float, 'iter': int, 'cycle': float}}}
+    where config is e.g. '6/6/100' and grid_size is e.g. 16.
     """
-    Parse HPGMG benchmark CSV.
-    Returns (grid_sizes, data_dict) where data_dict maps config name -> list of speedups.
-    Parses WSE3(6/6/6)(SHALLOW) as 6/6/6(Shallow). Does not parse Unoptimized.
+    with open(filepath) as f:
+        text = f.read()
+
+    # Extract the WITH convergence section (up to the next section or EOF)
+    m = re.search(r'WITH convergence check\s*\n={3,}\n(.*?)(?:\n={3,}\n\s*(?:WITHOUT|Shallow)|$)',
+                  text, re.DOTALL)
+    if not m:
+        raise ValueError(f"No 'WITH convergence check' section found in {filepath}")
+    section = m.group(1)
+
+    # Parse config names from header line:  "GH200(6/6/100)" or "WSE3(4/4/6)"
+    configs = []
+    for line in section.splitlines():
+        cfg_matches = re.findall(r'\w+\(([\d/]+)\)', line)
+        if cfg_matches:
+            configs = cfg_matches
+            break
+
+    if not configs:
+        raise ValueError(f"No config headers found in {filepath}")
+
+    # Parse data rows:  "  512^3 (9) |  0.040568     2   0.020284 | ..."
+    data = {c: {} for c in configs}
+    for line in section.splitlines():
+        row_m = re.match(r'\s*(\d+)\^3\s*\(\w*(\d+)\)', line)
+        if not row_m:
+            continue
+        grid = int(row_m.group(1))
+        # Split by '|' and take the config blocks (skip first which is the grid label)
+        parts = line.split('|')[1:]
+        for i, cfg in enumerate(configs):
+            if i >= len(parts):
+                break
+            nums = parts[i].strip().split()
+            if len(nums) >= 3:
+                tts = float(nums[0])
+                iters = int(nums[1])
+                cycle = float(nums[2])
+                data[cfg][grid] = {'tts': tts, 'iter': iters, 'cycle': cycle}
+
+    # Parse shallow V-cycle table if present
+    shallow_m = re.search(r'Shallow V-cycle.*?\n-+\n(.*?)(?:\n={3,}|$)', text, re.DOTALL)
+    if shallow_m:
+        data['6/6/6(Shallow)'] = {}
+        for line in shallow_m.group(1).splitlines():
+            row_m = re.match(r'\s*(\d+)\^3\s*\(L\d+\)', line)
+            if not row_m:
+                continue
+            grid = int(row_m.group(1))
+            parts = line.split('|')[1:]
+            if parts:
+                nums = parts[0].strip().split()
+                if len(nums) >= 3:
+                    tts = float(nums[0])
+                    iters = int(nums[1])
+                    cycle = float(nums[2])
+                    data['6/6/6(Shallow)'][grid] = {'tts': tts, 'iter': iters, 'cycle': cycle}
+
+    return data
+
+
+def parse_speedups(gpu_path, wse_path):
+    """Compute per-V-cycle speedup (GH200 / WSE-3) for each config and grid size.
+
+    Returns (grid_labels, speedup_dict) where grid_labels is e.g. ['16x16x16', ...]
+    and speedup_dict maps config -> list of speedups aligned with grid_labels.
     """
-    # Display order in legend and bars (includes 6/6/6(Shallow))
-    configs = ['6/6/100', '4/4/100', '4/4/6', '6/6/6', '6/6/6(Shallow)']
-    # CSV column order (last 5 speedup columns): over(6/6/100), over(4/4/6), 6/6/6, 4/4/100, 6/6/6(shallow)
-    csv_col_order = ['6/6/100', '4/4/6', '6/6/6', '4/4/100', '6/6/6(Shallow)']
-    grid_sizes = []
-    values = {c: [] for c in configs}
+    gpu = _parse_table(gpu_path)
+    wse = _parse_table(wse_path)
 
-    with open(csv_path, newline='', encoding='utf-8') as f:
-        reader = csv.reader(f)
-        rows = list(reader)
+    configs = ['6/6/100', '4/4/100', '4/4/6', '6/6/6']
+    if '6/6/6(Shallow)' in wse:
+        configs.append('6/6/6(Shallow)')
 
-    # Find header row containing speedup column names (check for 5 cols including shallow)
-    header_row_idx = None
-    N_SPEEDUP = 5
-    for i, row in enumerate(rows):
-        if len(row) >= N_SPEEDUP:
-            tail = [c.strip().lower() for c in row[-N_SPEEDUP:] if c]
-            if '6/6/100' in str(tail) and ('6/6/6(shallow)' in str(tail) or 'shallow' in str(tail)):
-                header_row_idx = i
-                break
-        if len(row) >= 4 and header_row_idx is None:
-            tail = [c.strip().lower() for c in row[-4:] if c]
-            if '6/6/100' in str(tail) or '4/4/6' in str(tail):
-                header_row_idx = i
-                N_SPEEDUP = 4
-                csv_col_order = ['6/6/100', '4/4/6', '6/6/6', '4/4/100']
-                configs = ['6/6/100', '4/4/100', '4/4/6', '6/6/6']
-                break
+    # Grid sizes present in both GPU and WSE for the base configs
+    common_grids = None
+    for cfg in ['6/6/100', '4/4/100', '4/4/6', '6/6/6']:
+        gpu_grids = set(gpu.get(cfg, {}).keys())
+        wse_grids = set(wse.get(cfg, {}).keys())
+        both = gpu_grids & wse_grids
+        common_grids = both if common_grids is None else common_grids & both
+    grids = sorted(common_grids)
 
-    GRID_COL = 0
+    grid_labels = [f"{g}x{g}" for g in grids]
+    speedups = {}
+    for cfg in configs:
+        vals = []
+        for g in grids:
+            # Shallow uses GPU 6/6/6 as baseline (it's a WSE optimization of 6/6/6)
+            gpu_cfg = '6/6/6' if cfg == '6/6/6(Shallow)' else cfg
+            gpu_cycle = gpu.get(gpu_cfg, {}).get(g, {}).get('cycle')
+            wse_cycle = wse.get(cfg, {}).get(g, {}).get('cycle')
+            if gpu_cycle and wse_cycle and wse_cycle > 0:
+                vals.append(gpu_cycle / wse_cycle)
+            else:
+                vals.append(None)
+        if any(v is not None for v in vals):
+            speedups[cfg] = vals
 
-    for i in range((header_row_idx or 0) + 1, len(rows)):
-        row = rows[i]
-        if len(row) <= GRID_COL:
-            continue
-        gs = str(row[GRID_COL]).strip()
-        if not re.match(r'^\d+x+\d+$', gs):
-            continue
-        gs = re.sub(r'x+', 'x', gs)
-        if len(row) < N_SPEEDUP:
-            continue
-        speedups = []
-        for j in range(-N_SPEEDUP, 0):
-            try:
-                v = float(row[j].strip().replace(',', ''))
-            except (ValueError, IndexError):
-                v = None
-            speedups.append(v)
-        if all(v is not None and v > 0 for v in speedups):
-            grid_sizes.append(gs)
-            for c in configs:
-                idx = csv_col_order.index(c)
-                values[c].append(speedups[idx])
-
-    return grid_sizes, values
+    return grid_labels, speedups
 
 
-def plot_hpgmg_speedup_bar(csv_path: str, out_path: str = 'hpgmg_speedup_barplot.pdf'):
-    grid_sizes, data = parse_csv(csv_path)
+def plot_hpgmg_speedup_bar(gpu_path: str, wse_path: str,
+                           out_path: str = 'hpgmg_speedup_barplot.pdf'):
+    grid_sizes, data = parse_speedups(gpu_path, wse_path)
     if not grid_sizes:
-        raise ValueError(f"No valid speedup data found in {csv_path}")
+        raise ValueError("No valid speedup data found")
 
     x = np.arange(len(grid_sizes))
     bar_configs = ['6/6/100', '4/4/100', '4/4/6', '6/6/6', '6/6/6(Shallow)']
@@ -191,14 +236,15 @@ def plot_hpgmg_speedup_bar(csv_path: str, out_path: str = 'hpgmg_speedup_barplot
 
 def main():
     _script_dir = os.path.dirname(os.path.abspath(__file__))
-    default_csv = os.path.join(_script_dir, 'h200_vs_cs3_feb6.csv')
-    ap = argparse.ArgumentParser(description='Plot HPGMG speedup from CSV')
-    ap.add_argument('csv', nargs='?', default=default_csv,
-                    help='Input CSV path (default: h200_vs_cs3_feb6.csv in script dir)')
+    default_gpu = os.path.join(_script_dir, 'gpu_numbers.txt')
+    default_wse = os.path.join(_script_dir, 'wse_numbers.txt')
+    ap = argparse.ArgumentParser(description='Plot HPGMG speedup (WSE-3 over GH200)')
+    ap.add_argument('--gpu', default=default_gpu, help='GPU numbers file')
+    ap.add_argument('--wse', default=default_wse, help='WSE numbers file')
     ap.add_argument('-o', '--output', default='hpgmg_speedup_barplot.pdf',
                     help='Output figure path (default: hpgmg_speedup_barplot.pdf)')
     args = ap.parse_args()
-    plot_hpgmg_speedup_bar(args.csv, args.output)
+    plot_hpgmg_speedup_bar(args.gpu, args.wse, args.output)
 
 
 if __name__ == '__main__':
