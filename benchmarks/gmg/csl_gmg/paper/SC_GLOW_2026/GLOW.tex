@@ -41,7 +41,7 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
         As a result, algorithms that are typically memory-bound on CPUs and GPUs frequently become compute-bound when ported to the WSE.  Prior work has demonstrated this shift for diverse workloads such as stencil computations~\cite{Sai,sai2,Rocki,scalable_25pt_stencil,mathias}, seismic analysis~\cite{Ltaief}, molecular dynamics~\cite{perez_md_sc24,perez-journal}, and Monte Carlo particle transport kernels~\cite{Tramm24,Yoshii26}.
         In this paper, we present GLOW (Gmg Levels On Wafer).  We build on the lessons from successful use of Cerebras for stencil computations to provide a mapping of an algorithm that is still structured yet significantly more challenging.
         
-        Our paper is centered around an iso-capability (same problem size) study of the WSE (44GB of SRAM) and a GH200 GPU (141GB of HBM DRAM).  We present a dispassionate performance analysis of the WSE-3 focusing on the relevant benefits and pitfalls associated with massive decoupled thread parallelism, and planar network topologies for multi-scale computations.  As compared to a GH200 GPU implementation of the HPGMG benchmark, we achieve significantly improved performance.  At the same time,
+        Our paper is centered around an iso-capability (same problem size) study of the WSE (44GB of SRAM) and a GH200 GPU (96 GB of HBM DRAM).  We present a dispassionate performance analysis of the WSE-3 focusing on the relevant benefits and pitfalls associated with massive decoupled thread parallelism, and planar network topologies for multi-scale computations.  As compared to a GH200 GPU implementation of the HPGMG benchmark, we achieve significantly improved performance.  At the same time,
         the implementation of GMG must address new challenges on the Cerebras architecture: (1) limitations on problem size that fit on the wafer; (2) relative communication costs growing at deeper levels of the V-Cycle; and, (3) trading off code size and data space in the memory-constrained tile.
         %This fine-grained distributed-memory architecture eliminates traditional cache hierarchies and drastically reduces memory latency both on PE and across PEs.
         %Despite these successes in stencils, what remains missing is a demonstration of scientific computing workloads that go a step beyond traditional stencil kernels. 
@@ -302,7 +302,7 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
             We describe in detail the strided distributed mapping used in this experiment in the remaining subsections.
 
         \subsection{From 3D problem domain to 2D wafer} \label{sec:data_layout}
-            The GMG input domain is a structured 3D \(nx \times ny \times nz\) grid as shown in Figure~\ref{fig 1:V-cycle in GMG}. We map a 3D problem onto a 2D grid by storing the entire z-dimension (\(nz\) elements) on each PE for a fixed value of \(x\) and \(y\); i.e., a \textit{pencil}. {\color{blue} Concretely, PE at position \((i,j)\) on the wafer holds the pencil for grid coordinates \(x=i, y=j\), so the x-axis of the problem maps to PE columns, the y-axis to PE rows, and the z-axis is stored entirely in local memory. For a problem of size \(N^3\), we use an \(N \times N\) region of PEs with \(nz = N\).} Given the 48KB memory on each PE, this decomposition enables us to scale the problem by using more PEs. All data accesses along the \(z\) dimension are local and do not require communication. Such mapping has been studied in previous stencil mappings on WSE~\cite{Rocki,Sai,sai2,mathias}. Given the multi-grid dimensions halve at each level, we have to maintain in memory multiple \textit{pencils} from different levels as we superimpose levels. The total amount of data that will fit is a function of levels, \(L\), and pencil size \(nz_l\) for each level \(l \in L\). The total allocation %$A$ \textcolor{red}{OA: then you never use "A", or delete it or use it in the equation}
+            The GMG input domain is a structured 3D \(nx \times ny \times nz\) grid as shown in Figure~\ref{fig 1:V-cycle in GMG}. We map a 3D problem onto a 2D grid by storing the entire z-dimension (\(nz\) elements) on each PE for a fixed value of \(x\) and \(y\); i.e., a \textit{pencil}. Concretely, PE at position \((i,j)\) on the wafer holds the pencil for grid coordinates \(x=i, y=j\), so the x-axis of the problem maps to PE columns, the y-axis to PE rows, and the z-axis is stored entirely in local memory. For a problem of size \(N^3\), we use an \(N \times N\) region of PEs with \(nz = N\).  Given the 48KB memory on each PE, this decomposition enables us to scale the problem by using more PEs. All data accesses along the \(z\) dimension are local and do not require communication. Such mapping has been studied in previous stencil mappings on WSE~\cite{Rocki,Sai,sai2,mathias}. Given the multi-grid dimensions halve at each level, we have to maintain in memory multiple \textit{pencils} from different levels as we superimpose levels. The total amount of data that will fit is a function of levels, \(L\), and pencil size \(nz_l\) for each level \(l \in L\). The total allocation %$A$ \textcolor{red}{OA: then you never use "A", or delete it or use it in the equation}
             along the z-axis per PE is a finite geometric series with \(|L|\) levels and \(nz\) the size of the finest-level pencil \(l_0\),
             \vspace{5pt}
             \[
@@ -313,7 +313,7 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
             \]
             \textit{Allocation} represents the amount of data that must fit in 48KB memory along with other intermediate vectors and kernel buffers, and the program code for the PE.
             The finest levels in GMG need the highest amount of data and are computationally expensive; therefore, layer \(l_0\) requires the most memory.
-            {\color{blue} Since \(nz = N\) for an \(N^3\) problem, scaling from \(N^3\) to \((2N)^3\) both quadruples the number of PEs (from \(N^2\) to \(4N^2\)) and doubles the pencil size per PE (from \(N\) to \(2N\)). The maximum problem size is therefore constrained by per-PE memory: the pencil and its multi-level copies must fit within 48KB alongside the program code.}
+            Since \(nz = N\) for an \(N^3\) problem, scaling from \(N^3\) to \((2N)^3\) both quadruples the number of PEs (from \(N^2\) to \(4N^2\)) and doubles the pencil size per PE (from \(N\) to \(2N\)). The maximum problem size is therefore constrained by per-PE memory: the pencil and its multi-level copies must fit within 48KB alongside the program code.
 
         \subsection{V-Cycle Execution as Tasks \& State Machine}
             \label{sec:statemachine}
@@ -518,61 +518,16 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
             }
 \end{comment}
 
-        %Cleaned up to use acronyms already defined.  
-        In this section, we evaluate the performance of %Geometric Multigrid (GMG) 
-        GMG implemented on the Cerebras WSE-3 %Wafer-Scale Engine 3 (WSE-3) 
-        and compare it against the state-of-the-art %GPU implementation using the 
-        HPGMG (High Performance Geometric Multigrid) GPU benchmark. %, %[citeme]  an open-source benchmark used for standard ranking and benchmarking of supercomputers on NVIDIA GH200. 
-        %All results focus on weak-scaling behavior, which is dictated by per-PE memory constraints and the chosen mapping strategy.
-
-        % I don't understand why you are using \subsection*???  This will be problematic for final manuscript and does not look different.
-        %\subsection*{A. Experimental Configuration}
-
+        We evaluate GLOW on WSE-3 against a modified HPGMG (High Performance Geometric Multigrid) GPU baseline.
         \subsection{Experimental Configuration}
-            %In these experiments, w
-            We used the CS-3 cluster in the Argonne National Laboratory Compute Facility (ALCF), which
-            %the machines at Argonne National Labs[HIDE?]. The CS-3 cluster at ANL[HIDE?] 
-            consists of 4 WSE-3 machines along with proprietary memory nodes called MemoryX. %as a part of cluster[cite alcf machines]. 
-            One WSE-3 wafer integrates 893,064 processing elements (PEs) arranged in an 1172 \(\times\) 762 2D mesh operating at 875 MHz along with 44 GBs of total on-chip SRAM memory. We used Cerebras SDK\footnote{\url{https://sdk.cerebras.net/installation-guide}} version 1.4.0. The experiments were conducted on a single WSE-3 %as accelerator 
-            attached to a host system running Linux kernel 4.18.0 on an AMD EPYC 9354P 32-Core Processor with 188~GB of main memory. For the GPU baseline, we used an NVIDIA Grace Hopper GH200 at the TACC HPC facility\footnote{\url{https://docs.tacc.utexas.edu/hpc/vista/}}, equipped with 120~GB RAM and running CUDA 12.5(g). To ensure compatibility, we modified the baseline HPGMG code\footnote{\url{https://hpgmg.org/}} to use single precision data, as WSE-3 does not support double precision.
+            We used the CS-3 cluster at the ALCF~\cite{alcf_aitestbed} (4 WSE-3 machines). One WSE-3 wafer integrates 893,064 PEs in an $1172 \times 762$ 2D mesh at 875~MHz with 44~GB on-chip SRAM. We used Cerebras SDK~\cite{cerebras_sdk} v1.4.0 on a single WSE-3 attached to a host running Linux 4.18.0 on an AMD EPYC 9354P (32 cores, 188~GB RAM).
 
-            The CSL backend compiler was invoked with the LLVM options
-            \texttt{--inline-threshold=256} and \texttt{--unroll-threshold=256}. Experiments on the GH200 system were conducted with the following modules loaded:
-            \texttt{openmpi/5.0.5}, \texttt{ucc/1.5.1}, \texttt{ucx/1.19.1},
-            \texttt{cmake/4.1.1}, \texttt{xalt/3.1}, \texttt{TACC},
-            \texttt{nvidia/24.7}, \texttt{nvpl/24.7}.
+            The GPU baseline runs on an NVIDIA GH200~\cite{tacc_vista} (96~GB HBM3, no Tensor Cores). It derives from HPGMG-FV~\cite{hpgmg_org} (V1: CPU+MPI, fp64), its CUDA port~\cite{hpgmg_cuda} (V2), and a fork adding distributed portability and periodic BCs (V3). Our version extends V3 with Dirichlet BCs and FP32 support, as WSE-3 lacks fp64. Compilation uses \texttt{-O2 -fopenmp} (host) and \texttt{-O2} via NVCC for \texttt{sm\_90}, with \texttt{USE\_REG}, \texttt{USE\_TEX}, \texttt{CUDA\_UM\_ZERO\_COPY}, and \texttt{HOST\_LEVEL\_SIZE\_THRESHOLD=0}; block-copy tiles are $32{\times}4{\times}8$, boundary tiles $64{\times}16{\times}16$. Modules loaded: \texttt{gcc/14.2.0}, \texttt{cuda/12.8\,(g)}, \texttt{openmpi/5.0.5}, \texttt{ucc/1.7.0}, \texttt{ucx/1.20.0}, \texttt{nvpl/26.1}, \texttt{cmake/4.1.1}, \texttt{python3/3.11.8}.
+            Both platforms perform warmup V-cycles and reset timers before timed runs. WSE-3 timing uses 48-bit hardware counters at 875~MHz ($t(\mu s){=}(cycles/0.875){\times}10^{-3}$); GH200 uses CUDA events. Both capture device-side execution only, excluding data transfers. We report average time per V-cycle and time to solution; solver parameters (grid size, levels, iterations, tolerance, smoothing counts) are identical across platforms.
 
-
-            % The compilation used the CUDA architecture flag
-            % \texttt{cuda_arch=compute_90,code=sm_90}. Additional compilation flags included
-            % \texttt{OPTS="-DUSE_DIRICHLET_BC"}, \texttt{CFLAGS="-O2 -fopenmp"}, and
-            % \texttt{NVCCFLAGS="-O2 -fopenmp"}.
-            % To ensure a fair comparison, both the GH200 GPU and WSE-3 were run with identical V cycle configuration parameters.
-
-            %\subsection*{B. Problem Description}
         \subsection{Problem Description}
-            We evaluate the performance of GMG %a geometric multigrid (GMG) algorithm along with convergence checks 
-            implemented entirely on the device. All experiments solve the constant-coefficient 3D Poisson equation on a structured Cartesian grid using a 7-point 3D-stencil. The domain is discretized uniformly in all three dimensions, and homogeneous Dirichlet boundary conditions are imposed on the domain boundaries. The grid spacing of \(h^2\) is uniform in all three dimensions.
+            All experiments solve the constant-coefficient 3D Poisson equation on a structured Cartesian grid with uniform spacing $h^2$, a 7-point stencil, and homogeneous Dirichlet BCs. The solver runs entirely on device in FP32. The RHS is $b{=}\sin(\pi x)\sin(\pi y)\sin(\pi z)$; the initial guess is $x{=}10.0$; stencil coefficients are $\alpha{=}{-}6.0$, $\beta{=}1.0$. Jacobi relaxation ($\omega{=}2/3$) is the smoother. The coarsest level is a $2{\times}2$ grid except in shallow V-cycle experiments. Iterations terminate when the $\ell_\infty$ residual norm falls below $\epsilon{=}10^{-2}$ or after 100 V-cycles. Unless otherwise stated, results use a $512^3$ problem with the 6/6/6 (pre/post/coarse) configuration.
 
-            %\textcolor{red}{The following paragraph is hard to read -- a lot of detail and formulas inlined into the text.  Perhaps you could put the configuration information into a table?}
-            The right hand side of Ax=b is initialized to:
-            \begin{center}
-                %$f(x,y,z)=\sin(\pi x)\sin(\pi y)\sin(\pi z)$\\
-                \(b=\sin(\pi x)\sin(\pi y)\sin(\pi z)\)\\
-            \end{center}
-            where \(x, y\) and \(z\) are spatial locations.
-            The initial solution \(x\) initialized to 10.0, and the stencil coefficients are: \(\alpha = -6.0\), \(\beta = 1.0\). Jacobi relaxation with \(\omega=2/3\) is used as the smoother. The coarsest level goes to a domain size of 2x2, except for shallow V-cycle experiments. Convergence is determined based on the maximum norm of the residual at the finest level, and solver iterations terminate once a prescribed tolerance \textcolor{red}{still true?: (\(\epsilon = 10^{-5}\))} is reached or a maximum number of V-cycles is reached.
-
-            All timing measurements are collected on-device using hardware counters and excludes host-to-device and device-to-host transfers. We report total time per V-cycle as well as a breakdown of time spent in various operators. All experiments are performed in single precision (FP32) arithmetic. We show various experiments that change the number of pre-smoothing and post-smoothing and coarse-smoothing iterations at the coarsest level. Unless otherwise stated we show the experiments with 6/6/6 (pre-/post-/coarse) as the default configuration as that turns out to be the best-performing configuration for GLOW. The hardware uses 16 channels, and up to a 256 block size for the halo exchange buffers. (Note that due to the 48KB memory limit for both code and data, along with storing data for multiple levels at a node, the halo exchange for the \(512^3\) problem size must reduce its halo exchange granularity due to memory constraints (see Section~\ref{sec:impact-of-optimizations-and-memory-constraints}).
-
-
-            %we choose the size). 
-            %This is being moved to the configuration paragraph.  It is out of place here.
-            %The backend CSL compiler has the following options:"--llvm-option=--inline-threshold=256 --llvm-option=--unroll-threshold=256".To ensure a fair comparison, we run the GH200 GPU and WSE-3 using identical configuration parameters.
-
-
-
-            %\subsection*{C. V-Cycle Performance and Operator Breakdown}
         \subsection{V-Cycle Variation Performance Comparison}
             Figure~\ref{fig:hpgmg-speedup} reports the performance of GLOW on WSE-3 compared against HPGMG on NVIDIA GH200. Bars above the speedup of 1 baseline bar mean WSE-3 is faster. %showing relative speedup where values above one indicate that WSE-3 is faster. 
             The \(x\)-axis denotes the 2D PE grid size under weak scaling; the \(z\)-dimension of the problem maps one-to-one onto the grid, so larger grids correspond to larger 3D problems. Each bar in a group corresponds to a distinct multigrid configuration experiment, parameterized by the number of pre-, post-, and coarse-level smoothing iterations. GLOW consistently outperforms HPGMG on the GH200, with speedups increasing as problem size scales. The best speedup, approximately \(25\times\), is observed at the \(512\times512\) grid for the \(6/6/6(shallow)\) configuration. In contrast, configurations with aggressive coarse-level smoothing, such as \(4/4/100\), show the lowest speedups, particularly at larger grid sizes of \(256\times256\).
@@ -737,6 +692,11 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
         
         {\color{blue}
         \subsection{Roofline Analysis}
+        1. Methodology
+        2. Peaks
+        3. Insights(1 pe vs N pes)
+        compute bound
+        discussion on 
             Figure~\ref{fig:roofline} presents a roofline analysis for a $512^3$ problem with 9 levels using 262,144 active PEs. The left panel shows the per-PE (0,0) performance: finer levels (L0, L1) reach 43\% and 18\% of the 1.75 GFLOP/s per-PE peak respectively, operating in the compute-bound region. As levels coarsen, performance drops and shifts toward the memory/fabric-bound region due to growing communication distance and shrinking local computation. The right panel shows the active-PE system view, where the per-level peak scales with the number of active PEs at each level. L0 achieves 43\% of its 458.8 TFLOP/s system peak. The roofline confirms that GLOW is compute-bound at fine levels and transitions to communication-bound at coarse levels, consistent with our per-operator analysis.TODO: Write methodology, and talk about the table<todo add me>
 
             \begin{figure*}[t]
@@ -812,7 +772,7 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
         3. Pipeline for this application doesn't make sense, partition problems, distance
         4. Programming model(async and hangs), colorings(design sophscticated patterns)
         5. Mppaing, memory, distance of communication, convergence(HPC low radix machines for larger distances and cerebras needs to think about it), uniform communication patterns.
-        6.
+        6. Poeple should not have to go to 27pt because of what oscar explained me, write it. They choose 27 pt because say 7pt was memory bound and using 27 pt the performance at least moves up, now given that GLOW is alredy compute bound we can't get speedups using 27pt as we are already there, one benefit is of accuracy using 27pt. there can be other implications, say 27 will be less power hungry.
 
 
     \section{Related Work}
