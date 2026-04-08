@@ -433,7 +433,6 @@ def _draw_roofline_ceiling(ax, peak_flops, mem_bw, label_peak, ai_range,
     compute_ceiling = np.full_like(ai_range, peak_flops)
     roofline = np.minimum(mem_ceiling, compute_ceiling)
     ax.loglog(ai_range, roofline, '-', color=color, linewidth=3, label='Memory Roofline')
-    ax.loglog(ai_range, mem_ceiling, '-', color='steelblue', linewidth=1.2, alpha=0.3)
     ax.axhline(y=peak_flops, color='firebrick', linestyle='--', linewidth=2, alpha=0.6,
                label=f'Peak: {label_peak}')
     if fabric_bw is not None:
@@ -441,7 +440,6 @@ def _draw_roofline_ceiling(ax, peak_flops, mem_bw, label_peak, ai_range,
         fab_roofline = np.minimum(fab_ceiling, compute_ceiling)
         ax.loglog(ai_range, fab_roofline, '-', color='darkorange', linewidth=2.5, alpha=0.8,
                   label='Fabric Roofline')
-        ax.loglog(ai_range, fab_ceiling, '-', color='darkorange', linewidth=1, alpha=0.2)
 
 
 def _style_axis(ax, xlabel, ylabel, title, xlim=(0.01, 10), ylim_lo=None, ylim_hi=None):
@@ -449,8 +447,7 @@ def _style_axis(ax, xlabel, ylabel, title, xlim=(0.01, 10), ylim_lo=None, ylim_h
     ax.set_xlabel(xlabel, fontsize=15, fontweight='bold')
     ax.set_ylabel(ylabel, fontsize=15, fontweight='bold')
     ax.set_title(title, fontsize=16, fontweight='bold', pad=8)
-    ax.grid(True, alpha=0.25, which='both', linewidth=0.5)
-    ax.grid(True, alpha=0.15, which='minor', linewidth=0.3)
+    ax.grid(False)
     ax.set_xlim(xlim)
     if ylim_lo is not None and ylim_hi is not None:
         ax.set_ylim(ylim_lo, ylim_hi)
@@ -586,10 +583,13 @@ def plot_roofline(summary, output_dir):
                 f'(b) Active-PE System (per-level peak)',
                 ylim_lo=sys_ylim_lo, ylim_hi=fine_peak * 10)
 
-    outpath = os.path.join(output_dir, 'roofline_plot.png')
-    plt.savefig(outpath, dpi=300, bbox_inches='tight')
+    outpath_png = os.path.join(output_dir, 'roofline_plot.png')
+    outpath_pdf = os.path.join(output_dir, 'roofline_plot.pdf')
+    plt.savefig(outpath_png, dpi=300, bbox_inches='tight')
+    plt.savefig(outpath_pdf, bbox_inches='tight')
     plt.close()
-    print(f"\nSaved: {outpath}")
+    print(f"\nSaved: {outpath_png}")
+    print(f"Saved: {outpath_pdf}")
 
 
 def _fmt_bw(val):
