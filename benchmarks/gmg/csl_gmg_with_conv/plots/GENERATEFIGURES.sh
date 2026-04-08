@@ -92,24 +92,24 @@ run_perf all_responses_6_6_6.txt          out_6_6_6.txt
 # ----------------------------------------------------------------------------
 # Step 3: analysis/comparison scripts that depend on out_*.txt
 # ----------------------------------------------------------------------------
-echo ""
-echo "=========================================="
-echo "Step 3: Comparison/analysis plots"
-echo "=========================================="
+# echo ""
+# echo "=========================================="
+# echo "Step 3: Comparison/analysis plots"
+# echo "=========================================="
 
-if [ -f out_6_6_6.txt ] && [ -f out_6_6_6_unoptimized.txt ]; then
-    echo "  optimized_vs_unoptimized.py -> metrics_comparison.png"
-    { echo "--- optimized_vs_unoptimized.py ---"; python optimized_vs_unoptimized.py out_6_6_6.txt out_6_6_6_unoptimized.txt 2>&1; echo; } | tee -a "${LOGFILE}"
-else
-    echo "  SKIP optimized_vs_unoptimized.py: missing out_6_6_6*.txt"
-fi
+# if [ -f out_6_6_6.txt ] && [ -f out_6_6_6_unoptimized.txt ]; then
+#     echo "  optimized_vs_unoptimized.py -> metrics_comparison.png"
+#     { echo "--- optimized_vs_unoptimized.py ---"; python optimized_vs_unoptimized.py out_6_6_6.txt out_6_6_6_unoptimized.txt 2>&1; echo; } | tee -a "${LOGFILE}"
+# else
+#     echo "  SKIP optimized_vs_unoptimized.py: missing out_6_6_6*.txt"
+# fi
 
-if [ -f h200_vs_cs3_april6.csv ]; then
-    echo "  h200_vs_cs3.py -> hpgmg_speedup_barplot.pdf"
-    { echo "--- h200_vs_cs3.py ---"; python h200_vs_cs3.py h200_vs_cs3_april6.csv 2>&1; echo; } | tee -a "${LOGFILE}"
-else
-    echo "  SKIP h200_vs_cs3.py: missing h200_vs_cs3_april6.csv"
-fi
+# if [ -f h200_vs_cs3_april6.csv ]; then
+#     echo "  h200_vs_cs3.py -> hpgmg_speedup_barplot.pdf"
+#     { echo "--- h200_vs_cs3.py ---"; python h200_vs_cs3.py h200_vs_cs3_april6.csv 2>&1; echo; } | tee -a "${LOGFILE}"
+# else
+#     echo "  SKIP h200_vs_cs3.py: missing h200_vs_cs3_april6.csv"
+# fi
 
 # ----------------------------------------------------------------------------
 # Step 4: standalone plot scripts (read response.txt or aggregates)
@@ -134,29 +134,31 @@ echo "=========================================="
 # echo "  plot_convergence.py -> convergence_*.png"
 # { echo "--- plot_convergence.py ---"; python plot_convergence.py 2>&1; echo; } | tee -a "${LOGFILE}"
 
-echo " Memory and utilization table"
-python memory_utilization_table.py out_6_6_6.txt
+# echo " Memory and utilization table"
+# python memory_utilization_table.py out_6_6_6.txt
 
-echo "  v_vs_w_cycle.py -> W vs V cycle plot"
-{ echo "--- v_vs_w_cycle.py ---"; python v_vs_w_cycle.py 2>&1; echo; } | tee -a "${LOGFILE}"
+# echo "  v_vs_w_cycle.py -> W vs V cycle plot"
+# { echo "--- v_vs_w_cycle.py ---"; python v_vs_w_cycle.py 2>&1; echo; } | tee -a "${LOGFILE}"
 
 echo "  tts_comparison.py -> time-per-V-cycle table"
 { echo "--- tts_comparison.py ---"; python tts_comparison.py 2>&1; echo; } | tee -a "${LOGFILE}"
 # ----------------------------------------------------------------------------
 # Step 5: roofline analysis (one per sample problem)
 # ----------------------------------------------------------------------------
-echo ""
-echo "=========================================="
-echo "Step 5: Roofline analysis"
-echo "=========================================="
+# echo ""
+# echo "=========================================="
+# echo "Step 5: Roofline analysis"
+# echo "=========================================="
 
-ROOFLINE_SAMPLE="${CSL_GMG_DIR}/build/out_dir_S512x_L9_M100_P6_P6_B6/response.txt"
-if [ -s "${ROOFLINE_SAMPLE}" ]; then
-    echo "  roofline_analysis.py <- 512³ 6/6/6 -> roofline_plot.png"
-    { echo "--- roofline_analysis.py ---"; python roofline_analysis.py "${ROOFLINE_SAMPLE}" 2>&1; echo; } | tee -a "${LOGFILE}"
-else
-    echo "  SKIP roofline_analysis.py: no 512³ 6/6/6 response.txt"
-fi
+# ROOFLINE_SAMPLE="${CSL_GMG_DIR}/build/out_dir_S512x_L9_M100_P6_P6_B6/response.txt"
+# if [ -s "${ROOFLINE_SAMPLE}" ]; then
+#     echo "  roofline_analysis.py <- 512³ 6/6/6 -> roofline_plot.png"
+#     { echo "--- roofline_analysis.py ---"; python roofline_analysis.py "${ROOFLINE_SAMPLE}" 2>&1; echo; } | tee -a "${LOGFILE}"
+# else
+#     echo "  SKIP roofline_analysis.py: no 512³ 6/6/6 response.txt"
+# fi
+
+python print_results_table.py --build ../build/
 
 # ----------------------------------------------------------------------------
 # Done
