@@ -428,29 +428,30 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
 
             \begin{table}[t]
                 \centering
-                % \caption{Communication model (Eq.~\ref{eq:comm_model}) for strided mapping: $C_l = \texttt{zDim}_0/2^l$, $L_l = D_l = 2^l$, $N_l = 4$; $\texttt{zDim}_0 = 512$, $T_R = 2$. Cost breakdown: \emph{Comm.} = $\max(C_l, 4 + L_l)$; \emph{Latency} = $(2T_R{+}1)D_l = 5D_l$.}
-                \caption{Communication model (Eq.~\ref{eq:comm_model}) for strided mapping: \(C_l = \texttt{zDim}_0/2^l\), \(L_l = D_l = 2^l\), \(N_l = 4\); \(\texttt{zDim}_0 = 512\), \(T_R = 2\). Cost breakdown: \emph{Latency} = \((2T_R{+}1)D_l = 5D_l\).}
+                \caption{Communication model (Eq.~\ref{eq:comm_model}) for strided mapping: $C_l{=}\texttt{zDim}_0/2^l$, $L_l{=}D_l{=}2^l$, $N_l{=}4$; $\texttt{zDim}_0{=}512$, $T_R{=}2$. Latency${=}(2T_R{+}1)D_l{=}5D_l$. With forwarding optimization: $D_l{=}2$, Latency${=}5D_l{=}10$ (constant).}
                 \label{tab:comm_model_strided_512}
-                \renewcommand{\arraystretch}{1.1}
-                \setlength{\tabcolsep}{4pt} % Slightly increased spacing since column was removed
-                \begin{small}
-                    \begin{tabular}{@{}cccccccc@{}}
-                        \toprule
-                        \textbf{\(l\)} & \textbf{Grid}    & \(C_l\) & \(L_l\) & \(D_l\) & \begin{tabular}[c]{@{}c@{}}\textbf{Comm.}\\\textbf{cost}\end{tabular} & \begin{tabular}[c]{@{}c@{}}\textbf{Latency}\\\textbf{cost}\end{tabular} & \textbf{Total \(T_l\)} \\
-                        \midrule
-                        0              & \(512\times512\) & 512     & 1       & 1       & 512                                                                   & 5                                                                       & 517                    \\
-                        1              & \(256\times256\) & 256     & 2       & 2       & 256                                                                   & 10                                                                      & 266                    \\
-                        2              & \(128\times128\) & 128     & 4       & 4       & 128                                                                   & 20                                                                      & 148                    \\
-                        3              & \(64\times64\)   & 64      & 8       & 8       & 64                                                                    & 40                                                                      & 104                    \\
-                        4              & \(32\times32\)   & 32      & 16      & 16      & 32                                                                    & 80                                                                      & 112                    \\
-                        5              & \(16\times16\)   & 16      & 32      & 32      & 36                                                                    & 160                                                                     & 196                    \\
-                        6              & \(8\times8\)     & 8       & 64      & 64      & 68                                                                    & 320                                                                     & 388                    \\
-                        7              & \(4\times4\)     & 4       & 128     & 128     & 132                                                                   & 640                                                                     & 772                    \\
-                        8              & \(2\times2\)     & 2       & 256     & 256     & 260                                                                   & 1280                                                                    & 1540                   \\
-                        \bottomrule
-                    \end{tabular}
-                \end{small}
                 \label{tab:model_communication_costs}
+                \label{tab:comm_model_constant_dl}
+                \renewcommand{\arraystretch}{1.05}
+                \setlength{\tabcolsep}{2pt}
+                \scriptsize
+                \begin{tabular}{@{}cr rrrr rr rr@{}}
+                    \toprule
+                    & & & & & & \multicolumn{2}{c}{\textbf{Strided}} & \multicolumn{2}{c}{\textbf{Forwarding}} \\
+                    \cmidrule(lr){7-8} \cmidrule(lr){9-10}
+                    $l$ & \textbf{Grid} & $C_l$ & $L_l{=}D_l$ & \textbf{Comm.} & \textbf{Lat.} & \textbf{Total} & & \textbf{Lat.} & \textbf{Total} \\
+                    \midrule
+                    0 & $512^2$ & 512 &   1 & 512 &    5 &  517 & &  10 &  522 \\
+                    1 & $256^2$ & 256 &   2 & 256 &   10 &  266 & &  10 &  266 \\
+                    2 & $128^2$ & 128 &   4 & 128 &   20 &  148 & &  10 &  138 \\
+                    3 &  $64^2$ &  64 &   8 &  64 &   40 &  104 & &  10 &   74 \\
+                    4 &  $32^2$ &  32 &  16 &  32 &   80 &  112 & &  10 &   42 \\
+                    5 &  $16^2$ &  16 &  32 &  36 &  160 &  196 & &  10 &   46 \\
+                    6 &   $8^2$ &   8 &  64 &  68 &  320 &  388 & &  10 &   78 \\
+                    7 &   $4^2$ &   4 & 128 & 132 &  640 &  772 & &  10 &  142 \\
+                    8 &   $2^2$ &   2 & 256 & 260 & 1280 & 1540 & &  10 &  270 \\
+                    \bottomrule
+                \end{tabular}
             \end{table}
 
             \paragraph{Window-based Restriction:}
@@ -479,31 +480,7 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
             that we can substantially reduce this communication and latency
             if we bound the number of memory accesses.  This optimization is possible in the strided approach as we can skip the memory access on inactive PEs, leading to a \(D\_l = 2\) for sender and receiver accesses. Using this optimization, we can significantly speedup the time. We achieve this reduction using hardware resources -- microthreads and queues -- so that the incoming wavelets are forwarded directly to the output queue without intermediate memory accesses. This bypasses the ramp and effectively reduces the costly access so that the latency no longer grows with level. We compare our optimized implementation in Section~\ref{sec:impact-of-optimizations-and-memory-constraints}.
 
-            \begin{table}[t]
-                \centering
-                % \caption{Communication model with \textbf{Constant Latency}: $C_l = \texttt{zDim}_0/2^l$, $L_l = 2^l$, $N_l = 4$; $\textbf{D}_l = \mathbf{2}$; $\texttt{zDim}_0 = 512$, $T_R = 2$. Cost breakdown: \emph{Comm.} = $\max(C_l, 4 + L_l)$; \emph{Latency} = $5D_l = 10$.}
-                \caption{Communication model with \textbf{Constant Latency}: \(C_l = \texttt{zDim}_0/2^l\), \(L_l = 2^l\), \(N_l = 4\); \(\textbf{D}_l = \mathbf{2}\); \(\texttt{zDim}_0 = 512\), \(T_R = 2\). Cost breakdown:  \emph{Latency} = \(5D_l = 10\).}
-                \label{tab:comm_model_constant_dl}
-                \renewcommand{\arraystretch}{1.1}
-                \setlength{\tabcolsep}{4pt} % Slightly increased spacing since column was removed
-                \begin{small}
-                    \begin{tabular}{@{}cccccccc@{}}
-                        \toprule
-                        \textbf{\(l\)} & \textbf{Grid}    & \(C_l\) & \(L_l\) & \(D_l\) & \begin{tabular}[c]{@{}c@{}}\textbf{Comm.}\\\textbf{cost}\end{tabular} & \begin{tabular}[c]{@{}c@{}}\textbf{Latency}\\\textbf{cost}\end{tabular} & \textbf{Total \(T_l\)} \\
-                        \midrule
-                        0              & \(512\times512\) & 512     & 1       & 2       & 512                                                                   & 10                                                                      & 522                    \\
-                        1              & \(256\times256\) & 256     & 2       & 2       & 256                                                                   & 10                                                                      & 266                    \\
-                        2              & \(128\times128\) & 128     & 4       & 2       & 128                                                                   & 10                                                                      & 138                    \\
-                        3              & \(64\times64\)   & 64      & 8       & 2       & 64                                                                    & 10                                                                      & 74                     \\
-                        4              & \(32\times32\)   & 32      & 16      & 2       & 32                                                                    & 10                                                                      & 42                     \\
-                        5              & \(16\times16\)   & 16      & 32      & 2       & 36                                                                    & 10                                                                      & 46                     \\
-                        6              & \(8\times8\)     & 8       & 64      & 2       & 68                                                                    & 10                                                                      & 78                     \\
-                        7              & \(4\times4\)     & 4       & 128     & 2       & 132                                                                   & 10                                                                      & 142                    \\
-                        8              & \(2\times2\)     & 2       & 256     & 2       & 260                                                                   & 10                                                                      & 270                    \\
-                        \bottomrule
-                    \end{tabular}
-                \end{small}
-            \end{table}
+            % Table 4 merged into Table 3 above
 
 
     \section{Evaluation}
@@ -522,11 +499,14 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
         \subsection{Experimental Configuration}
             We used the CS-3 cluster at the ALCF~\cite{alcf_aitestbed} (4 WSE-3 machines). One WSE-3 wafer integrates 893,064 PEs in an $1172 \times 762$ 2D mesh at 875~MHz with 44~GB on-chip SRAM. We used Cerebras SDK~\cite{cerebras_sdk} v1.4.0 on a single WSE-3 attached to a host running Linux 4.18.0 on an AMD EPYC 9354P (32 cores, 188~GB RAM).
 
-            The GPU baseline runs on an NVIDIA GH200~\cite{tacc_vista} (96~GB HBM3, no Tensor Cores). It derives from HPGMG-FV~\cite{hpgmg_org} (V1: CPU+MPI, fp64), its CUDA port~\cite{hpgmg_cuda} (V2), and a fork adding distributed portability and periodic BCs (V3). Our version extends V3 with Dirichlet BCs and FP32 support, as WSE-3 lacks fp64. Compilation uses \texttt{-O2 -fopenmp} (host) and \texttt{-O2} via NVCC for \texttt{sm\_90}, with \texttt{USE\_REG}, \texttt{USE\_TEX}, \texttt{CUDA\_UM\_ZERO\_COPY}, and \texttt{HOST\_LEVEL\_SIZE\_THRESHOLD=0}; block-copy tiles are $32{\times}4{\times}8$, boundary tiles $64{\times}16{\times}16$. Modules loaded: \texttt{gcc/14.2.0}, \texttt{cuda/12.8\,(g)}, \texttt{openmpi/5.0.5}, \texttt{ucc/1.7.0}, \texttt{ucx/1.20.0}, \texttt{nvpl/26.1}, \texttt{cmake/4.1.1}, \texttt{python3/3.11.8}.
-            Both platforms perform warmup V-cycles and reset timers before timed runs. WSE-3 timing uses 48-bit hardware counters at 875~MHz ($t(\mu s){=}(cycles/0.875){\times}10^{-3}$); GH200 uses CUDA events. Both capture device-side execution only, excluding data transfers. We report average time per V-cycle and time to solution; solver parameters (grid size, levels, iterations, tolerance, smoothing counts) are identical across platforms.
+            \begin{sloppypar}
+            The GPU baseline runs on an NVIDIA GH200~\cite{tacc_vista} (96~GB HBM3, no Tensor Cores). It derives from HPGMG-FV~\cite{hpgmg_org} (V1: CPU+MPI, fp64), its CUDA port~\cite{hpgmg_cuda} (V2), and a fork adding distributed portability and periodic BCs (V3). Our version extends V3 with Dirichlet BCs and FP32 support, as WSE-3 lacks fp64. Compilation uses \texttt{-O2 -fopenmp} (host) and \texttt{-O2} via NVCC for \texttt{sm\_90}, with build flags \texttt{USE\_REG}, \texttt{USE\_TEX}, \texttt{CUDA\_UM\_ZERO\_COPY}, and \texttt{HOST\_LEVEL\_SIZE\_\allowbreak{}THRESHOLD=0}; block-copy tiles are $32{\times}4{\times}8$, boundary tiles $64{\times}16{\times}16$. Modules loaded: \texttt{gcc/14.2.0}, \texttt{cuda/12.8(g)}, \texttt{openmpi/5.0.5}, \texttt{ucc/1.7.0}, \texttt{ucx/1.20.0}, \texttt{nvpl/26.1}, \texttt{cmake/4.1.1}, \texttt{python3/3.11.8}.
+            \end{sloppypar}
+
+            Both platforms perform warmup V-cycles and reset timers before timed runs. WSE\nobreakdash-3 timing uses 48-bit hardware counters at 875~MHz ($t(\mu s){=}(cycles/0.875){\times}10^{-3}$); GH200 uses CUDA events. Both capture device-side execution only, excluding data transfers. We report average time per V-cycle and time to solution; solver parameters (grid size, levels, iterations, tolerance, smoothing counts) are identical across platforms.
 
         \subsection{Problem Description}
-            All experiments solve the constant-coefficient 3D Poisson equation on a structured Cartesian grid with uniform spacing $h^2$, a 7-point stencil, and homogeneous Dirichlet BCs. The solver runs entirely on device in FP32. The RHS is $b{=}\sin(\pi x)\sin(\pi y)\sin(\pi z)$; the initial guess is $x{=}10.0$; stencil coefficients are $\alpha{=}{-}6.0$, $\beta{=}1.0$. Jacobi relaxation ($\omega{=}2/3$) is the smoother. The coarsest level is a $2{\times}2$ grid except in shallow V-cycle experiments. Iterations terminate when the $\ell_\infty$ residual norm falls below $\epsilon{=}10^{-2}$ or after 100 V-cycles. Unless otherwise stated, results use a $512^3$ problem with the 6/6/6 (pre/post/coarse) configuration.
+            All experiments solve the constant-coefficient 3D Poisson equation on a structured Cartesian grid with uniform spacing $h^2$, a 7-point stencil, and homogeneous Dirichlet BCs. The solver runs entirely on device in FP32. The RHS is $b{=}\sin(\pi x)\sin(\pi y)\sin(\pi z)$; the initial guess is $x{=}0.0$; stencil coefficients are $\alpha{=}{-}6.0/h^{2}$, $\beta{=}1.0/h^{2}$. Jacobi relaxation ($\omega{=}2/3$) is the smoother. The coarsest level is a $2{\times}2$ grid except in shallow V-cycle experiments. Iterations terminate when the $\ell_\infty$ residual norm falls below $\epsilon{=}10^{-2}$ or after 100 V-cycles. This tolerance reflects the theoretical FP32 accuracy limit for the 3D Poisson operator: $\kappa(A)\cdot\epsilon_{\text{mach}} \approx (C/h^{2})\cdot 1.2{\times}10^{-7} \approx 10^{-2}$ at $512^3$ resolution. Unless otherwise stated, results use a $512^3$ problem with the 6/6/6 (pre/post/coarse) configuration.
 
         \subsection{V-Cycle Variation Performance Comparison}
             Figure~\ref{fig:hpgmg-speedup} reports the performance of GLOW on WSE-3 compared against HPGMG on NVIDIA GH200. Bars above the speedup of 1 baseline bar mean WSE-3 is faster. %showing relative speedup where values above one indicate that WSE-3 is faster. 
@@ -557,73 +537,46 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
 
             %\subsection*{D. Operator Breakdown}
         \subsection{Per-Operator Performance Breakdown}
-            We attribute the time spent to
-            %We analyze the performance of 
-            individual operators in Figure~\ref{fig:per-operation-timing}. %to further explain these results. 
-            The plot shows time per operator for one V-cycle on a \(512^3\) problem, summed over each horizontal level (both down and up phases combined). The \(x\)-axis is the multi-grid level from 0 (finest) to 8 (coarsest); the \(y\)-axis is execution time in a log scale (lower is faster). %We explain each line in turn.
-
-
-            \textbf{Smooth with 7-point (strided) stencil.}
-            %\paragraph{Smooth with 7-point (strided) stencil}
-            %\textbf{Smoothing (7-point hollow stencil).} 
-            %\textcolor{red}{Using "hollow" everywhere is confusing.  It doesn't start out "hollow" -- I prefer the word "strided".  The stride gets larger as the levels increase. I'm commenting out your text, and trying with my own to make this clearer.  Also, it is premature to compare performance to the residual operator that has not been presented.}
-            %The smoothing operator, internally implemented using a 7-point hollow-stencil, exhibits behavior similar to that of the residual operator, but with consistently higher cost due to multiple pre and post-smoothing iterations and fixed overheads. As expected, smoothing time initially decreases toward coarser levels because both the number of active PEs and the local data volume are halved at each level. However, unlike conventional weak-scaling behavior reported on CPUs and GPUs[oscar work cite, some GMG CPU/GPU papers] where performance often plateaus/saturates or improves monotonically toward coarser grids, in GLOW we observe a gradual increase in cost beyond a certain level. 
-            %The smooth operator is a 7-point stencil.  
-            At levels above \(L_1\), a strided stencil refers to skipping PEs in the calculation as a result of the grid coarsening.
-            As is typical in GMG, smooth time initially decreases toward coarser levels because both the number of active PEs and the local data volume are halved at each level. However, unlike conventional weak-scaling behavior, %reported on CPUs and GPUs[oscar work cite, some GMG CPU/GPU papers] 
-            where performance often plateaus/saturates or improves monotonically toward coarser grids, in GLOW we observe a gradual increase in cost beyond a certain level.
-
-            To better understand this behavior, we microbenchmarked the strided stencil kernel used
-            at the heart of the smooth and residual operators, as
-            shown in Figure~\ref{fig:spmv-internal}. We measured compute time to calculate the Laplacian across the x-y plane and z-axis. %Whereas 
-            Communication time is the time taken to send and receive halo regions to and from neighbors from all 4 directions. Compute time decreases nearly by a factor of two per level before flattening, due to fixed overheads. Communication cost starts lower than compute on finer grids as the stencil halo neighbors are exchanged directly between neighbors, while the data size is largest and has maximal computation.
-            %in the best possible locality and both asynchronous, although the data size is larger leading to higher compute costs. 
-            The intersection point of these curves reflects the tradeoff between shrinking data volume and increasing communication distance: although each PE processes less data, messages must traverse longer paths as the active region contracts.
-
-            We compare analytical predictions in \ref{tab:model_communication_costs} and Table \ref{tab:comm_model_constant_dl} with these performance measurements.  One can observe the curves with and without forwarding-optimization both show a higher communication cost in the initial finer levels and latency grows as we move towards coarser levels. There is a sweet spot where the communication cost and latency just overlap each other. \textcolor{red}{The following sentence may cause reviewers to say that we should have done this already.  Also, I think it may belong in a subsequent ``Lessons Learned'' section: To further reduce the cost, we believe even more sophisticated techniques to change the routing might be useful, one such is demonstrated by Mathias et al.~\cite{mathias} using control wavelets and runtime coloring reconfiguration.}
-            %at the color config and routes level. 
-            %I don't know what this means, and I don't think it contributes
-            %Another possibility is to teardown the colors before setting each level leading to higher usage of colors which is a limited resource. 
-            %We took a simpler approach to short-circuit the queues instead as the cost of resetting the colors and reconfiguring the routes might have been higher summed up over V cycles and iterations.
-            %We ran the upstream SDK 7-point stencil (hop-based) and saw similar trends with the turning point shifted toward finer levels.
-
-            \begin{figure}[h!]
+            \begin{figure}[t]
                 \centering
                 \includegraphics[width=\linewidth]{figures/per_operation_timing_512x512x512.png}
-                \caption{Per-operator time per level for one V-cycle on a \(512^3\) problem (GLOW on CS-3). Down and up phases are summed at each level. \(x\)-axis: level 0 (finest) to 8 (coarsest). \(y\)-axis: time (log scale; higher is slower). Config: \(6/6//6\) pre/post/coarse, 9 levels, FP32, 7-point stencil.}
+                \caption{Per-operator time per level for one V-cycle on a \(512^3\) problem (GLOW on CS-3). Down and up phases are summed at each level. Config: \(6/6/6\) pre/post/coarse, 9 levels, FP32, 7-point stencil. breaks down time per operator for one V-cycle (excluding convergence), summed over down and up phases at each level
+                }
                 \label{fig:per-operation-timing}
             \end{figure}
 
-            \textbf{Residual.} The residual operator uses the same 7-point stencil as smoothing and follows a similar performance trend. Differences in absolute time come from the absence of multiple smoothing iterations.
+            {\textbf{Smooth, Residual}
+            %old: separate paragraphs for smooth (3 paras), residual (1 sentence), restriction (1 para)
+            Referring to Figure~\ref{fig:per-operation-timing} 
+            above operators use the 7-point strided stencil (stride $2^l$ at level $l$) and share similar performance trend. Cost initially decreases toward coarser levels as active PEs and local data halve per level. Unlike conventional weak scaling where cost plateaus or improves monotonically, in GLOW we observe a gradual increase beyond a certain level due to growing hop distance.
 
-            \textbf{Restriction.} Restriction exhibits increasing cost toward coarser levels. The window-based reduction (Figure~\ref{fig:Spmv_and_restriction}) technique used in our distributed mapping requires contributions from \(N-1\) other PEs within a window, introducing dependence and repeated accesses to local memory via the ramp. As the window size grows relative to the number of active PEs, these dependences dominate execution time. Skipping inactive or out-of-domain PEs during the reduction could potentially reduce this overhead and can be a promising direction for future optimization.
+            Figure~\ref{fig:spmv-internal} benchmarks the internal costs in detail: Compute time calculates the Laplacian across the x-y and z plane, it halves per level before flattening from fixed overheads. Communication measures the time to send and recv halo regions in all 4 directions, it starts below compute on fine grids but grows as halo messages traverse longer paths. The crossover point reflects the tradeoff between shrinking data volume and increasing distance. Table~\ref{tab:model_communication_costs} confirms this analytically for both strided and forwarding-optimized variants. Residual behaves similar except the differences in absolute time come from the absence of multiple smoothing iterations.
 
-            \textbf{Interpolation:} Interpolation shows the opposite behavior compared to restriction; it is more expensive on finer grids and becomes progressively cheaper toward coarser levels. As microbenchmarked in Figure~\ref{fig:interpolation-internal}, interpolation cost is dominated by sending data compared to computing locally. Although one might expect the cost to increase with distance, instead interpolation benefits from the hardware’s zero-cost multicast capability. Data is broadcast in all four directions simultaneously, allowing row-wise and column-wise transfers to occur in parallel. Unlike restriction, interpolation lacks producer-consumer dependences between PEs, enabling immediate forwarding without intermediate memory accesses.  Consequently, each PE can multicast and advance, thus avoiding the high cost of going down the ramp to memory. As the data volume shrinks at coarser levels, smaller packets are sent over longer distances, but the use of multicast and the avoidance of ramp traffic result in lower overall cost. In Figure~\ref{fig:interpolation-internal}, we see that at each level the window-leader PE (top-left, as shown in Figure~\ref{fig:Spmv_and_restriction}) expands the z dimension, resets the routes, broadcasts data, and eventually when data reaches the destination, calculates the error correction locally using tightly coupled DSD operations. Notice the cost to reset routes is constant mostly.
+            \textbf{Restriction} uses a window-based reduction (Figure~\ref{fig:Spmv_and_restriction}) that gathers contributions from $N{-}1$ PEs; its cost grows with window size due to producer-consumer dependences and high ramp cost, we apply forwarding optimization to keep this cost low.
+            }
 
-            % SPMV internal:
-            % \begin{figure}[h!]
-            %     \centering
-            %     \includegraphics[width=\linewidth]{figures/spmv_internal.png}
-            %     \caption{Internal speedup of smooth on Cerebras CS-3 and NVIDIA GH200 using HPGMG and GLOW across various problem sizes. The bar plot shows relative performance (higher is better).}
-            %     \label{fig:spmv-internal}
-            % \end{figure}
             \begin{figure*}[t]
                 \centering
                 \includegraphics[width=\textwidth]{figures/spmv_internal.png}
-                \caption{Internal speedup of smooth on Cerebras CS-3 and NVIDIA GH200 using HPGMG and GLOW across various problem sizes. The bar plot shows relative performance (higher is better).}
+                \caption{Stencil micro-benchmark on CS-3: compute vs.\ communication time per level for the 7-point strided stencil used in smooth and residual operators.}
                 \label{fig:spmv-internal}
             \end{figure*}
 
 
-            % interpolation internal:
+            \textbf{Coarse solver.} The coarse solver applies weighted Jacobi relaxation on the coarsest grid. Its cost is very high compared to fine-level operators and grows with the number of coarse iterations, significantly impacting overall performance in deep V-cycles and W-cycles (Figure~\ref{fig:hpgmg-speedup}).
+
+            {\textbf{Interpolation}
+            %old: 12 lines repeating multicast insight twice and walking through figure phases
+            shows the opposite trend: more expensive on fine grids, progressively cheaper toward coarser levels (Figure~\ref{fig:interpolation-internal}). Cost is dominated by data transfer, not local computation. Interpolation benefits from the hardware’s zero-cost multicast: data is broadcast in all four directions simultaneously allowing row-wise and column-wise transfers to occur in parallel. It also lacks producer-consumer depencency chains, so PEs forward immediately without ramp access. As data volume shrinks at coarser levels, the multicast advantage outweighs longer distances. In Figure~\ref{fig:interpolation-internal}, we see that at each level the window-leader PE (top-left, as shown in Figure~\ref{fig:Spmv_and_restriction}) expands the z dimension, resets the routes/colors, broadcasts data, and eventually when data reaches the destination, calculates the error correction locally using tightly coupled DSD operations. Notice the cost to reset routes is mostly constant.
+            }
+
             \begin{figure*}[t]
                 \centering
                 \includegraphics[width=\linewidth]{figures/interpolation_internal.png}
-                \caption{Internal speedup of interpolation on Cerebras CS-3 and NVIDIA GH200 using HPGMG/Glow across various problem sizes. The bar plot shows relative performance (higher is better).}
+                \caption{Interpolation micro-benchmark on CS-3: time breakdown per level showing expand-z, route reset, broadcast, and error correction phases.}
                 \label{fig:interpolation-internal}
             \end{figure*}
 
-            \textbf{Coarse solver.} The coarse solver applies weighted Jacobi relaxation on the coarsest grid. Its cost is very high compared to fine-level operators and grows with the number of coarse iterations. We showed experiments in Figure~\ref{fig:hpgmg-speedup} with varying coarse iterations, significantly impacting overall performance in deep V-cycles.
 
             % metrics_compare.png
             % \begin{figure*}[t]
@@ -633,17 +586,17 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
             %     \label{fig:metrics-compare}
             % \end{figure*}
 
-        \subsection{Forwarding Communication Optimization}
-            \label{sec:impact-of-optimizations-and-memory-constraints}
-            %\subsection*{E. Impact of optimizations and memory constraints}
-            % let's start talking about metrics compare now.
-            We further quantify the impact of the forwarding optimization of Section~\ref{sec:forwarding}.
-            %our \textcolor{red}{You should have a name for this optimization in the Mapping section, and then you can refer to it by the name.} optimizations 
-            in Figure~\ref{fig:metrics-compare}. The forwarding optimization shines as the number of inactive PEs start increasing.  We see almost 8.45\(\times\) speedup over the unoptimized/inactive PE memory accessing implementation. This leads to a 3.94\(\times\) speedup over the whole application shown in the bottom left corner. Compute time reduces since unnecessary computation on inactive PEs is also eliminated.
+        % \subsection{Forwarding Communication Optimization}
+        %     \label{sec:impact-of-optimizations-and-memory-constraints}
+        %     %\subsection*{E. Impact of optimizations and memory constraints}
+        %     % let's start talking about metrics compare now.
+        %     We further quantify the impact of the forwarding optimization of Section~\ref{sec:forwarding}.
+        %     %our \textcolor{red}{You should have a name for this optimization in the Mapping section, and then you can refer to it by the name.} optimizations 
+        %     in Figure~\ref{fig:metrics-compare}. The forwarding optimization shines as the number of inactive PEs start increasing.  We see almost 8.45\(\times\) speedup over the unoptimized/inactive PE memory accessing implementation. This leads to a 3.94\(\times\) speedup over the whole application shown in the bottom left corner. Compute time reduces since unnecessary computation on inactive PEs is also eliminated.
 
         \subsection{Memory Constraints: Code vs.\ Data Tradeoff}
             Table~\ref{tab:memory_utilization} quantifies per-PE memory usage across all problem sizes. The code section occupies a fixed ${\sim}$23KB (47\%) of the 48KB SRAM and almost remains constant across problem sizes, this is driven by aggressive function inlining performed by the backend LLVM compiler as well as the inclusion of stencil and collectives library kernels. The data section, which stores solution vectors, residuals, intermediate buffers, and multi-level save arrays, grows from 2.9\% at $4^3$ to 50.7\% at $512^3$, where the PE reaches 98\% capacity. This fixed code footprint combined with geometrically growing per-level data imposes a practical scalability limit: the $512^3$ problem is the largest that fits. Wafer utilization ranges from 0.002\% ($4^3$) to 29.4\% ($512^3$), showing that even our largest problem uses less than a third of the 893,064 available PEs.
-            \begin{table}[t]
+            \begin{table}[]
                 \caption{Per-PE memory breakdown and wafer utilization across problem sizes (48KB SRAM per PE, 893,064 total PEs).}
                 \label{tab:memory_utilization}
                 \centering
@@ -662,31 +615,64 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
                 \end{tabular}
             \end{table}
 
-        {
-        \subsection{On V, W and F cycles}
-            We chose to investigate only the V-cycle in this paper because it is by far the most common multigrid schedule in practice, and our per-level performance analysis lets the reader translate findings to F-, W-, or $\mu$-cycle variants. From a computational-efficiency standpoint, all parallel architectures favour the V-cycle: it hides coarse-grid latency behind the throughput of fine grids. On the WSE this effect is more pronounced because coarse-grid operations pay a communication cost that grows with level: the active-PE stride doubles per level, the hop distance grows with it, and the low-radix network makes each operation at level $\ell$ increasingly latency-dominated.
-
-            \begin{table}[t]
-                \caption{V-cycle vs.\ W-cycle on $256^3$, 8 levels, 6/6/6 (pre/post/coarse) smoothing, $\gamma=2$. Both converge in 10 iterations.}
-                \label{tab:vcycle_vs_wcycle}
+            \begin{table*}[t]
+                \caption{Per-PE operation breakdown for a $512^3$ V-cycle. FMAC counts 2 FLOPs; FMOV variants contribute 0. Mem(B)${}=(loads{+}stores){\times}4$. Fab(B): fabric traffic from halo exchange; only FMOV32 touches the fabric. Mem AI = Total FLOPs / Mem(B); Fab AI = Total FLOPs / Fab(B). Arithmetic intensity is identical across levels.}
+                \label{tab:roofline_ops}
                 \centering
                 \footnotesize
                 \setlength{\tabcolsep}{3pt}
-                \begin{tabular}{|l||r|r|r|} \hline
-                    \textbf{Metric} & \textbf{V-cycle} & \textbf{W-cycle} & \textbf{Ratio} \\ \hline \hline
-                    Avg cycle time ($\mu$s)       &    483.1 & 15,103.9 & 31.3$\times$ \\ \hline
-                    Time to solution ($\mu$s)     &  5,445.6 &151,651.9 & 27.8$\times$ \\ \hline
-                    Convergence rate (dec/iter)    &     1.24 &     1.32 &  1.1$\times$ \\ \hline
+                \begin{tabular}{|l||r|r|r|r||r|r|r|r|} \hline
+                    & \multicolumn{4}{c||}{\textbf{Level 0 ($512^2$ PEs)}} & \multicolumn{4}{c|}{\textbf{Level 7 ($4^2$ PEs)}} \\ \hline
+                    \textbf{Op} & \textbf{Cnt} & \textbf{FLOPs} & \textbf{Mem(B)} & \textbf{Fab(B)} & \textbf{Cnt} & \textbf{FLOPs} & \textbf{Mem(B)} & \textbf{Fab(B)} \\ \hline \hline
+                    FSUB      &   79,872 &   79,872 &    958,464 &       0 &      624 &      624 &      7,488 &       0 \\ \hline
+                    FMAC      &  632,832 & 1,265,664& 10,125,312 &       0 &    4,944 &    9,888 &     79,104 &       0 \\ \hline
+                    FMUL      &    3,072 &    3,072 &     36,864 &       0 &       24 &       24 &        288 &       0 \\ \hline
+                    FADD      &   21,504 &   21,504 &    258,048 &       0 &      168 &      168 &      2,016 &       0 \\ \hline
+                    FNEG      &  159,744 &  159,744 &  1,277,952 &       0 &    1,248 &    1,248 &      9,984 &       0 \\ \hline
+                    FMOV\_MEM &   36,352 &        0 &    290,816 &       0 &      240 &        0 &      1,920 &       0 \\ \hline
+                    FMOV\_ZERO&   92,160 &        0 &    368,640 &       0 &      768 &        0 &      3,072 &       0 \\ \hline
+                    FMOV32    &  172,033 &        0 &    688,132 & 688,132 &    1,344 &        0 &      5,376 &   5,376 \\ \hline \hline
+                    \textbf{Total} & & \textbf{1,529,856} & \textbf{14,004,228} & \textbf{688,132} & & \textbf{11,952} & \textbf{109,248} & \textbf{5,376} \\ \hline \hline
+                    \multicolumn{3}{|l||}{\textbf{Mem AI}: 0.109} & \multicolumn{2}{l||}{\textbf{Fab AI}: 2.223} & \multicolumn{2}{l|}{\textbf{Mem AI}: 0.109} & \multicolumn{2}{l|}{\textbf{Fab AI}: 2.223} \\ \hline
                 \end{tabular}
-            \end{table}
+            \end{table*}
+
             
-            As shown in Table~\ref{tab:vcycle_vs_wcycle}, the W-cycle is $31.3\times$ slower per 1 cycle and $27.8\times$ slower to solution as it repeatedly pays coarse-level communication penalty. This confirms that deeper cycle schedules are poorly matched to the strided mapping on WSE also supplemented by our shallow cycle experiments.
-        
+
+        {
+        \subsection{On V, W and F cycles}
+        \begin{table}[t]
+            \caption{V-cycle vs.\ W-cycle on $256^3$, 8 levels, 6/6/6 (pre/post/coarse) smoothing, $\gamma=2$. Both converge in 10 iterations.}
+            \label{tab:vcycle_vs_wcycle}
+            \centering
+            \footnotesize
+            \setlength{\tabcolsep}{3pt}
+            \begin{tabular}{|l||r|r|r|} \hline
+                \textbf{Metric} & \textbf{V-cycle} & \textbf{W-cycle} & \textbf{Ratio} \\ \hline \hline
+                Avg cycle time ($\mu$s)       &    483.1 & 15,103.9 & 31.3$\times$ \\ \hline
+                Time to solution ($\mu$s)     &  5,445.6 &151,651.9 & 27.8$\times$ \\ \hline
+                Convergence rate (dec/iter)    &     1.24 &     1.32 &  1.1$\times$ \\ \hline
+            \end{tabular}
+        \end{table}
+
+            We chose to investigate only the V-cycle in this paper because it is by far the most common multigrid schedule in practice, and our per-level performance analysis lets the reader translate findings to F-, W-, or $\mu$-cycle variants. From a computational-efficiency standpoint, all parallel architectures favour the V-cycle: it hides coarse-grid latency behind the throughput of fine grids. On the WSE this effect is more pronounced because coarse-grid operations pay a communication cost that grows with level: the active-PE stride doubles per level, the hop distance grows with it, and the low-radix network makes each operation at level $\ell$ increasingly latency-dominated.
+            
+            From experiments in Table~\ref{tab:vcycle_vs_wcycle}, the W-cycle is $31.3\times$ slower per 1 cycle and $27.8\times$ slower to solution as it repeatedly pays coarse-level communication penalty. This confirms that deeper cycle schedules are poorly matched to the strided mapping on WSE also supplemented by our shallow cycle experiments.
+
         }
 
         {
             \subsection{On Higher-Order Stencils}
-            The 7-point constant coefficient stencil is ubiquitous in the computer science performance optimization community. As such, it acts as a necessary first step when analyzing emerging architectures. Sophisticated stencils like 7-point variable coefficient stencils are common in real world applications and 27-point stencils can provide 4th order accuracy, however they might end up with significantly more memory and complicated inter-PE communication patterns. This work uses 7-point constant coefficient stencil which is ubiquitous in computer science performance optimization community. As such, it acts as a necessary first step when analyzing emerging architectures. Given the current state of CSL tooling and library support, a 27-point stencil implementation on WSE is itself a significant contribution as previously highlighted in ~\cite{mathias}.
+        %    As such, it acts as a necessary first step when analyzing emerging arch
+        %   -itectures. Sophisticated stencils like 7-point variable coefficient stencils are common in real wor
+        %   -ld applications and 27-point stencils can provide 4th order accuracy, however they might end up wit
+        %   -h significantly more memory and complicated inter-PE communication patterns. This work uses 7-point
+        %   - constant coefficient stencil which is ubiquitous in computer science performance optimization comm
+        %   -unity. As such, it acts as a necessary first step when analyzing emerging architectures. Given the
+        %   -current state of CSL tooling and library support, a 27-point stencil implementation on WSE is itsel
+        %   -f a significant contribution as previously highlighted in ~\cite{mathias}
+
+            We use the 7-point constant-coefficient stencil as a standard first step for analyzing emerging architectures. Variable-coefficient and 27-point stencils offer higher accuracy but require significantly more memory and complex inter-PE communication; Given the current state of CSL tooling and library support, a 27-point WSE implementation is itself a notable contribution as previously highlighted by~\cite{mathias}.
         }
         
         
@@ -706,50 +692,6 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
                 \label{fig:roofline}
             \end{figure*}
 
-            \begin{table}[t]
-                \caption{Per-PE operation breakdown for a $512^3$ V-cycle. Count is the number of times the operation executes. FLOPs is the arithmetic work (FMAC counts 2 FLOPs per operation; FMOV variants contribute 0). Mem(B) is total SRAM traffic: $(loads + stores) \times 4$ bytes. Fab(B) is fabric traffic from halo exchange; only FMOV32 touches the fabric. Mem AI = Total FLOPs / Mem(B); Fab AI = Total FLOPs / Fab(B).}
-                \label{tab:roofline_ops}
-                \centering
-                \footnotesize
-                \setlength{\tabcolsep}{2pt}
-
-                \vspace{2pt}
-                \textbf{Level 0 ($512^2$ PEs)}
-                \vspace{1pt}
-
-                \begin{tabular}{|l||r|r|r|r|} \hline
-                    \textbf{Op} & \textbf{Count} & \textbf{FLOPs} & \textbf{Mem(B)} & \textbf{Fab(B)} \\ \hline \hline
-                    FSUB      &   79,872 &   79,872 &    958,464 &       0 \\ \hline
-                    FMAC      &  632,832 & 1,265,664& 10,125,312 &       0 \\ \hline
-                    FMUL      &    3,072 &    3,072 &     36,864 &       0 \\ \hline
-                    FADD      &   21,504 &   21,504 &    258,048 &       0 \\ \hline
-                    FNEG      &  159,744 &  159,744 &  1,277,952 &       0 \\ \hline
-                    FMOV\_MEM &   36,352 &        0 &    290,816 &       0 \\ \hline
-                    FMOV\_ZERO&   92,160 &        0 &    368,640 &       0 \\ \hline
-                    FMOV32    &  172,033 &        0 &    688,132 & 688,132 \\ \hline \hline
-                    \textbf{Total} & & \textbf{1,529,856} & \textbf{14,004,228} & \textbf{688,132} \\ \hline \hline
-                    \multicolumn{3}{|l||}{\textbf{Mem AI}: 0.109} & \multicolumn{2}{l|}{\textbf{Fab AI}: 2.223} \\ \hline
-                \end{tabular}
-
-                \vspace{4pt}
-                \textbf{Level 7 ($4^2$ PEs)}
-                \vspace{1pt}
-
-                \begin{tabular}{|l||r|r|r|r|} \hline
-                    \textbf{Op} & \textbf{Count} & \textbf{FLOPs} & \textbf{Mem(B)} & \textbf{Fab(B)} \\ \hline \hline
-                    FSUB      &      624 &      624 &      7,488 &       0 \\ \hline
-                    FMAC      &    4,944 &    9,888 &     79,104 &       0 \\ \hline
-                    FMUL      &       24 &       24 &        288 &       0 \\ \hline
-                    FADD      &      168 &      168 &      2,016 &       0 \\ \hline
-                    FNEG      &    1,248 &    1,248 &      9,984 &       0 \\ \hline
-                    FMOV\_MEM &      240 &        0 &      1,920 &       0 \\ \hline
-                    FMOV\_ZERO&      768 &        0 &      3,072 &       0 \\ \hline
-                    FMOV32    &    1,344 &        0 &      5,376 &   5,376 \\ \hline \hline
-                    \textbf{Total} & & \textbf{11,952} & \textbf{109,248} & \textbf{5,376} \\ \hline \hline
-                    \multicolumn{3}{|l||}{\textbf{Mem AI}: 0.109} & \multicolumn{2}{l|}{\textbf{Fab AI}: 2.223} \\ \hline
-                \end{tabular}
-            \end{table}
-
             Table~\ref{tab:roofline_ops} breaks down the per-PE operations at the finest (L0) and a coarse level (L7). FMAC (multiply-accumulate from the stencil) dominates the FLOPs, while FMOV32 is the only operation that touches the fabric (halo exchange). The arithmetic intensity is constant across levels (0.109 FLOP/Byte for memory, 2.223 FLOP/Byte for fabric), but absolute work shrinks by $128\times$ from L0 to L7. Coarse levels have too little computation to amortize fixed communication overheads (router latency, growing hop distance), explaining the transition from compute-bound to communication-bound in Figure~\ref{fig:roofline}.
         }
 
@@ -763,7 +705,7 @@ T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
         \paragraph{Further improvements to forwarding optimization.}
         To further reduce the cost, we believe even more
         sophisticated techniques to change the routing might be useful, one
-        such is demonstrated by Mathias et al.~\cite{mathias} using control wavelets and runtime coloring reconfiguration.
+        such is demonstrated by Mathias et al.~\cite{mathias} using control wavelets and runtime coloring reconfiguration can be useful for reducing the curves we see in our experiments.
         \paragraph{Addressing constrained memory size.}
         Revisit 512-cubed...Future approaches may benefit from hybrid mapping strategies that decouple computation and storage, such as assigning subsets of PEs primarily as memory resources while others focus on computation, or employing more dynamic coloring and routing schemes to reduce code replication and improve memory utilization across levels.}
 
