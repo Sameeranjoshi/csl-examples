@@ -622,7 +622,7 @@ def plot_spmv_internal(spmv_per_level_data: List[Dict], output_file: str = 'spmv
         levels = [r['level'] for r in levels_data]
         ax.plot(levels, [r['comm_time_us'] for r in levels_data], 'o-', label='Communication Time', linewidth=2.5, markersize=8)
         ax.plot(levels, [r['compute_time_us'] for r in levels_data], 's-', label='Compute Time', linewidth=2.5, markersize=8)
-        ax.plot(levels, [r['total_spmv_us'] for r in levels_data], '^--', label='Total SpMV Time', linewidth=3, markersize=9)
+        ax.plot(levels, [r['total_spmv_us'] for r in levels_data], '^--', label='Total Time', linewidth=3, markersize=9)
         dim = grid_size.split('x')[0]
         ax.set_title(f'Grid {dim}³', fontsize=18, fontweight='bold')
         ax.set_xlabel('Level', fontsize=16)

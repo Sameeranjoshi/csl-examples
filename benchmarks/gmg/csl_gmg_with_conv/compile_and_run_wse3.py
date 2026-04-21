@@ -426,58 +426,59 @@ def main():
     problems = [
         # 6/6/100
         # ls -d out_dir_S*x*_P6_P6_B100 | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_6_6_100.txt
-        # (4, 2, 100, 1e-2, 6, 6, 100),   # Tiny problem
-        # (8, 3, 100, 1e-2, 6, 6, 100),   # Tiny problem
-        # (16, 4, 100, 1e-2, 6, 6, 100),   # Small problem
-        # (32, 5, 100, 1e-2, 6, 6, 100),   # Small problem
-        # (64, 6, 100, 1e-2, 6, 6, 100),   # Medium problem
-        # (128, 7, 100, 1e-2, 6, 6, 100),   # Large problem
-        # (256, 8, 100, 1e-2, 6, 6, 100),   # Very large
-        # (512, 9, 100, 1e-2, 6, 6, 100),   # Very large
+        (4, 2, 100, 1e-2, 6, 6, 100),   # DONE
+        (8, 3, 100, 1e-2, 6, 6, 100),   # DONE
+        (16, 4, 100, 1e-2, 6, 6, 100),   # DONE
+        (32, 5, 100, 1e-2, 6, 6, 100),   # DONE
+        (64, 6, 100, 1e-2, 6, 6, 100),   # DONE
+        (128, 7, 100, 1e-2, 6, 6, 100),   # DONE
+        (256, 8, 100, 1e-2, 6, 6, 100),   # DONE
+        (512, 9, 100, 1e-2, 6, 6, 100),   # DONE
 
         # 4/4/100
         # ls -d out_dir_S*x*_P4_P4_B100 | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_4_4_100.txt
-        # (4, 2, 100, 1e-2, 4, 4, 100),   # Tiny problem
-        # (8, 3, 100, 1e-2, 4, 4, 100),   # Tiny problem
-        # (16, 4, 100, 1e-2, 4, 4, 100),   # Small problem
-        # (32, 5, 100, 1e-2, 4, 4, 100),   # Small problem
-        # (64, 6, 100, 1e-2, 4, 4, 100),   # Medium problem
-        # (128, 7, 100, 1e-2, 4, 4, 100),   # Large problem
-        # (256, 8, 100, 1e-2, 4, 4, 100),   # Very large
-        # (512, 9, 100, 1e-2, 4, 4, 100),   # Very large
+        (4, 2, 100, 1e-2, 4, 4, 100),   # DONE
+        (8, 3, 100, 1e-2, 4, 4, 100),   # DONE
+        (16, 4, 100, 1e-2, 4, 4, 100),   # DONE
+        (32, 5, 100, 1e-2, 4, 4, 100),   # DONE
+        (64, 6, 100, 1e-2, 4, 4, 100),   # DONE
+        (128, 7, 100, 1e-2, 4, 4, 100),   # DONE
+        (256, 8, 100, 1e-2, 4, 4, 100),   # DONE
+        (512, 9, 100, 1e-2, 4, 4, 100),   # DONE
 
         # OSCAR matching problems
         # 4/4/6
         # ls -d out_dir_S*x*_P4_P4_B6 | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_4_4_6.txt
-        # (4, 2, 100, 1e-2, 4, 4, 6),   # Tiny problem
-        # (8, 3, 100, 1e-2, 4, 4, 6),   # Tiny problem
-        # (16, 4, 100, 1e-2, 4, 4, 6),   # Small problem
-        # (32, 5, 100, 1e-2, 4, 4, 6),   # Small problem
-        # (64, 6, 100, 1e-2, 4, 4, 6),   # Medium problem
-        # (128, 7, 100, 1e-2, 4, 4, 6),   # Large problem
-        # (256, 8, 100, 1e-2, 4, 4, 6),   # Very large
-        # (512, 9, 100, 1e-2, 4, 4, 6),   # Very large
+        (4, 2, 100, 1e-2, 4, 4, 6),   # DONE
+        (8, 3, 100, 1e-2, 4, 4, 6),   # DONE
+        (16, 4, 100, 1e-2, 4, 4, 6),   # DONE
+        (32, 5, 100, 1e-2, 4, 4, 6),   # DONE
+        (64, 6, 100, 1e-2, 4, 4, 6),   # DONE
+        (128, 7, 100, 1e-2, 4, 4, 6),   # DONE
+        (256, 8, 100, 1e-2, 4, 4, 6),   # DONE
+        (512, 9, 100, 1e-2, 4, 4, 6),   # DONE
 
         # 6/6/6
         # ls -d out_dir_S*x*_P6_P6_B6 | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_6_6_6.txt
-        # (4, 2, 100, 1e-2, 6, 6, 6),   # Tiny problem
-        # (8, 3, 100, 1e-2, 6, 6, 6),   # Tiny problem
-        # (16, 4, 100, 1e-2, 6, 6, 6),   # Small problem
-        # (32, 5, 100, 1e-2, 6, 6, 6),   # Small problem
-        # (64, 6, 100, 1e-2, 6, 6, 6),   # Medium problem
-        # (128, 7, 100, 1e-2, 6, 6, 6),   # Large problem
-        # (256, 8, 100, 1e-2, 6, 6, 6),   # Very large
-        # (512, 9, 100, 1e-2, 6, 6, 6),   # Very large — fits after R1+R2 optimizations
+        (4, 2, 100, 1e-2, 6, 6, 6),   # DONE
+        (8, 3, 100, 1e-2, 6, 6, 6),   # DONE
+        (16, 4, 100, 1e-2, 6, 6, 6),   # DONE
+        (32, 5, 100, 1e-2, 6, 6, 6),   # DONE
+        (64, 6, 100, 1e-2, 6, 6, 6),   # DONE
+        (128, 7, 100, 1e-2, 6, 6, 6),   # DONE
+        (256, 8, 100, 1e-2, 6, 6, 6),   # DONE
+        (512, 9, 100, 1e-2, 6, 6, 6),   # TEST: u=0, f=sin(2pi*x*hx) matching HPGMG
 
         # Deep vs shallow V cycle depth experiments
         # ls -d shallow_* | sed 's/.*S\([0-9]*\)x.*/\1 &/' | sort -n | cut -d' ' -f2- | xargs -I{} cat {}/response.txt > all_responses_6_6_6_shallow.txt
         # Removed the smaller problems as we can't reduce the levels on these problems.
-        # (16, 2, 100, 1e-2, 6, 6, 6),   # Small problem
-        # (32, 3, 100, 1e-2, 6, 6, 6),   # Small problem
-        # (64, 4, 100, 1e-2, 6, 6, 6),   # Medium problem
-        # (128, 5, 100, 1e-2, 6, 6, 6),   # Large problem
-        # (256, 6, 100, 1e-2, 6, 6, 6),   # Very large
-        # (512, 7, 100, 1e-2, 6, 6, 6),   # Very large    
+        
+        (16, 2, 100, 1e-2, 6, 6, 6),   # DONE
+        (32, 3, 100, 1e-2, 6, 6, 6),   # DONE
+        (64, 4, 100, 1e-2, 6, 6, 6),   # DONE
+        (128, 5, 100, 1e-2, 6, 6, 6),   # DONE
+        (256, 6, 100, 1e-2, 6, 6, 6),   # DONE
+        (512, 7, 100, 1e-2, 6, 6, 6),   # DONE
 
         # Unoptimized 6/6/6
         # Add "_unoptimized" suffix
