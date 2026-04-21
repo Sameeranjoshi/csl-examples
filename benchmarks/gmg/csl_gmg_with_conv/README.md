@@ -1,13 +1,52 @@
 # Geometric Multigrid (GMG) V-Cycle Solver on Cerebras WSE-3
 
-Device-resident Geometric Multigrid V-cycle solver for 3D Poisson equation on the Cerebras WSE-3 wafer-scale engine. Described in the ICS GLOW 2026 paper.
+Device-resident Geometric Multigrid V-cycle solver for 3D Poisson equation on the Cerebras WSE-3 wafer-scale engine.
 
 ## Prerequisites
 
-- Cerebras SDK (provides `cslc` compiler, `cs_python`, `SdkCompiler`, `SdkLauncher`)
-- Python 3.8+ with `numpy`, `matplotlib`
-- Access to a Cerebras CS-3 cluster (for device runs)
-- Optional: `numba` (speeds up host reference solver)
+### Tooling versions (evaluated configuration)
+
+| Component | Version |
+|---|---|
+| Cerebras SDK | **1.4.0** (release 2.5.0 — `cerebras-appliance==2.5.0`, `cerebras-sdk==2.5.0`) |
+| SDK container image | `sdk-cbcore-202505010205-2-ef181f81.sif` (shipped with SDK 1.4.0) |
+| `cslc` compiler | Bundled with SDK 1.4.0 (no separate install) |
+| Python | **3.8.17** (3.8+ required) |
+| Hardware | Cerebras CS-3 appliance (device runs); host-only mode needs no WSE |
+
+The top-level `cslc` and `cs_python` entry points are thin wrappers around the
+SIF image; installing the Cerebras SDK provides both.
+
+### Installing the Cerebras SDK
+
+Follow the vendor instructions shipped with the SDK tarball
+(`Cerebras-SDK-1.4.0.tar.gz`). The SDK ships its own pinned Python environment
+— activate it before running anything in this repo:
+
+```bash
+source /path/to/sdk_venv/bin/activate
+pip install -r /path/to/sdk/req.txt   # installs cerebras-sdk, cerebras-appliance, and dependencies
+```
+
+### Project dependencies
+
+The additional host-side and plotting dependencies used by this artifact are
+listed in [`requirements.txt`](requirements.txt):
+
+```bash
+pip install -r requirements.txt
+```
+
+| Package | Version | Used by |
+|---|---|---|
+| `numpy` | 1.24.4 | host solver, plots |
+| `matplotlib` | 3.7.5 | plots |
+| `scipy` | 1.10.1 | host reference solver |
+| `pandas` | 2.0.3 | `optimized_vs_unoptimized.py` |
+| `numba` | 0.58.1 | optional; accelerates `python_gmg/gmgoscar.py` |
+
+All versions are compatible with the SDK 1.4.0 Python environment and the
+versions listed in the SDK's `req.txt` — no extra pinning conflicts.
 
 ## Quick Start
 
@@ -16,24 +55,9 @@ Device-resident Geometric Multigrid V-cycle solver for 3D Poisson equation on th
 python compile_and_run_wse3.py --only-device
 ```
 
-### Run host reference solver only (no WSE-3 needed)
-```bash
-python compile_and_run_wse3.py --only-host
-```
-
-### Run both and compare
-```bash
-python compile_and_run_wse3.py --host-and-device
-```
-
-### Quick test (small problem)
-```bash
-bash commands_vcycle_wse3.sh
-```
-
 ## Problem Configuration
 
-Edit the `configs` list in `compile_and_run_wse3.py`:
+Edit the `configs` list in `compile_and_run_wse3.py`, comment/uncomment for specific problem size:
 
 ```python
 # (size, levels, max_ite, abs_tolerance, pre_iter, post_iter, bottom_iter)
@@ -56,13 +80,14 @@ configs = [
 
 ## Output Directory Naming
 
-```
-out_dir_S{size}x_L{levels}_M{max_ite}_P{pre}_P{post}_B{bottom}
-```
-Example: `out_dir_S512x_L9_M100_P6_P6_B6` = 512^3 grid, 9 levels, max 100 iterations, 6/6/6 smoothing.
+Runs are written under `build/`:
 
-Shallow variants: `shallow_out_dir_S{size}x_...`
-Unoptimized variants: `out_dir_S{size}x_..._unoptimized`
+```
+build/out_dir_S{size}x_L{levels}_M{max_ite}_P{pre}_P{post}_B{bottom}/
+```
+Example: `build/out_dir_S512x_L9_M100_P6_P6_B6` = 512^3 grid, 9 levels, max 100 iterations, 6/6/6 smoothing.
+
+Shallow variants: `build/shallow_*`.
 
 Each directory contains:
 - `response.txt` — Compile/run log with timing, convergence, and memory data
@@ -70,52 +95,52 @@ Each directory contains:
 
 ## Artifact Caching
 
-`artifact_cache.json` maps output directory names to compiled artifact paths. When `compile_and_run_wse3.py` runs, it checks this cache before compiling. Delete `artifact_cache.json` to force recompilation.
+`artifact_cache.json` maps output directory names to compiled artifact paths. When `compile_and_run_wse3.py` runs, it checks this cache before compiling. 
 
 ## Reproducing Paper Figures
 
-### Step 1: Collect response data (after all runs complete)
+After configured runs have completed (outputs land in `build/out_dir_*/`):
+
 ```bash
 cd plots/
 bash GENERATEFIGURES.sh
 ```
 
-This script:
-1. Concatenates `response.txt` files by configuration into `all_responses_*.txt`
-2. Runs `plot_gmg_performance.py` on each to generate per-operation timing plots
-3. Runs `optimized_vs_unoptimized.py` for the optimization comparison figure
-4. Runs `h200_vs_cs3.py` for the speedup bar chart
+The script runs the full pipeline:
+1. Appends per-run memory usage data to each `response.txt` (from the `.tar.gz` ELF archives)
+2. Aggregates `build/out_dir_*/response.txt` by configuration into `build/all_responses_*.txt`
+3. Runs `plot_gmg_performance.py` on each aggregate → `out_*.txt` and per-operation timing plots (`spmv_internal.png`, `interpolation_internal.png`, `per_operation_timing_*.png`)
+4. Runs `h200_vs_cs3.py` (GH200 vs WSE-3 bar chart), `memory_utilization_table.py`, `print_512_table.py`
+5. Runs `v_vs_w_cycle.py` (V vs W cycle comparison)
+6. Runs `roofline_analysis.py` on the 512³ 6/6/6 sample (`roofline_plot.png`)
 
-### Step 2: Individual figures
+### Running individual scripts
 
 ```bash
 cd plots/
 
-# Per-operation timing + SPMV/interpolation breakdowns (3 PNGs)
-python plot_gmg_performance.py ../all_responses_6_6_6.txt
+# Per-operation timing + SPMV/interpolation breakdowns
+python plot_gmg_performance.py ../build/all_responses_6_6_6.txt
 
-# Optimization comparison (metrics_comparison.png)
-python optimized_vs_unoptimized.py out_6_6_6.txt out_6_6_6_unoptimized.txt
+# GH200 vs WSE-3 bar chart (reads gpu_numbers.txt + wse_numbers.txt from cwd)
+python h200_vs_cs3.py
 
-# GH200 vs WSE-3 speedup bar chart (hpgmg_speedup_barplot.pdf)
-python h200_vs_cs3.py h200_vs_cs3_feb7.csv
+# 512^3 comparison table
+python print_512_table.py
 
-# Time-to-solution analysis (time_to_solution.png, iterations_comparison.png)
-python time_to_solution.py
+# Memory utilization table (needs out_6_6_6.txt in cwd)
+python memory_utilization_table.py out_6_6_6.txt
 
-# Convergence plots (convergence_by_size.png, convergence_key_sizes.png)
-python plot_convergence.py
+# V vs W cycle
+python v_vs_w_cycle.py
 
-# Wafer utilization analysis (wafer_utilization.png)
-python wafer_utilization.py
-
-# Correctness verification (correctness_check.png)
-python correctness_check.py --run-host --sizes 4,8,16,32,64
+# Roofline analysis
+python roofline_analysis.py ../build/out_dir_S512x_L9_M100_P6_P6_B6/response.txt
 ```
 
 ### Data files
-- `h200_vs_cs3_feb7.csv` — GH200 vs WSE-3 comparison data (iterations + per-V-cycle times)
-- `all_responses_*.txt` — Concatenated device run outputs per configuration
+- `gpu_numbers.txt`, `wse_numbers.txt` — GH200 and WSE-3 baseline numbers consumed by `h200_vs_cs3.py` and `print_512_table.py`
+- `build/all_responses_*.txt` — Concatenated device run outputs per configuration
 
 ## Directory Structure
 
@@ -145,37 +170,29 @@ csl_gmg/
 │   └── gmgoscar.py            # SimpleGMG class (CPU reference)
 │
 ├── plots/                     # Analysis and visualization
-│   ├── GENERATEFIGURES.sh     # Reproduce all paper figures
+│   ├── GENERATEFIGURES.sh     # Reproduce all paper figures (full pipeline)
 │   ├── plot_gmg_performance.py # Per-operation timing analysis
-│   ├── h200_vs_cs3.py         # GH200 speedup comparison
-│   ├── optimized_vs_unoptimized.py # Optimization impact
-│   ├── time_to_solution.py    # TTS analysis
-│   ├── plot_convergence.py    # Convergence plots
-│   ├── wafer_utilization.py   # PE utilization + memory analysis
-│   ├── correctness_check.py   # Host vs device verification
-│   └── h200_vs_cs3_feb7.csv   # Baseline comparison data
+│   ├── h200_vs_cs3.py         # GH200 vs WSE-3 bar chart
+│   ├── memory_utilization_table.py # Per-level memory usage table
+│   ├── print_512_table.py     # 512^3 comparison table
+│   ├── v_vs_w_cycle.py        # V vs W cycle comparison
+│   ├── roofline_analysis.py   # Roofline plot
+│   ├── gpu_numbers.txt        # GH200 baseline numbers
+│   └── wse_numbers.txt        # WSE-3 baseline numbers
 │
-├── docs/                      # Documentation
-│   ├── README_STATE_MACHINE.md
-│   ├── README_VCYCLE.md
-│   ├── VCYCLE_STATE_MACHINE_SUMMARY.md
-│   ├── TIMING_GUIDE.md
-│   └── QUICK_TIMING_REFERENCE.md
+├── docs/                      # Artifact evaluation reproduction guide
+│   └── REPRODUCE.md
 │
 ├── paper/                     # ICS GLOW 2026 paper
 │   ├── rebuttal.md            # Rebuttal responses
 │   └── ICS_GLOW_2026/         # LaTeX source + figures
 │
-├── out_dir_S*x_*/             # Device run outputs (gitignored)
-├── shallow_out_dir_S*x_*/     # Shallow V-cycle outputs
-└── all_responses_*.txt        # Aggregated response files
+└── build/                     # Run outputs (gitignored)
+    ├── out_dir_S*x_*/         # Per-config device run outputs
+    ├── shallow_*/             # Shallow V-cycle outputs
+    └── all_responses_*.txt    # Aggregated response files
 ```
 
-## Key Implementation Details
+## Artifact Evaluation
 
-- **State machine**: 28-state callback-driven V-cycle executes entirely on-device
-- **Pencil decomposition**: Full z-dimension stored per PE (all z-accesses local)
-- **Strided active PEs**: At level L, only PEs at stride 2^L are active
-- **Memory**: Code constant ~22.8 KB; data follows geometric series nz(2 - 1/2^(L-1))
-- **Timing**: 48-bit hardware TSC at 850 MHz, 13+ timing arrays per operation per level
-- **Convergence**: |rho|_inf = max|f - Au|, checked after each V-cycle on host
+See [`docs/REPRODUCE.md`](docs/REPRODUCE.md) for a consolidated reproduction guide.
