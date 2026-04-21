@@ -1,0 +1,36 @@
+{
+  "latex-workshop.latex.recipes": [
+    {
+      "name": "pdflatex -> bibtex -> pdflatex x2",
+      "tools": ["pdflatex", "bibtex", "pdflatex", "pdflatex"]
+    },
+    {
+      "name": "pdflatex only",
+      "tools": ["pdflatex"]
+    }
+  ],
+  "latex-workshop.latex.tools": [
+    {
+      "name": "pdflatex",
+      "command": "/home/bricklib_dataflow/texlive/2025/bin/x86_64-linux/pdflatex",
+      "args": [
+        "-synctex=1",
+        "-interaction=nonstopmode",
+        "-file-line-error",
+        "%DOC%"
+      ]
+    },
+    {
+      "name": "bibtex",
+      "command": "/home/bricklib_dataflow/texlive/2025/bin/x86_64-linux/bibtex",
+      "args": ["%DOCFILE%"]
+    }
+  ],
+  "latex-workshop.latex.autoBuild.run": "onSave",
+  "latex-workshop.latexindent.path": "/home/bricklib_dataflow/bin/latexindent",
+  "latex-workshop.latexindent.args": [
+    "-c", "%DIR%/",
+    "%TMPFILE%",
+    "-y=defaultIndent: '  '"
+  ]
+}
